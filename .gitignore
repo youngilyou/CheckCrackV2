@@ -1,0 +1,46 @@
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# === C# / .NET build output ===
+viewer/**/bin/
+viewer/**/obj/
+viewer/**/*_wpftmp.csproj
+viewer/.vs/
+*.vsidx
+*.suo
+
+# === Large generated / captured data (keep folder structure only) ===
+datasets/*
+!datasets/README.md
+facades/*
+!facades/README.md
+reports/*
+!reports/README.md
+/facade_hierarchy.json
+
+# === Model weights / training runs / logs / caches (regenerable, not source) ===
+runs/
+/models/
+training/crack_seg/dataset/
+training/crack_seg/dataset_labeled/
+training/crack_seg/dataset_raw_crops/
+training/crack_seg/dataset_stitched/
+training/export/
+/training_data_raw_crops/
+/training_data_stitched/
+logs/
+metadata/*.parquet
+metadata/*.json
+*.pt
+
+# === Local scratch ===
+scratch_label_example.png
+tools/crack_annotator/output/
+
+# === Claude Code local session config (not meant to be shared) ===
+.claude/

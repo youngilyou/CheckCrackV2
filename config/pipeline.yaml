@@ -1,0 +1,71 @@
+# Phase 1 (Single Facade Offline PoC) pipeline configuration.
+# Sections mirror CLAUDE.local.md #33. Only keys consumed by the current
+# implementation are here; later phases add their own sections.
+
+project:
+  building_id: B001
+
+facade_segmentation:
+  merge_if_normal_angle_delta_deg: 8
+  split_if_normal_angle_delta_deg: 15
+  min_segment_length_m: 2.0
+
+facade_assignment:
+  max_camera_to_target_angle_deg: 25
+  corner_duplicate_angle_deg: 35
+  minimum_score: 0.60
+  w_position: 0.4
+  w_view: 0.4
+  w_waypoint: 0.0  # no mission/waypoint DB yet; see facade_classifier.py docstring
+  w_distance: 0.2
+  ideal_standoff_m: 15.0
+  max_standoff_m: 40.0
+
+matching:
+  temporal_neighbor_count: 4
+  max_gps_distance_m: 20
+  max_view_angle_delta_deg: 20
+
+loftr:
+  pretrained: outdoor
+  min_confidence: 0.50
+  max_image_side: 1024  # LoFTR inference-only downscale; matches are rescaled back to original resolution
+  pair_timeout_s: 60  # a single pair (e.g. extreme repetitive-pattern content) exceeding this is killed and marked MATCH_TIMEOUT instead of stalling the whole facade
+
+geometry:
+  min_matches: 50
+  min_inliers: 30
+  min_inlier_ratio: 0.35
+  max_median_reprojection_error_px: 3.0
+  ransac_reproj_threshold_px: 4.0
+
+stitch:
+  generate_analysis_mosaic: true
+  generate_visual_mosaic: true
+  analysis_feather_blend: false
+  visual_multiband_blend: true
+  multiband_num_bands: 5
+
+colmap:
+  enabled: true
+  mode: fallback
+  max_drift_px: 10.0
+  max_seam_drift_px: 20.0  # single worst seam — a facade can pass the *mean* drift check while one bad seam still produces a visible wavy/misaligned line
+  max_coverage_gap_ratio: 0.5
+
+tiling:
+  tile_width: 1024
+  tile_height: 1024
+  overlap_px: 128
+  skip_if_observed_ratio_below: 0.5
+
+crack:
+  model: runs/segment/training/crack_seg/runs/baseline2/weights/best.pt
+  confidence: 0.25
+  min_polygon_area_px: 15  # drop speck noise below this at tile resolution
+
+measurement:
+  require_calibration_for_mm: true
+  crack_width_threshold_mm: 0.3  # 건설 크랙검사 기준 (0.2mm 기준은 채택 안 함); calibration 없으면 severity 자체를 매기지 않음
+  crack_id_match_iou_threshold: 0.3  # 같은 스티칭 버전 재검사 시 이전 crack_id 유지 판단 IoU 기준 (재스티칭 후에는 적용 안 됨)
+  source_observation_min_overlap_px: 20  # 이 픽셀 수 미만으로 소유한 source image는 source_observations 후보에서 제외 (노이즈성 겹침 필터)

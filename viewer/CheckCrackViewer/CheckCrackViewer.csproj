@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\login_background.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BCrypt.Net-Next" Version="4.2.0" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
+    <!-- PDF generation moved to Python (src/report/pdf_report.py, WeasyPrint).
+         PDFsharp/PDFsharp-MigraDoc are no longer used. PDFtoImage stays: it only
+         rasterizes an existing PDF for the 결과보기 screen's preview, independent
+         of whatever generated it. -->
+    <PackageReference Include="PDFtoImage" Version="5.4.0" />
+  </ItemGroup>
+
+</Project>

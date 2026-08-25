@@ -1,0 +1,432 @@
+<title>Crack Box Annotator — F004</title>
+<style>
+  :root {
+    --bg: #EDEEE9;
+    --surface: #FFFFFF;
+    --surface-2: #E2E4DC;
+    --border: #C7CAC0;
+    --text: #1B1F1D;
+    --text-2: #565B54;
+    --accent: #D14A1F;
+    --accent-ink: #FFFFFF;
+    --danger: #B3261E;
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", "Roboto Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14181A;
+      --surface: #1C2124;
+      --surface-2: #242A2D;
+      --border: #333B3E;
+      --text: #E7E9E4;
+      --text-2: #9AA39C;
+      --accent: #FF6A3D;
+      --accent-ink: #14181A;
+      --danger: #FF7A6E;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14181A;
+    --surface: #1C2124;
+    --surface-2: #242A2D;
+    --border: #333B3E;
+    --text: #E7E9E4;
+    --text-2: #9AA39C;
+    --accent: #FF6A3D;
+    --accent-ink: #14181A;
+    --danger: #FF7A6E;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .app {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 20px;
+    max-width: 1680px;
+    margin: 0 auto;
+    padding: 24px;
+    align-items: start;
+  }
+  @media (max-width: 980px) {
+    .app { grid-template-columns: 1fr; }
+  }
+
+  header.top {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+  }
+  header.top h1 {
+    font-size: 19px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+  header.top .subtitle {
+    color: var(--text-2);
+    font-size: 12.5px;
+    font-family: var(--font-mono);
+  }
+
+  .canvas-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    overflow: auto;
+    max-height: calc(100vh - 110px);
+  }
+  .canvas-panel canvas {
+    display: block;
+    cursor: crosshair;
+    border-radius: 4px;
+  }
+
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    position: sticky;
+    top: 24px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .card h2 {
+    font-size: 11px;
+    font-weight: 650;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-2);
+    margin: 0 0 10px;
+  }
+
+  .instructions ol {
+    margin: 0;
+    padding-left: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .instructions li { font-size: 13px; }
+  .instructions code {
+    font-family: var(--font-mono);
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 12px;
+  }
+
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    font-weight: 600;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: filter 0.12s ease;
+  }
+  button:hover { filter: brightness(0.95); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.primary {
+    background: var(--accent);
+    color: var(--accent-ink);
+    border-color: transparent;
+  }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .count-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .box-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 300px;
+    overflow-y: auto;
+    margin-top: 10px;
+  }
+  .box-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .box-row .swatch {
+    width: 8px; height: 8px; border-radius: 2px;
+    background: var(--accent);
+    flex: none;
+  }
+  .box-row .coords { flex: 1; color: var(--text-2); }
+  .box-row .coords b { color: var(--text); font-weight: 600; }
+  .box-row .del {
+    border: none;
+    background: transparent;
+    color: var(--danger);
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px 4px;
+    cursor: pointer;
+  }
+  .empty-hint {
+    color: var(--text-2);
+    font-size: 12.5px;
+    font-style: italic;
+    margin-top: 8px;
+  }
+
+  textarea#jsonOut {
+    width: 100%;
+    height: 90px;
+    resize: vertical;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    margin-top: 10px;
+  }
+  .copy-status {
+    font-size: 11.5px;
+    color: var(--accent);
+    height: 14px;
+    margin-top: 6px;
+    font-family: var(--font-mono);
+  }
+</style>
+
+<div class="app">
+  <header class="top">
+    <h1>Crack Box Annotator</h1>
+    <div class="subtitle">F004_analysis_colmap.tif · __ORIG_W__×__ORIG_H__px · displayed at __DISP_SCALE_PCT__%</div>
+  </header>
+
+  <div class="canvas-panel">
+    <canvas id="stage" width="__DISP_W__" height="__DISP_H__"></canvas>
+  </div>
+
+  <div class="sidebar">
+    <div class="card instructions">
+      <h2>How to mark</h2>
+      <ol>
+        <li>Click-drag a tight box around each visible crack.</li>
+        <li>Trace close to the crack — the box becomes the crop that gets edge-detected, so a loose box picks up extra background.</li>
+        <li>One box per crack segment; split broken cracks into separate boxes.</li>
+        <li>Made a mistake? Use <code>Undo</code> or click <code>×</code> on a row.</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h2>Marked regions <span class="count-pill" id="countPill">0</span></h2>
+      <div class="btn-row">
+        <button id="undoBtn" disabled>Undo last</button>
+        <button id="clearBtn" disabled>Clear all</button>
+      </div>
+      <div class="box-list" id="boxList"></div>
+      <div class="empty-hint" id="emptyHint">No boxes yet — drag on the image to start.</div>
+    </div>
+
+    <div class="card">
+      <h2>Export</h2>
+      <div class="btn-row">
+        <button class="primary" id="copyBtn" disabled>Copy JSON to clipboard</button>
+      </div>
+      <textarea id="jsonOut" readonly placeholder="Draw at least one box to generate JSON."></textarea>
+      <div class="copy-status" id="copyStatus"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var ORIG_W = __ORIG_W__, ORIG_H = __ORIG_H__;
+  var DISP_W = __DISP_W__, DISP_H = __DISP_H__;
+  var SCALE = DISP_W / ORIG_W;
+  var FACADE_ID = "F004";
+  var SOURCE_IMAGE = "F004_analysis_colmap.tif";
+
+  var canvas = document.getElementById('stage');
+  var ctx = canvas.getContext('2d');
+  var img = new Image();
+  img.src = "data:image/jpeg;base64,__IMAGE_B64__";
+
+  var boxes = [];
+  var nextId = 1;
+  var dragging = null;
+
+  function redraw() {
+    ctx.clearRect(0, 0, DISP_W, DISP_H);
+    ctx.drawImage(img, 0, 0, DISP_W, DISP_H);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#D14A1F';
+    ctx.font = '11px ' + getComputedStyle(document.documentElement).getPropertyValue('--font-mono');
+    boxes.forEach(function (b, i) {
+      var x = Math.min(b.dx0, b.dx1), y = Math.min(b.dy0, b.dy1);
+      var w = Math.abs(b.dx1 - b.dx0), h = Math.abs(b.dy1 - b.dy0);
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.fillRect(x, y - 14, 20, 14);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(String(i + 1), x + 4, y - 3);
+    });
+    if (dragging) {
+      var x = Math.min(dragging.dx0, dragging.dx1), y = Math.min(dragging.dy0, dragging.dy1);
+      var w = Math.abs(dragging.dx1 - dragging.dx0), h = Math.abs(dragging.dy1 - dragging.dy0);
+      ctx.setLineDash([4, 3]);
+      ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
+    }
+  }
+
+  img.onload = redraw;
+
+  function canvasPos(evt) {
+    var rect = canvas.getBoundingClientRect();
+    var x = (evt.clientX - rect.left) * (canvas.width / rect.width);
+    var y = (evt.clientY - rect.top) * (canvas.height / rect.height);
+    return { x: Math.max(0, Math.min(DISP_W, x)), y: Math.max(0, Math.min(DISP_H, y)) };
+  }
+
+  canvas.addEventListener('pointerdown', function (evt) {
+    var p = canvasPos(evt);
+    dragging = { dx0: p.x, dy0: p.y, dx1: p.x, dy1: p.y };
+    canvas.setPointerCapture(evt.pointerId);
+  });
+  canvas.addEventListener('pointermove', function (evt) {
+    if (!dragging) return;
+    var p = canvasPos(evt);
+    dragging.dx1 = p.x; dragging.dy1 = p.y;
+    redraw();
+  });
+  canvas.addEventListener('pointerup', function () {
+    if (!dragging) return;
+    var w = Math.abs(dragging.dx1 - dragging.dx0);
+    var h = Math.abs(dragging.dy1 - dragging.dy0);
+    if (w > 4 && h > 4) {
+      dragging.id = nextId++;
+      boxes.push(dragging);
+    }
+    dragging = null;
+    render();
+  });
+
+  function fmt(n) { return Math.round(n); }
+
+  function render() {
+    redraw();
+    var list = document.getElementById('boxList');
+    var empty = document.getElementById('emptyHint');
+    var countPill = document.getElementById('countPill');
+    list.innerHTML = '';
+    countPill.textContent = boxes.length;
+    empty.style.display = boxes.length ? 'none' : 'block';
+
+    boxes.forEach(function (b, i) {
+      var x0 = fmt(Math.min(b.dx0, b.dx1) / SCALE), y0 = fmt(Math.min(b.dy0, b.dy1) / SCALE);
+      var x1 = fmt(Math.max(b.dx0, b.dx1) / SCALE), y1 = fmt(Math.max(b.dy0, b.dy1) / SCALE);
+      var row = document.createElement('div');
+      row.className = 'box-row';
+      row.innerHTML = '<span class="swatch"></span>' +
+        '<span class="coords"><b>#' + (i + 1) + '</b>&nbsp; ' + x0 + ',' + y0 + ' &rarr; ' + x1 + ',' + y1 +
+        ' &nbsp;(' + (x1 - x0) + '&times;' + (y1 - y0) + 'px)</span>' +
+        '<button class="del" data-idx="' + i + '" title="Remove">&times;</button>';
+      list.appendChild(row);
+    });
+
+    list.querySelectorAll('.del').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        boxes.splice(parseInt(btn.getAttribute('data-idx'), 10), 1);
+        render();
+      });
+    });
+
+    document.getElementById('undoBtn').disabled = boxes.length === 0;
+    document.getElementById('clearBtn').disabled = boxes.length === 0;
+    document.getElementById('copyBtn').disabled = boxes.length === 0;
+
+    var payload = {
+      facade_id: FACADE_ID,
+      source_image: SOURCE_IMAGE,
+      image_width_px: ORIG_W,
+      image_height_px: ORIG_H,
+      boxes: boxes.map(function (b, i) {
+        return {
+          box_id: i + 1,
+          x0: fmt(Math.min(b.dx0, b.dx1) / SCALE),
+          y0: fmt(Math.min(b.dy0, b.dy1) / SCALE),
+          x1: fmt(Math.max(b.dx0, b.dx1) / SCALE),
+          y1: fmt(Math.max(b.dy0, b.dy1) / SCALE)
+        };
+      })
+    };
+    document.getElementById('jsonOut').value = boxes.length ? JSON.stringify(payload, null, 2) : '';
+  }
+
+  document.getElementById('undoBtn').addEventListener('click', function () {
+    boxes.pop();
+    render();
+  });
+  document.getElementById('clearBtn').addEventListener('click', function () {
+    if (boxes.length && !confirm('Clear all ' + boxes.length + ' box(es)?')) return;
+    boxes = [];
+    render();
+  });
+  document.getElementById('copyBtn').addEventListener('click', function () {
+    var text = document.getElementById('jsonOut').value;
+    var status = document.getElementById('copyStatus');
+    function ok() { status.textContent = 'Copied ' + boxes.length + ' box(es) to clipboard.'; setTimeout(function () { status.textContent = ''; }, 2500); }
+    function fail() { status.textContent = 'Clipboard blocked — select the text above and copy manually.'; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(ok, fail);
+    } else {
+      var ta = document.getElementById('jsonOut');
+      ta.select();
+      try { document.execCommand('copy'); ok(); } catch (e) { fail(); }
+    }
+  });
+
+  render();
+})();
+</script>

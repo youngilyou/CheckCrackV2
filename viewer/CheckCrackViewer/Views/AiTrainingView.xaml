@@ -1,0 +1,345 @@
+<UserControl x:Class="CheckCrackViewer.Views.AiTrainingView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:CheckCrackViewer.ViewModels"
+             xmlns:models="clr-namespace:CheckCrackViewer.Models"
+             d:DataContext="{d:DesignInstance Type=vm:AiTrainingViewModel}"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008/design"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ============ 학습 소스 선택: 셋 다 완전히 분리된 데이터셋/모델. 한 번에
+             하나만 선택됨 (체크박스 모양이지만 라디오처럼 동작, HandleSourceCheckboxChanged) ============ -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+            <TextBlock Text="학습 소스" Style="{StaticResource SectionHeader}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <CheckBox Content="기존 마스크 데이터셋" IsChecked="{Binding IsLabeledSelected}" Margin="0,0,18,0"/>
+            <CheckBox Content="일반 이미지 라벨링" IsChecked="{Binding IsRawCropsSelected}" Margin="0,0,18,0"/>
+            <CheckBox Content="스티칭 이미지 라벨링" IsChecked="{Binding IsStitchedSelected}"/>
+        </StackPanel>
+
+        <!-- ============ header ============ -->
+        <Grid Grid.Row="1" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource Text2}" FontFamily="Consolas" FontSize="11.5" VerticalAlignment="Center"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button Content="이미지 폴더 열기" Command="{Binding SelectImageFolderCommand}" Margin="0,0,8,0"/>
+                <!-- stitched 전용: 스티칭 + CM 실행 -->
+                <Button Content="이미지 준비" Command="{Binding PrepareImageCommand}" Margin="0,0,8,0"
+                        Visibility="{Binding SelectedSource, Converter={StaticResource StringEqualsToVisibilityConverter}, ConverterParameter=stitched}"/>
+                <!-- labeled 전용: crack_org 마스크 -> YOLO 폴리곤 변환 (prepare_labeled_dataset.py) -->
+                <Button Content="데이터셋 준비" Command="{Binding PrepareLabeledDatasetCommand}" Margin="0,0,8,0"
+                        Visibility="{Binding SelectedSource, Converter={StaticResource StringEqualsToVisibilityConverter}, ConverterParameter=labeled}"/>
+                <!-- labeled/raw_crops 공통: 여러 장 중 한 장씩 넘겨보기 -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,8,0"
+                            Visibility="{Binding HasImageList, Converter={StaticResource TruthyToVisibilityConverter}}">
+                    <Button Content="◀ 이전" Command="{Binding PreviousImageCommand}" Margin="0,0,6,0"/>
+                    <TextBlock Text="{Binding ImageListLabel}" Foreground="{StaticResource Text2}" FontFamily="Consolas" FontSize="11.5"
+                               VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <Button Content="다음 ▶" Command="{Binding NextImageCommand}"/>
+                </StackPanel>
+                <!-- 새로 만들 때 = 학습, 기존 것에 이어서 = Fine-tuning (train_from_viewer.py의 mode=new|finetune, 항상 source도 같이 전달) -->
+                <Button Content="학습" Command="{Binding StartTrainingCommand}" Margin="0,0,8,0"/>
+                <Button Content="Fine-tuning" Command="{Binding StartFineTuneCommand}"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- ============ canvas + sidebar ============ -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="340"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- === image + polygon-drawing canvas === -->
+            <Border Grid.Column="0" Style="{StaticResource CardBorder}" Margin="0,0,16,0" Padding="10">
+                <Grid>
+                    <TextBlock Text="위에서 &quot;이미지 폴더 열기&quot;로 원본 사진 폴더를 고른 뒤 &quot;이미지 준비&quot;를 누르면 결과 모자이크를 여기에 자동으로 불러옵니다."
+                               Foreground="{StaticResource Text2}" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="420"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Visibility="{Binding HasImage, Converter={StaticResource FalsyToVisibilityConverter}}"/>
+
+                    <!-- Right-drag pans the image; Ctrl+wheel or the buttons below zoom only
+                         the annotation sources. Coordinates remain in the unzoomed canvas. -->
+                    <ScrollViewer x:Name="ImageScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                                  Visibility="{Binding HasImage, Converter={StaticResource TruthyToVisibilityConverter}}"
+                                  PreviewMouseRightButtonDown="ImageScrollViewer_PreviewMouseRightButtonDown"
+                                  MouseMove="ImageScrollViewer_MouseMove"
+                                  PreviewMouseRightButtonUp="ImageScrollViewer_PreviewMouseRightButtonUp"
+                                  LostMouseCapture="ImageScrollViewer_LostMouseCapture"
+                                  PreviewMouseWheel="ImageScrollViewer_PreviewMouseWheel">
+                        <Grid Width="{Binding DisplayWidth}" Height="{Binding DisplayHeight}">
+                            <Grid.LayoutTransform>
+                                <ScaleTransform ScaleX="{Binding ZoomFactor}" ScaleY="{Binding ZoomFactor}"/>
+                            </Grid.LayoutTransform>
+                            <Image Source="{Binding DisplayBitmap}" Width="{Binding DisplayWidth}" Height="{Binding DisplayHeight}"
+                                   Stretch="Fill"/>
+
+                            <!-- labeled 소스 전용: crack_org 자체 정답 마스크를 반투명 빨간색으로 오버레이
+                                 (읽기 전용 QA 미리보기: 이 소스는 사람이 새로 영역을 그리지 않음) -->
+                            <Image Source="{Binding MaskOverlayBitmap}" Width="{Binding DisplayWidth}" Height="{Binding DisplayHeight}"
+                                   Stretch="Fill" IsHitTestVisible="False"/>
+
+                            <!-- committed crack regions -->
+                            <ItemsControl ItemsSource="{Binding Boxes}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <Canvas Width="{Binding DisplayWidth}" Height="{Binding DisplayHeight}"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type models:CrackBoxItem}">
+                                        <Canvas>
+                                            <Polygon Points="{Binding CanvasPoints}"
+                                                     Stroke="{StaticResource Accent}" StrokeThickness="2"
+                                                     Fill="#334FA3FF"/>
+                                            <Border Canvas.Left="{Binding CanvasLabelX}" Canvas.Top="{Binding CanvasLabelY}"
+                                                    Background="{StaticResource Accent}" Padding="4,1" RenderTransformOrigin="0,1">
+                                                <Border.RenderTransform>
+                                                    <TranslateTransform Y="-16"/>
+                                                </Border.RenderTransform>
+                                                <TextBlock Text="{Binding Index}" Foreground="White" FontSize="10" FontFamily="Consolas"/>
+                                            </Border>
+                                        </Canvas>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- drag-in-progress overlay: populated/positioned entirely from
+                                 code-behind mouse handlers, never bound (purely ephemeral UI
+                                 state, not annotation data). Hit-testing disabled for the
+                                 "labeled" source (read-only mask preview, see AddPolygon's own
+                                 early-return guard for the same rule). -->
+                            <Canvas x:Name="DrawCanvas" Width="{Binding DisplayWidth}" Height="{Binding DisplayHeight}"
+                                    Background="Transparent" Cursor="Cross"
+                                    IsHitTestVisible="{Binding SelectedSource, Converter={StaticResource StringNotEqualsToBoolConverter}, ConverterParameter=labeled}"
+                                    MouseLeftButtonDown="DrawCanvas_MouseLeftButtonDown"
+                                    MouseMove="DrawCanvas_MouseMove"
+                                    MouseLeftButtonUp="DrawCanvas_MouseLeftButtonUp"/>
+                        </Grid>
+                    </ScrollViewer>
+
+                    <Border Background="#D91C2124" BorderBrush="{StaticResource Border}" BorderThickness="1"
+                            CornerRadius="6" Padding="8" HorizontalAlignment="Right" VerticalAlignment="Top"
+                            Margin="0,10,10,0"
+                            Visibility="{Binding CanUseZoom, Converter={StaticResource TruthyToVisibilityConverter}}">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="−" Command="{Binding ZoomOutCommand}" Width="32" Padding="0,5" Margin="0,0,6,0"/>
+                            <TextBlock Text="{Binding ZoomPercentText}" Foreground="{StaticResource Text}" FontFamily="Consolas"
+                                       Width="46" TextAlignment="Center" VerticalAlignment="Center"/>
+                            <Button Content="+" Command="{Binding ZoomInCommand}" Width="32" Padding="0,5" Margin="0,0,6,0"/>
+                            <Button Content="원본 뷰" Command="{Binding ResetZoomCommand}"
+                                    Visibility="{Binding IsZoomed, Converter={StaticResource TruthyToVisibilityConverter}}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="#D91C2124" BorderBrush="{StaticResource Border}" BorderThickness="1"
+                            CornerRadius="6" Padding="6" HorizontalAlignment="Left" VerticalAlignment="Top"
+                            Margin="10,10,0,0"
+                            Visibility="{Binding CanUseZoom, Converter={StaticResource TruthyToVisibilityConverter}}">
+                        <Grid>
+                            <Viewbox Width="180" Height="120" Stretch="Uniform">
+                                <Grid Width="{Binding DisplayWidth}" Height="{Binding DisplayHeight}">
+                                    <Image Source="{Binding DisplayBitmap}" Width="{Binding DisplayWidth}" Height="{Binding DisplayHeight}"
+                                           Stretch="Fill"/>
+                                    <ItemsControl ItemsSource="{Binding Boxes}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <Canvas Width="{Binding DisplayWidth}" Height="{Binding DisplayHeight}"/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate DataType="{x:Type models:CrackBoxItem}">
+                                                <Polygon Points="{Binding CanvasPoints}"
+                                                         Stroke="{StaticResource Accent}" StrokeThickness="8"
+                                                         Fill="#334FA3FF"/>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <Rectangle Width="{Binding DisplayWidth}" Height="{Binding DisplayHeight}"
+                                               Stroke="{StaticResource Border}" StrokeThickness="8" Fill="Transparent"/>
+                                </Grid>
+                            </Viewbox>
+                        </Grid>
+                    </Border>
+
+                    <!-- 폴더 선택 -> 스티칭 -> COLMAP 진행 중 (또는 labeled 데이터셋 준비 중) 로딩 화면 -->
+                    <Border Background="#CC14181A" Visibility="{Binding IsProcessing, Converter={StaticResource TruthyToVisibilityConverter}}">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <ProgressBar IsIndeterminate="True" Width="220" Height="4" Margin="0,0,0,16"/>
+                            <TextBlock Text="파이프라인 실행 중" FontSize="16" FontWeight="Bold" Foreground="{StaticResource Text}" HorizontalAlignment="Center"/>
+                            <TextBlock Text="{Binding ProgressText}" Foreground="{StaticResource Text2}" FontFamily="Consolas" FontSize="12"
+                                       Margin="0,8,0,0" HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 학습 / Fine-tuning 진행 중 로딩 화면 (epoch 기반 determinate progress bar) -->
+                    <Border Background="#CC14181A" Visibility="{Binding IsTraining, Converter={StaticResource TruthyToVisibilityConverter}}">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Width="280">
+                            <ProgressBar Minimum="0" Maximum="{Binding TrainingEpochs}" Value="{Binding TrainingEpoch, Mode=OneWay}"
+                                         Height="8" Margin="0,0,0,16"/>
+                            <TextBlock Text="모델 학습 진행 중" FontSize="16" FontWeight="Bold" Foreground="{StaticResource Text}" HorizontalAlignment="Center"/>
+                            <TextBlock Text="{Binding TrainingStatusText}" Foreground="{StaticResource Text2}" FontFamily="Consolas" FontSize="12"
+                                       TextWrapping="Wrap" TextAlignment="Center" Margin="0,8,0,0" HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 파이프라인 실패: FAILED_* 단계가 감지되면 "실행 중" 오버레이 대신 이걸로
+                         즉시 전환하고, 파이프라인이 남긴 실패 로그를 그대로 보여준다. -->
+                    <Border Background="#CC1A1414" Visibility="{Binding HasFailed, Converter={StaticResource TruthyToVisibilityConverter}}" Padding="24">
+                        <Grid MaxWidth="540" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Text="파이프라인 실패" FontSize="16" FontWeight="Bold" Foreground="#FF7A7A"
+                                       HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                            <Border Grid.Row="1" Background="{StaticResource Surface2}" BorderBrush="{StaticResource Border}"
+                                    BorderThickness="1" Padding="10" MaxHeight="260">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <TextBlock Text="{Binding FailureLog}" FontFamily="Consolas" FontSize="10.5"
+                                               Foreground="{StaticResource Text}" TextWrapping="Wrap"/>
+                                </ScrollViewer>
+                            </Border>
+                            <Button Grid.Row="2" Content="닫기" HorizontalAlignment="Center" Margin="0,14,0,0"
+                                    Command="{Binding DismissFailureCommand}"/>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <!-- === sidebar === -->
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Style="{StaticResource CardBorder}" Margin="0,0,0,14">
+                    <StackPanel>
+                        <TextBlock Text="사용법" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
+                        <TextBlock TextWrapping="Wrap" FontSize="12.5" Foreground="{StaticResource Text}" Margin="0,0,0,4">
+                            1. 크랙 외곽선을 따라 드래그해서 영역을 그리세요.
+                        </TextBlock>
+                        <TextBlock TextWrapping="Wrap" FontSize="12.5" Foreground="{StaticResource Text}" Margin="0,0,0,4">
+                            2. 크랙 하나당 영역 하나 — 끊긴 크랙은 여러 영역으로 나눠서 표시하세요.
+                        </TextBlock>
+                        <TextBlock TextWrapping="Wrap" FontSize="12.5" Foreground="{StaticResource Text}">
+                            3. 실수했다면 "마지막 취소" 또는 목록의 × 버튼을 사용하세요.
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Row="1" Style="{StaticResource CardBorder}" Margin="0,0,0,14">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,8">
+                            <TextBlock Text="표시된 영역" Style="{StaticResource SectionHeader}"/>
+                            <Border Background="{StaticResource Accent}" CornerRadius="9" Padding="6,1" HorizontalAlignment="Right">
+                                <TextBlock Text="{Binding Boxes.Count}" FontSize="11" FontWeight="Bold" Foreground="White"/>
+                            </Border>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button Content="마지막 취소" Command="{Binding UndoLastCommand}" Margin="0,0,8,0"/>
+                            <Button Content="전체 삭제" Command="{Binding ClearAllCommand}"/>
+                        </StackPanel>
+                        <TextBlock Text="아직 표시한 영역이 없습니다 — 이미지 위에서 드래그하세요." FontSize="12" FontStyle="Italic"
+                                   Foreground="{StaticResource Text2}" TextWrapping="Wrap">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Boxes.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <ItemsControl ItemsSource="{Binding Boxes}" MaxHeight="260">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type models:CrackBoxItem}">
+                                    <Grid Background="{StaticResource Surface2}" Margin="0,0,0,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding Index, StringFormat='#{0}'}" FontFamily="Consolas" FontSize="11"
+                                                   FontWeight="Bold" Foreground="{StaticResource Text}" Margin="8,6"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding CoordsLabel}" FontFamily="Consolas" FontSize="10.5"
+                                                   Foreground="{StaticResource Text2}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                        <Button Grid.Column="2" Content="✕" Padding="6,2" FontSize="11" Background="Transparent" BorderThickness="0"
+                                                Foreground="{StaticResource Accent}"
+                                                Command="{Binding DataContext.RemoveBoxCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <!-- 학습(성공 또는 실패)이 한 번이라도 끝나면 채워짐 (HasTrainingResult).
+                     "학습 진행 중" 오버레이는 IsTraining이 꺼지면 같이 사라지므로, 실패했을
+                     때도 결과가 화면에 계속 남아있도록 별도 카드로 분리했다. mAP/precision/
+                     recall은 소스별로 독립적으로 검증된 값만 보여준다(다른 소스와 안 섞임). -->
+                <Border Grid.Row="2" Style="{StaticResource CardBorder}" Margin="0,0,0,14"
+                        Visibility="{Binding HasTrainingResult, Converter={StaticResource TruthyToVisibilityConverter}}">
+                    <StackPanel>
+                        <TextBlock Text="검증 결과" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
+                        <TextBlock Text="{Binding MetricsText}" FontFamily="Consolas" FontSize="11.5"
+                                   Foreground="{StaticResource Text}" TextWrapping="Wrap"
+                                   Visibility="{Binding MetricsText, Converter={StaticResource TruthyToVisibilityConverter}}"/>
+                        <TextBlock Text="{Binding TrainingErrorText}" FontFamily="Consolas" FontSize="11.5"
+                                   Foreground="#FF7A7A" TextWrapping="Wrap"
+                                   Visibility="{Binding TrainingErrorText, Converter={StaticResource TruthyToVisibilityConverter}}"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- 남은 세로 공간을 전부 차지: JSON 미리보기가 아래 빈 공간까지 늘어남 -->
+                <Border Grid.Row="3" Style="{StaticResource CardBorder}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="내보내기" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button Content="JSON을 클립보드에 복사" Command="{Binding CopyJsonCommand}" Margin="0,0,8,0"/>
+                            <!-- raw_crops/stitched 각각 자기 소스 폴더(training_data_raw_crops /
+                                 training_data_stitched)에 저장 (SaveTrainingData 참고) -->
+                            <Button Content="학습 데이터 저장" Command="{Binding SaveTrainingDataCommand}"/>
+                        </StackPanel>
+                        <TextBox Grid.Row="2" Text="{Binding JsonPreview, Mode=OneWay}" IsReadOnly="True" TextWrapping="NoWrap" AcceptsReturn="True"
+                                 FontFamily="Consolas" FontSize="10.5"
+                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                        <StackPanel Grid.Row="3" Margin="0,6,0,0">
+                            <TextBlock Text="{Binding CopyStatus}" Foreground="{StaticResource Accent}" FontFamily="Consolas" FontSize="11"/>
+                            <TextBlock Text="{Binding SaveStatus}" Foreground="{StaticResource Accent}" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

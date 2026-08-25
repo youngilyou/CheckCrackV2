@@ -1,0 +1,24 @@
+# torch is intentionally not pinned here — install the CUDA build first
+# per the README's setup steps, then this covers the rest.
+kornia==0.8.3
+opencv-python==4.12.0.88
+pycolmap==4.1.1
+ultralytics==8.4.21
+networkx==3.6.1
+pandas==3.0.0
+pyarrow==23.0.1
+pyproj==3.7.2
+PyYAML==6.0.3
+scikit-image==0.26.0
+shapely==2.1.2
+pillow==12.2.0
+numpy==2.2.6
+jinja2==3.1.6
+
+# weasyprint (PDF report generation, src/report/) needs Pango/cairo/gobject,
+# which plain "pip install weasyprint" does NOT provide on Windows (verified:
+# it imports but fails at runtime with "cannot load library 'libgobject-2.0-0'").
+# On Windows, install it via conda-forge instead -- that build bundles the
+# native libs -- see scripts/setup_dev_machine.ps1. Left unpinned here since
+# Windows installs go through conda, not this file.
+weasyprint==69.0 ; sys_platform != 'win32'
