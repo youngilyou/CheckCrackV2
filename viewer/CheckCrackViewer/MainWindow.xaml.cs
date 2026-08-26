@@ -30,29 +30,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         TitleBarTheme.Apply(this, (Color)ColorConverter.ConvertFromString("#0A0D10"), Colors.White);
         if (DataContext is MainViewModel vm)
-        {
             vm.LogEntries.CollectionChanged += OnLogEntriesChanged;
-            // PasswordBox.Password can't be data-bound, so ChangePasswordCommand/
-            // ChangeUsernameCommand clearing CurrentPassword/NewPassword/
-            // ConfirmNewPassword on the ViewModel doesn't clear what's still
-            // typed in these three boxes -- mirror it here once a change
-            // actually succeeds.
-            vm.PropertyChanged += (_, e) =>
-            {
-                if (e.PropertyName != nameof(MainViewModel.AccountStatus))
-                    return;
-                if (vm.AccountStatus == "비밀번호가 변경되었습니다.")
-                {
-                    CurrentPasswordInput.Clear();
-                    NewPasswordInput.Clear();
-                    ConfirmNewPasswordInput.Clear();
-                }
-                else if (vm.AccountStatus == "계정명이 변경되었습니다.")
-                {
-                    CurrentPasswordInput.Clear();
-                }
-            };
-        }
     }
 
     private void OnLogEntriesChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -88,23 +66,5 @@ public partial class MainWindow : Window
         _currentViewer = new ImageViewerWindow(facade) { Owner = this };
         _currentViewer.Closed += (_, _) => _currentViewer = null;
         _currentViewer.Show();
-    }
-
-    private void CurrentPasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
-    {
-        if (DataContext is MainViewModel vm)
-            vm.CurrentPassword = CurrentPasswordInput.Password;
-    }
-
-    private void NewPasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
-    {
-        if (DataContext is MainViewModel vm)
-            vm.NewPassword = NewPasswordInput.Password;
-    }
-
-    private void ConfirmNewPasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
-    {
-        if (DataContext is MainViewModel vm)
-            vm.ConfirmNewPassword = ConfirmNewPasswordInput.Password;
     }
 }

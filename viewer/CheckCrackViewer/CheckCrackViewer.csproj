@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <Resource Include="Assets\login_background.png" />
+    <Resource Include="Assets\main_illustration2.png" />
   </ItemGroup>
 
   <ItemGroup>

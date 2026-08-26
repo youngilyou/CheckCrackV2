@@ -1,0 +1,315 @@
+<UserControl x:Class="CheckCrackViewer.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:CheckCrackViewer.ViewModels"
+             d:DataContext="{d:DesignInstance Type=vm:MainViewModel}"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008/design"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d">
+    <!-- 이 화면 전용 DataContext는 없음. MainWindow가 여기 두는 다른 탭(원본 AI/결과보기/
+         AI 학습)과 달리 설정 화면은 처음부터 MainViewModel 자신의 속성/커맨드(DbHost, 계정
+         변경, ActiveJobs, ErrorLogView 등)를 직접 쓰므로, DataContext는 그대로 Window에서
+         상속받는다(명시적 바인딩 불필요). -->
+    <UserControl.Resources>
+        <!-- 이 앱 최초의 TabControl(설정 페이지 계정/연결 · 시스템 상태). 기본 크롬(밝은
+             Aero 그라디언트)이 다크 테마와 충돌해서 완전 커스텀 ControlTemplate 필요
+             (Expander처럼 브러시만 얹는 걸로는 부족). 이 화면 전용이라 UserControl 범위로
+             한정한다 (TabControl을 쓰는 다른 화면이 아직 없음). -->
+        <Style TargetType="TabItem">
+            <Setter Property="Foreground" Value="{StaticResource Text2}"/>
+            <Setter Property="Padding" Value="16,10"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="Bd" Background="Transparent"
+                                BorderBrush="Transparent" BorderThickness="0,0,0,2" Margin="0,0,4,0">
+                            <ContentPresenter ContentSource="Header" HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+                                <Setter Property="FontWeight" Value="Bold"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="TabControl">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabControl">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <Border Grid.Row="0" BorderBrush="{StaticResource Border}" BorderThickness="0,0,0,1">
+                                <TabPanel IsItemsHost="True" Background="Transparent" Margin="0,0,0,-1"/>
+                            </Border>
+                            <ContentPresenter Grid.Row="1" ContentSource="SelectedContent" Margin="0,16,0,0"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="설정" FontSize="24" FontWeight="Bold" Foreground="{StaticResource Text4}"
+                   Margin="28,28,28,10"/>
+
+        <TabControl Grid.Row="1" Margin="20,0,20,0">
+            <TabItem Header="계정/연결" Foreground="{StaticResource Text4}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <Grid Margin="32,16,32,28" HorizontalAlignment="Stretch">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="48*" MinWidth="500"/>
+                            <ColumnDefinition Width="20"/>
+                            <ColumnDefinition Width="52*" MinWidth="520"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3"
+                                   Text="외부 컴퓨터에서 운용되는 MySQL DB 연결 정보를 입력합니다."
+                                   Foreground="{StaticResource Text4}" Margin="0,0,0,20"/>
+
+                        <!-- === 계정: 로그인 계정명/비밀번호 변경 (SQLite users.db, MySQL과 무관) === -->
+                        <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource CardBorder}" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="계정" Style="{StaticResource Kicker}" Margin="0,0,0,10"/>
+                                <TextBlock Text="{Binding LoggedInUsername, StringFormat='로그인: {0}'}" Foreground="{StaticResource Text2}" Margin="0,0,0,14"/>
+
+                                <TextBlock Text="현재 비밀번호 (계정명·비밀번호 변경 공통 확인)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <PasswordBox x:Name="CurrentPasswordInput" Padding="8,5" Margin="0,0,0,16"
+                                             Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"
+                                             PasswordChanged="CurrentPasswordInput_PasswordChanged"/>
+
+                                <TextBlock Text="새 계정명" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <TextBox Text="{Binding NewUsername, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,8"
+                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                <Button Content="계정명 변경" Command="{Binding ChangeUsernameCommand}" HorizontalAlignment="Left" Padding="10,5" Margin="0,0,0,18"/>
+
+                                <TextBlock Text="새 비밀번호" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <PasswordBox x:Name="NewPasswordInput" Padding="8,5" Margin="0,0,0,10"
+                                             Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"
+                                             PasswordChanged="NewPasswordInput_PasswordChanged"/>
+
+                                <TextBlock Text="새 비밀번호 확인" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <PasswordBox x:Name="ConfirmNewPasswordInput" Padding="8,5" Margin="0,0,0,12"
+                                             Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"
+                                             PasswordChanged="ConfirmNewPasswordInput_PasswordChanged"/>
+
+                                <Button Content="비밀번호 변경" Command="{Binding ChangePasswordCommand}" HorizontalAlignment="Left" Padding="10,5"/>
+                                <TextBlock Text="{Binding AccountStatus}" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- === MySQL 연결: 기존 항목/Binding/Command 모두 유지 === -->
+                        <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource CardBorder}" Margin="0,0,0,16">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="120"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="120"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="MySQL 연결" Style="{StaticResource Kicker}" Margin="0,0,0,14"/>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="DB Host / IP" Foreground="{StaticResource Text2}" VerticalAlignment="Center" Margin="0,0,12,10"/>
+                                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding DbHost, UpdateSourceTrigger=PropertyChanged}"
+                                             Margin="0,0,12,10" Padding="8,5" Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="2" Text="예: 192.168.0.50" Foreground="{StaticResource Text2}" FontSize="11" VerticalAlignment="Center" Margin="0,0,0,10"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Port" Foreground="{StaticResource Text2}" VerticalAlignment="Center" Margin="0,0,12,10"/>
+                                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding DbPort, UpdateSourceTrigger=PropertyChanged}"
+                                             Width="120" HorizontalAlignment="Left" Margin="0,0,12,10" Padding="8,5"
+                                             Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                    <TextBlock Grid.Row="2" Grid.Column="2" Text="기본 3306" Foreground="{StaticResource Text2}" FontSize="11" VerticalAlignment="Center" Margin="0,0,0,10"/>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Database" Foreground="{StaticResource Text2}" VerticalAlignment="Center" Margin="0,0,12,10"/>
+                                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding DbName, UpdateSourceTrigger=PropertyChanged}"
+                                             Margin="0,0,12,10" Padding="8,5" Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="User ID" Foreground="{StaticResource Text2}" VerticalAlignment="Center" Margin="0,0,12,10"/>
+                                    <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding DbUser, UpdateSourceTrigger=PropertyChanged}"
+                                             Margin="0,0,12,10" Padding="8,5" Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Password" Foreground="{StaticResource Text2}" VerticalAlignment="Center" Margin="0,0,12,10"/>
+                                    <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding DbPassword, UpdateSourceTrigger=PropertyChanged}"
+                                             Margin="0,0,12,10" Padding="8,5" Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+
+                                    <StackPanel Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal">
+                                        <CheckBox Content="SSL 사용" IsChecked="{Binding DbUseSsl}" Margin="0,0,18,0"/>
+                                        <CheckBox Content="비밀번호 저장" IsChecked="{Binding DbSavePassword}" Margin="0,0,18,0"/>
+                                        <TextBlock Text="Timeout" Foreground="{StaticResource Text2}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBox Text="{Binding DbTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" Width="50"
+                                                 Padding="8,5" Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                        <TextBlock Text="초" Foreground="{StaticResource Text2}" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                                    <Button Content="연결 테스트" Command="{Binding TestDbConnectionCommand}" Margin="0,0,8,0"/>
+                                    <Button Content="저장" Command="{Binding SaveDbSettingsCommand}"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 상태 -->
+                        <Border Grid.Row="2" Grid.Column="0" Style="{StaticResource CardBorder}" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="상태" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
+                                <TextBlock Text="{Binding DbSettingsStatus}" Foreground="{StaticResource Text}" TextWrapping="Wrap"/>
+                                <TextBlock Text="현재 테스트는 DB 서버 IP/Port 응답 확인 단계입니다. 고객정보, 의뢰 아파트 정보, 이미지 목록 조회는 DB 테이블 구조 확정 후 연결합니다."
+                                           Foreground="{StaticResource Text2}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- === NEW: AI 모델 경로 (읽기 전용, config/pipeline.yaml에서 읽음) === -->
+                        <Border Grid.Row="2" Grid.Column="2" Style="{StaticResource CardBorder}" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="AI 모델 경로" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
+                                <TextBlock Text="config/pipeline.yaml의 crack.model 값입니다 (읽기 전용 — 크랙 검사가 실제로 쓰는 모델은 항상 이 YAML 기본값)."
+                                           Foreground="{StaticResource Text2}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                <TextBlock Text="{Binding AiModelPath}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- === NEW: 환경 설정 (읽기 전용) === -->
+                        <Border Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" Style="{StaticResource CardBorder}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="24"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="환경 설정" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
+                                    <TextBlock Text="RootPath" Foreground="{StaticResource Text2}" FontSize="11"/>
+                                    <TextBlock Text="{Binding RootPath}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2" Margin="0,26,0,0">
+                                    <TextBlock Text="Python 실행 파일" Foreground="{StaticResource Text2}" FontSize="11"/>
+                                    <TextBlock Text="{Binding PythonExePath}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="시스템 상태" Foreground="{StaticResource Text4}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <Grid Margin="32,16,32,28" HorizontalAlignment="Stretch">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" MinWidth="500"/>
+                            <ColumnDefinition Width="20"/>
+                            <ColumnDefinition Width="*" MinWidth="500"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3"
+                                   Text="애플리케이션 내부에서 관측 가능한 실제 신호만 표시합니다 (촬영/드론 상태는 이 Viewer가 관측하지 않음)."
+                                   Foreground="{StaticResource Text2}" TextWrapping="Wrap" Margin="0,0,0,20"/>
+
+                        <!-- DB 연결 상태 -->
+                        <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource CardBorder}" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="DB 연결 상태" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
+                                <TextBlock Text="최근 연결 테스트 결과 (계정/연결 탭의 '연결 테스트' 버튼으로 갱신)"
+                                           Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,8"/>
+                                <TextBlock Text="{Binding DbSettingsStatus}" Foreground="{StaticResource Text}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 파일 저장소 상태 -->
+                        <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource CardBorder}" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="파일 저장소 상태" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
+                                <TextBlock Text="{Binding StorageStatusText}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 처리 Job -->
+                        <Border Grid.Row="2" Grid.Column="0" Style="{StaticResource CardBorder}">
+                            <StackPanel>
+                                <TextBlock Text="처리 Job" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
+                                <TextBlock Text="현재 처리 중인 작업이 없습니다." Foreground="{StaticResource Text2}" FontSize="12"
+                                           Visibility="{Binding ActiveJobs.Count, Converter={StaticResource FalsyToVisibilityConverter}}"/>
+                                <ItemsControl ItemsSource="{Binding ActiveJobs}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="{StaticResource Surface2}" CornerRadius="6" Padding="8,6" Margin="0,0,0,4">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding FacadeId}" FontWeight="Bold" FontFamily="Consolas" Foreground="{StaticResource Text}" Width="110"/>
+                                                    <TextBlock Text="스티칭 중" Foreground="{StaticResource Accent}" FontSize="11.5"
+                                                               Visibility="{Binding IsRunning, Converter={StaticResource TruthyToVisibilityConverter}}"/>
+                                                    <TextBlock Text="크랙 탐지 중" Foreground="{StaticResource Accent}" FontSize="11.5"
+                                                               Visibility="{Binding IsDetectingCracks, Converter={StaticResource TruthyToVisibilityConverter}}"/>
+                                                    <TextBlock Text="보고서 생성 중" Foreground="{StaticResource Accent}" FontSize="11.5"
+                                                               Visibility="{Binding IsGeneratingReport, Converter={StaticResource TruthyToVisibilityConverter}}"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 오류/로그 -->
+                        <Border Grid.Row="2" Grid.Column="2" Style="{StaticResource CardBorder}">
+                            <StackPanel>
+                                <TextBlock Text="오류/로그 (WARNING/ERROR만)" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
+                                <ListBox ItemsSource="{Binding ErrorLogView}" Background="Transparent" BorderThickness="0"
+                                         ItemTemplate="{StaticResource LogEntryTemplate}"
+                                         MaxHeight="360" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="Padding" Value="10,5"/>
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                            <Setter Property="Background" Value="Transparent"/>
+                                            <Setter Property="Foreground" Value="{StaticResource Text}"/>
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                </ListBox>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</UserControl>

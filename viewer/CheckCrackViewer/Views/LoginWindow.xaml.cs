@@ -27,6 +27,9 @@ public partial class LoginWindow : Window
     {
         if (DataContext is LoginViewModel vm)
             vm.Password = PasswordInput.Password;
+        PasswordPlaceholder.Visibility = string.IsNullOrEmpty(PasswordInput.Password)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     // IsDefault on the 로그인 button should already catch Enter, but PasswordBox

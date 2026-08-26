@@ -10,23 +10,26 @@
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource Bg}">
     <Window.Resources>
-        <!-- "유리" 입력창: 배경 사진 위에서도 또렷하도록 반투명 흰색 배경 + 옅은 테두리.
-             기본 TextBox/PasswordBox 크롬(포커스 시 파란 테두리 등)은 배경 사진과
-             어울리지 않아 Border+ScrollViewer로 완전히 새 템플릿을 준다. -->
+        <!-- 이 로그인 화면 전용 브랜드 블루, 앱 나머지 화면의 Accent(주황)와는
+             별개로, SMARTCRACK 로고/버튼 색은 마케팅 자료(main_illustration2.png와
+             같이 쓰이는 로그인 목업)의 파란색을 그대로 맞춘다. -->
+        <SolidColorBrush x:Key="LoginBlue" Color="#3B7DF2"/>
+        <SolidColorBrush x:Key="LoginBlueDark" Color="#2F63C7"/>
+
+        <!-- "유리" 입력창: 왼쪽 패널이 이미 어두운 단색이라 사진 위 반투명 대신
+             살짝 밝은 반투명 다크 배경 + 아이콘 프리픽스로 목업과 맞춘다. -->
         <Style x:Key="GlassTextBox" TargetType="TextBox">
-            <Setter Property="Background" Value="#26FFFFFF"/>
+            <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="CaretBrush" Value="White"/>
-            <Setter Property="BorderBrush" Value="#40FFFFFF"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="12,10"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
             <Setter Property="FontSize" Value="13.5"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TextBox">
-                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8">
-                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center"/>
+                        <Border Background="{TemplateBinding Background}">
+                            <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"/>
                         </Border>
                     </ControlTemplate>
                 </Setter.Value>
@@ -34,73 +37,153 @@
         </Style>
 
         <Style x:Key="GlassPasswordBox" TargetType="PasswordBox">
-            <Setter Property="Background" Value="#26FFFFFF"/>
+            <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="CaretBrush" Value="White"/>
-            <Setter Property="BorderBrush" Value="#40FFFFFF"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="12,10"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
             <Setter Property="FontSize" Value="13.5"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="PasswordBox">
-                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8">
-                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center"/>
+                        <Border Background="{TemplateBinding Background}">
+                            <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"/>
                         </Border>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- 입력창을 감싸는 어두운 캡슐, 아이콘 + TextBox/PasswordBox를 한 줄에. -->
+        <Style x:Key="InputCapsule" TargetType="Border">
+            <Setter Property="Background" Value="#331A2028"/>
+            <Setter Property="BorderBrush" Value="#40FFFFFF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="14,12"/>
+        </Style>
+
+        <Style x:Key="FooterLink" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#9AA6B0"/>
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
     </Window.Resources>
 
-    <Grid>
-        <!-- 배경: 드론이 야간에 외벽을 스캔하는 사진 (src/report/assets/main_illustration.png,
-             PDF 표지와 같은 이미지를 로그인 화면에도 재사용). UniformToFill + ClipToBounds로
-             창 크기/비율이 달라져도 잘리기만 하고 찌그러지지 않는다. -->
-        <Image Source="/Assets/login_background.png" Stretch="UniformToFill" ClipToBounds="True"/>
+    <Grid Background="#0A0E12">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="520"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
 
-        <!-- 오른쪽 로그인 패널이 사진과 잘 구분되도록 우측을 어둡게 그라데이션. -->
-        <Rectangle>
-            <Rectangle.Fill>
-                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                    <GradientStop Color="#00000000" Offset="0.5"/>
-                    <GradientStop Color="#99080B0E" Offset="0.72"/>
-                    <GradientStop Color="#CC080B0E" Offset="1"/>
-                </LinearGradientBrush>
-            </Rectangle.Fill>
-        </Rectangle>
+        <!-- 왼쪽: 로그인 패널 (짙은 남색 단색 배경) -->
+        <Grid Grid.Column="0" Margin="64,48">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
 
-        <Border HorizontalAlignment="Right" VerticalAlignment="Stretch" Width="460" Margin="0,0,0,0"
-                Background="#B310151A" BorderBrush="#33FFFFFF" BorderThickness="1,0,0,0">
-            <StackPanel VerticalAlignment="Center" Margin="56,40">
-                <TextBlock Text="AI Drone Building" FontFamily="Bahnschrift SemiBold" FontSize="26" Foreground="White"
-                           HorizontalAlignment="Center" TextAlignment="Center"/>
-                <TextBlock FontFamily="Bahnschrift SemiBold" FontSize="26" Margin="0,0,0,10"
-                           HorizontalAlignment="Center" TextAlignment="Center">
-                    <Run Text="Inspection " Foreground="White"/><Run Text="Service" Foreground="{StaticResource Accent}"/>
+            <!-- 로고: 육각형 + S + SMARTCRACK PREVIEWER + V2 배지 -->
+            <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Top">
+                <Grid Width="44" Height="44" Margin="0,0,14,0">
+                    <Polygon Points="22,1 41,11.5 41,32.5 22,43 3,32.5 3,11.5" Fill="{StaticResource LoginBlue}"/>
+                    <TextBlock Text="S" Foreground="White" FontWeight="Bold" FontSize="20"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Grid>
+                <StackPanel VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="SMARTCRACK" Foreground="White" FontWeight="Bold" FontSize="21"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                        <TextBlock Text="크랙 분석 시스템" Foreground="#B9C2C7" FontSize="12" FontWeight="SemiBold"
+                                   VerticalAlignment="Center"/>
+                        <Border Background="{StaticResource LoginBlue}" CornerRadius="4" Padding="6,1" Margin="8,0,0,0">
+                            <TextBlock Text="V2" Foreground="White" FontWeight="Bold" FontSize="10.5"/>
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
+            </StackPanel>
+
+            <!-- 중앙: 태그라인 + 입력 폼 -->
+            <StackPanel Grid.Row="1" VerticalAlignment="Center">
+                <TextBlock FontSize="24" FontWeight="Bold" Margin="0,0,0,8">
+                    <Run Text="AI로 더 정확하게, " Foreground="White"/><Run Text="안전하게" Foreground="{StaticResource LoginBlue}"/>
                 </TextBlock>
-                <TextBlock Margin="0,0,0,34" HorizontalAlignment="Center" TextAlignment="Center" FontSize="12">
-                    <Run Text="SmartCrack" Foreground="{StaticResource Accent}" FontWeight="Bold"/><Run Text=" · 드론 외벽 균열 검사 시스템" Foreground="#B9C2C7"/>
-                </TextBlock>
+                <TextBlock Text="Drone AI Building Inspection Solution" Foreground="#8B96A0" FontSize="13" Margin="0,0,0,40"/>
 
-                <TextBlock Text="아이디" Foreground="#B9C2C7" FontSize="11" Margin="0,0,0,6"/>
-                <TextBox Style="{StaticResource GlassTextBox}" Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,16"/>
+                <Border Style="{StaticResource InputCapsule}" Margin="0,0,0,14">
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Left" Text="&#xE77B;" FontFamily="Segoe MDL2 Assets"
+                                   Foreground="#8B96A0" FontSize="15" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                        <TextBlock DockPanel.Dock="Left" Text="아이디" Foreground="#6E7A84" FontSize="13.5"
+                                   VerticalAlignment="Center" Margin="0,0,0,0"
+                                   Visibility="{Binding Username, Converter={StaticResource FalsyToVisibilityConverter}}"/>
+                        <TextBox Style="{StaticResource GlassTextBox}" Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}"/>
+                    </DockPanel>
+                </Border>
 
-                <TextBlock Text="비밀번호" Foreground="#B9C2C7" FontSize="11" Margin="0,0,0,6"/>
-                <PasswordBox x:Name="PasswordInput" Style="{StaticResource GlassPasswordBox}" Margin="0,0,0,16"
-                             PasswordChanged="PasswordInput_PasswordChanged" KeyDown="PasswordInput_KeyDown"/>
+                <Border Style="{StaticResource InputCapsule}" Margin="0,0,0,20">
+                    <Grid>
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Left" Text="&#xE72E;" FontFamily="Segoe MDL2 Assets"
+                                       Foreground="#8B96A0" FontSize="15" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                            <PasswordBox x:Name="PasswordInput" Style="{StaticResource GlassPasswordBox}"
+                                         PasswordChanged="PasswordInput_PasswordChanged" KeyDown="PasswordInput_KeyDown"/>
+                        </DockPanel>
+                        <!-- PasswordBox has no bindable Password DependencyProperty, so the
+                             placeholder's visibility is toggled from code-behind
+                             (PasswordInput_PasswordChanged) instead of a XAML binding. -->
+                        <TextBlock x:Name="PasswordPlaceholder" Text="비밀번호" Foreground="#6E7A84" FontSize="13.5"
+                                   Margin="24,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                    </Grid>
+                </Border>
 
-                <CheckBox Content="로그인 정보 저장" Foreground="#B9C2C7" IsChecked="{Binding RememberLogin}" Margin="0,0,0,24"/>
+                <Button Content="로그인" Command="{Binding LoginCommand}" IsDefault="True"
+                        Background="{StaticResource LoginBlue}" Foreground="White" BorderThickness="0"
+                        FontWeight="Bold" FontSize="14" Padding="10,14" Cursor="Hand" Margin="0,0,0,16"/>
 
-                <Button Content="LOGIN" Command="{Binding LoginCommand}" IsDefault="True"
-                        Background="{StaticResource Accent}" Foreground="White" BorderBrush="{StaticResource Accent}"
-                        FontFamily="Bahnschrift SemiBold" FontSize="13.5" Padding="10,13"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <CheckBox Grid.Column="0" Content="아이디 저장" Foreground="#8B96A0" FontSize="12"
+                              IsChecked="{Binding RememberLogin}"/>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal">
+                        <TextBlock Text="아이디 찾기" Style="{StaticResource FooterLink}"/>
+                        <TextBlock Text="  |  " Style="{StaticResource FooterLink}"/>
+                        <TextBlock Text="비밀번호 찾기" Style="{StaticResource FooterLink}"/>
+                    </StackPanel>
+                </Grid>
 
-                <TextBlock Text="{Binding StatusText}" Foreground="#FF9E7A" TextWrapping="Wrap" TextAlignment="Center"
-                           HorizontalAlignment="Center" Margin="0,16,0,0"
+                <TextBlock Text="{Binding StatusText}" Foreground="#FF8A6A" TextWrapping="Wrap"
+                           Margin="0,16,0,0"
                            Visibility="{Binding StatusText, Converter={StaticResource TruthyToVisibilityConverter}}"/>
             </StackPanel>
-        </Border>
+
+            <!-- 하단: 저작권 -->
+            <StackPanel Grid.Row="2" VerticalAlignment="Bottom">
+                <TextBlock Text="© 2026 AI SMARTCRACK Co., Ltd." Foreground="#5A6570" FontSize="10.5"/>
+                <TextBlock Text="All rights reserved." Foreground="#5A6570" FontSize="10.5"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- 오른쪽: 일러스트레이션 (드론이 외벽 균열을 스캔하는 이미지). 왼쪽 패널의 어두운
+             배경(#0A0E12)에서 사진으로 자연스럽게 이어지도록 왼쪽 가장자리를 같은 색으로
+             페이드 아웃한다 (패널과 사진 사이 딱딱한 경계선이 생기지 않게). -->
+        <Grid Grid.Column="1">
+            <Image Source="/Assets/main_illustration2.png" Stretch="UniformToFill" ClipToBounds="True"/>
+            <Rectangle IsHitTestVisible="False">
+                <Rectangle.Fill>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                        <GradientStop Color="#0A0E12" Offset="0"/>
+                        <GradientStop Color="#0A0E12" Offset="0.06"/>
+                        <GradientStop Color="#000A0E12" Offset="0.5"/>
+                    </LinearGradientBrush>
+                </Rectangle.Fill>
+            </Rectangle>
+        </Grid>
     </Grid>
 </Window>

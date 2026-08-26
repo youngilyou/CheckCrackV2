@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media;
@@ -29,38 +30,9 @@ public partial class AiTrainingViewModel : ObservableObject
     // fully decoded at native resolution just to shrink it in the UI.
     private const int MaxDisplayDim = 1600;
 
-    // How long PrepareImage tolerates zero new log activity for the running facade
-    // before treating the subprocess as hung and killing it -- confirmed necessary
-    // live: a stitch run sat frozen mid-pair (no new pipeline.log lines, CPU time
-    // on the child process not advancing) for 10+ minutes with no way to notice
-    // short of watching logs by hand. This is an IDLE timeout (resets on every new
-    // log line for this facade), not a total-runtime cap, so a legitimately slow
-    // but still-progressing COLMAP run isn't cut off.
-    private static readonly TimeSpan PipelineIdleTimeout = TimeSpan.FromMinutes(5);
-
-    private static readonly Dictionary<string, string> StageLabels = new()
-    {
-        ["METADATA_PARSED"] = "메타데이터 파싱 완료",
-        ["FACADE_ASSIGNED"] = "Facade 자동분류 완료",
-        ["PAIR_GRAPH_BUILT"] = "매칭 쌍 구성 완료",
-        ["MATCH_GEOMETRY"] = "매칭 · Geometry 계산 중",
-        ["GEOMETRY_SOLVED"] = "매칭 · Geometry 완료",
-        ["STITCHED"] = "스티칭 완료",
-        ["NEEDS_MANUAL_REVIEW"] = "검토 필요 (Drift 감지)",
-        ["COLMAP_EXTRACT"] = "CM 특징점 추출 중",
-        ["COLMAP_MATCH"] = "CM 매칭 중",
-        ["COLMAP_MAPPING"] = "CM SfM 재구성 중",
-        ["COLMAP_MAPPING_PROGRESS"] = "CM 이미지 등록 중",
-        ["COLMAP_FALLBACK"] = "CM 보정 완료",
-        ["RECTIFIED_COLMAP"] = "CM 정밀 재투영 완료",
-        ["FAILED_GEOMETRY"] = "실패 (품질 게이트 통과 pair 없음)",
-        ["DONE"] = "완료",
-        ["PREVIEW_UPDATED"] = "모자이크 미리보기 갱신 중",
-    };
-
     /// <summary>Set by MainViewModel (constructor + OnRootPathChanged) -- this
     /// ViewModel doesn't own RootPath itself, it just needs it to find
-    /// tools/stitch_for_ai_training.py and logs/pipeline.log.</summary>
+    /// training/crack_seg/*.py and tools/detect_cracks_images.py.</summary>
     public string RootPath { get; set; } = "";
 
     [ObservableProperty] private bool _isProcessing;
@@ -80,26 +52,24 @@ public partial class AiTrainingViewModel : ObservableObject
     // "학습 진행 중" overlay and then disappearing once IsTraining goes false.
     [ObservableProperty] private bool _hasTrainingResult;
 
-    /// <summary>Three independent training sources (see the AI 학습 탭 plan): each
+    /// <summary>Two independent training sources (see the AI 학습 탭 plan): each
     /// gets its own dataset dir/model runs so results are never silently mixed,
     /// which is exactly the "디버깅을 수월하게" requirement this was built for.
     /// "labeled" = already-masked source folder (no polygon drawing needed),
     /// "raw_crops" = plain unlabeled crack photos (polygon drawing, many images via
-    /// Next/Back), "stitched" = the original facade-mosaic flow (unchanged).</summary>
-    [ObservableProperty] private string _selectedSource = "stitched";
-    [ObservableProperty] private bool _isLabeledSelected;
+    /// Next/Back).</summary>
+    [ObservableProperty] private string _selectedSource = "labeled";
+    [ObservableProperty] private bool _isLabeledSelected = true;
     [ObservableProperty] private bool _isRawCropsSelected;
-    [ObservableProperty] private bool _isStitchedSelected = true;
 
     private bool _syncingSource;
 
     partial void OnIsLabeledSelectedChanged(bool value) => HandleSourceCheckboxChanged(value, "labeled");
     partial void OnIsRawCropsSelectedChanged(bool value) => HandleSourceCheckboxChanged(value, "raw_crops");
-    partial void OnIsStitchedSelectedChanged(bool value) => HandleSourceCheckboxChanged(value, "stitched");
 
-    /// <summary>Three CheckBoxes behaving like a radio group (user's explicit request:
+    /// <summary>Two CheckBoxes behaving like a radio group (user's explicit request:
     /// "체크박스로 선택" but only one active source at a time) -- checking one
-    /// unchecks the other two; unchecking the active one just re-checks itself,
+    /// unchecks the other; unchecking the active one just re-checks itself,
     /// since leaving zero sources selected has no meaning here.</summary>
     private void HandleSourceCheckboxChanged(bool value, string source)
     {
@@ -117,7 +87,6 @@ public partial class AiTrainingViewModel : ObservableObject
 
             IsLabeledSelected = SelectedSource == "labeled";
             IsRawCropsSelected = SelectedSource == "raw_crops";
-            IsStitchedSelected = SelectedSource == "stitched";
         }
         finally
         {
@@ -142,18 +111,20 @@ public partial class AiTrainingViewModel : ObservableObject
         SelectedFolderPath = "";
         MetricsText = "";
         ZoomFactor = 1.0;
+        ShowAiCrackOverlay = false;
+        AiDetectedBoxes.Clear();
+        _aiDetectionsByImageId.Clear();
         NotifyImageViewStateChanged();
 
         StatusText = source switch
         {
             "labeled" => "\"이미지 폴더 열기\"로 기존 마스크 데이터셋 폴더를 선택하세요.",
-            "raw_crops" => "\"이미지 폴더 열기\"로 일반 크랙 사진 폴더를 선택하세요.",
-            _ => "\"이미지 폴더 열기\"로 스티칭할 원본 사진 폴더를 선택하세요.",
+            _ => "\"이미지 폴더 열기\"로 일반 크랙 사진 폴더를 선택하세요.",
         };
 
-        PrepareImageCommand.NotifyCanExecuteChanged();
         PrepareLabeledDatasetCommand.NotifyCanExecuteChanged();
         SaveTrainingDataCommand.NotifyCanExecuteChanged();
+        DetectCracksCommand.NotifyCanExecuteChanged();
     }
 
     private void NotifyImageViewStateChanged()
@@ -244,33 +215,33 @@ public partial class AiTrainingViewModel : ObservableObject
 
     partial void OnIsProcessingChanged(bool value) => NotifyBusyCommands();
     partial void OnIsTrainingChanged(bool value) => NotifyBusyCommands();
+    partial void OnIsDetectingCracksChanged(bool value) => NotifyBusyCommands();
 
     private void NotifyBusyCommands()
     {
         SelectImageFolderCommand.NotifyCanExecuteChanged();
-        PrepareImageCommand.NotifyCanExecuteChanged();
         PrepareLabeledDatasetCommand.NotifyCanExecuteChanged();
         StartTrainingCommand.NotifyCanExecuteChanged();
         StartFineTuneCommand.NotifyCanExecuteChanged();
+        DetectCracksCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnSelectedFolderPathChanged(string value)
     {
-        PrepareImageCommand.NotifyCanExecuteChanged();
         PrepareLabeledDatasetCommand.NotifyCanExecuteChanged();
+        DetectCracksCommand.NotifyCanExecuteChanged();
     }
 
-    // Stitching (IsProcessing) and training (IsTraining) both shell out a python
-    // subprocess and both want the canvas-covering overlay -- never let one start
-    // while the other is running.
-    private bool CanRunPipeline() => !IsProcessing && !IsTraining;
-    private bool CanPrepareImage() => !IsProcessing && !IsTraining && SelectedSource == "stitched" && !string.IsNullOrEmpty(SelectedFolderPath);
-    private bool CanPrepareLabeledDataset() => !IsProcessing && !IsTraining && SelectedSource == "labeled";
-    private bool CanTrain() => !IsProcessing && !IsTraining;
+    // Dataset prep (IsProcessing), training (IsTraining) and crack detection
+    // (IsDetectingCracks) each shell out a python subprocess -- never let more
+    // than one run at a time.
+    private bool CanRunPipeline() => !IsProcessing && !IsTraining && !IsDetectingCracks;
+    private bool CanPrepareLabeledDataset() => !IsProcessing && !IsTraining && !IsDetectingCracks && SelectedSource == "labeled";
+    private bool CanTrain() => !IsProcessing && !IsTraining && !IsDetectingCracks;
+    private bool CanDetectCracks() => !IsProcessing && !IsTraining && !IsDetectingCracks && !string.IsNullOrEmpty(SelectedFolderPath);
 
-    /// <summary>Set by SelectImageFolder, consumed by PrepareImage -- kept as two
-    /// separate steps/buttons (선택 -> 준비) so picking a folder doesn't immediately
-    /// commit to a potentially long stitching+COLMAP run.</summary>
+    /// <summary>Set by SelectImageFolder, consumed by DetectCracks/PrepareLabeledDataset/
+    /// SaveTrainingData.</summary>
     [ObservableProperty] private string _selectedFolderPath = "";
 
     [ObservableProperty] private string _imagePath = "";
@@ -287,6 +258,33 @@ public partial class AiTrainingViewModel : ObservableObject
     [ObservableProperty] private string _jsonPreview = "";
 
     public ObservableCollection<CrackBoxItem> Boxes { get; } = new();
+
+    /// <summary>"크랙 탐지" (원본 AI 화면과 동일한 실행 기능): 현재 선택된 폴더 전체에
+    /// tools/detect_cracks_images.py를 한 번 돌려서 YOLO 크랙 후보를 오버레이로 보여준다.
+    /// Boxes(수동으로 그린 학습용 영역)와는 완전히 별개의 읽기 전용 오버레이 -- AI 탐지
+    /// 결과를 참고만 하고, 실제 학습 라벨은 여전히 사람이 직접 그린 Boxes로 저장된다.</summary>
+    [ObservableProperty] private bool _isDetectingCracks;
+    [ObservableProperty] private bool _showAiCrackOverlay;
+
+    public ObservableCollection<CrackBoxItem> AiDetectedBoxes { get; } = new();
+
+    // tools/detect_cracks_images.py가 쓰는 output/originals_cracks.json을 image_id별로
+    // 캐싱 -- 이전/다음 넘길 때마다 파일을 다시 읽지 않음 (OriginalAiViewModel과 동일한 패턴).
+    private readonly Dictionary<string, List<List<CrackPolygonPoint>>> _aiDetectionsByImageId = new();
+
+    partial void OnShowAiCrackOverlayChanged(bool value) => RebuildAiOverlay();
+
+    /// <summary>식별 보조 보기 (원본/그림자 보정/이진화/스켈레톤/윤곽선) -- 균열 색이 벽과
+    /// 비슷해 식별이 어려울 때만 참고하는 화면 표시 전용 기능 (OriginalAiViewModel과 동일한
+    /// IdentifyViewClient 사용). Boxes/AiDetectedBoxes(크랙 판단 영역 표시)는 항상 원본
+    /// 이미지 좌표계 그대로 -- 어떤 보기를 보고 있든 오버레이 좌표는 바뀌지 않는다.</summary>
+    [ObservableProperty] private string _viewMode = "original";
+    [ObservableProperty] private bool _isBuildingView;
+    [ObservableProperty] private string _viewModeError = "";
+
+    public IReadOnlyList<ViewModeOption> ViewModeOptions => IdentifyViewClient.Options;
+
+    partial void OnViewModeChanged(string value) => _ = ApplyViewModeAsync();
 
     public bool HasImage => DisplayBitmap != null;
     public bool CanUseZoom => HasImage && SelectedSource != "labeled";
@@ -331,13 +329,11 @@ public partial class AiTrainingViewModel : ObservableObject
     private bool CanZoomOut() => CanUseZoom && ZoomFactor > 1.0;
     private bool CanResetZoom() => IsZoomed;
 
-    /// <summary>Step 1/2: just picks a folder of raw drone photos and remembers it --
-    /// does NOT start the (potentially long) stitching+COLMAP run by itself. Split
-    /// out from the pipeline call (which used to fire immediately on folder pick) so
-    /// choosing a folder and committing to running the pipeline on it are two
-    /// separate, deliberate actions/buttons ("이미지 폴더 열기" -> "이미지 준비") for the
-    /// "stitched" source. For "raw_crops" there's no separate prepare step -- picking
-    /// the folder immediately lists its images for Next/Back polygon drawing.</summary>
+    /// <summary>Picks a folder and immediately lists its images. "labeled" validates
+    /// mask pairing; "raw_crops" just lists images for Next/Back polygon drawing.
+    /// Either way, also (re)loads any existing tools/detect_cracks_images.py output
+    /// for this folder so a previously-run 크랙 탐지 overlay survives re-opening the
+    /// same folder.</summary>
     [RelayCommand(CanExecute = nameof(CanRunPipeline))]
     private void SelectImageFolder()
     {
@@ -350,6 +346,8 @@ public partial class AiTrainingViewModel : ObservableObject
             return;
 
         SelectedFolderPath = dialog.FolderName;
+        _aiDetectionsByImageId.Clear();
+        LoadAiDetectionsIfPresent(dialog.FolderName);
 
         if (SelectedSource == "labeled")
         {
@@ -372,27 +370,21 @@ public partial class AiTrainingViewModel : ObservableObject
             return;
         }
 
-        if (SelectedSource == "raw_crops")
+        var rawFiles = new[] { "*.jpg", "*.jpeg", "*.png" }
+            .SelectMany(pattern => Directory.GetFiles(dialog.FolderName, pattern))
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        ImageList = rawFiles;
+        if (rawFiles.Count > 0)
         {
-            var files = new[] { "*.jpg", "*.jpeg", "*.png" }
-                .SelectMany(pattern => Directory.GetFiles(dialog.FolderName, pattern))
-                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            ImageList = files;
-            if (files.Count > 0)
-            {
-                CurrentImageIndex = 0;
-                LoadImageForCurrentSource();
-            }
-            else
-            {
-                CurrentImageIndex = -1;
-            }
-            StatusText = $"선택됨: {dialog.FolderName}  ({files.Count}장 -- 영역을 그리고 저장하며 Next로 넘어가세요)";
-            return;
+            CurrentImageIndex = 0;
+            LoadImageForCurrentSource();
         }
-
-        StatusText = $"선택됨: {SelectedFolderPath}  (\"이미지 준비\"를 눌러 스티칭 + CM 실행)";
+        else
+        {
+            CurrentImageIndex = -1;
+        }
+        StatusText = $"선택됨: {dialog.FolderName}  ({rawFiles.Count}장 -- 영역을 그리고 저장하며 Next로 넘어가세요)";
     }
 
     /// <summary>"labeled" source's own prepare step: runs prepare_labeled_dataset.py to
@@ -471,100 +463,22 @@ public partial class AiTrainingViewModel : ObservableObject
         }
     }
 
-    /// <summary>Step 2/2: runs tools/stitch_for_ai_training.py (스티칭 + 필요 시 COLMAP
-    /// fallback) on the folder SelectImageFolder picked -- a SEPARATE script from
-    /// tools/stitch_folder.py (used by MainViewModel's RunFacadeCommand)
-    /// deliberately, since stitch_folder.py is expected to grow its own
-    /// general-purpose CLI features over time and this tab's pipeline call should
-    /// not shift underneath it when that happens. Shows live stage progress while it
-    /// runs, and once done auto-loads the resulting analysis mosaic straight into
-    /// the annotation canvas -- so this tab never annotates raw un-stitched photos,
-    /// only the same stitched-mosaic-tile input the production Crack Segmentation
-    /// model actually sees at inference (see the facade-vs-raw-photo review this
-    /// button replaced).</summary>
-    [RelayCommand(CanExecute = nameof(CanPrepareImage))]
-    private async Task PrepareImage()
+    /// <summary>"원본 AI" 화면(OriginalAiViewModel.DetectCracks)과 동일한 실행 기능:
+    /// 현재 선택된 폴더 전체에 tools/detect_cracks_images.py를 한 번 돌려서
+    /// output/originals_cracks.json을 만들고 그 결과를 오버레이로 보여준다. 학습용
+    /// 수동 라벨(Boxes)과는 독립적인 읽기 전용 참고 오버레이일 뿐, 저장되는 학습
+    /// 데이터에는 영향을 주지 않는다.</summary>
+    [RelayCommand(CanExecute = nameof(CanDetectCracks))]
+    private async Task DetectCracks()
     {
-        var folder = SelectedFolderPath;
-        var facadeId = Path.GetFileName(folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (string.IsNullOrEmpty(SelectedFolderPath))
+            return;
 
-        IsProcessing = true;
-        HasFailed = false;
-        FailureLog = "";
-        ProgressText = "시작하는 중...";
-        StatusText = $"{facadeId} 처리 중...";
-
-        // Accumulated WARNING/ERROR lines for this facade, shown verbatim in the
-        // failure panel so a gate failure (e.g. FAILED_GEOMETRY) is explained by
-        // the pipeline's own words instead of a generic "실패했습니다".
-        var failureLines = new List<string>();
-        var failed = false;
-        Process? runningProcess = null;
-        var lastActivityUtc = DateTime.UtcNow;
-
-        void ReportFailure(string status, string log)
-        {
-            failed = true;
-            HasFailed = true;
-            FailureLog = log;
-            StatusText = status;
-            IsProcessing = false;
-            try { runningProcess?.Kill(entireProcessTree: true); } catch { }
-        }
-
-        PipelineLogTailer? tailer = null;
-        var watchdog = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        IsDetectingCracks = true;
+        StatusText = "크랙 탐지 실행 중...";
         try
         {
-            var logPath = Path.Combine(RootPath, "logs", "pipeline.log");
-            tailer = new PipelineLogTailer(logPath);
-            tailer.EntryParsed += entry =>
-            {
-                if (entry.FacadeId != facadeId)
-                    return;
-                lastActivityUtc = DateTime.UtcNow;
-                var label = StageLabels.TryGetValue(entry.Stage ?? "", out var known) ? known : entry.Stage;
-                ProgressText = entry.Progress != null ? $"{label}  ({entry.Progress})" : label ?? "";
-
-                if (entry.Level is "WARNING" or "ERROR")
-                {
-                    var statusSuffix = entry.Status != null ? $" (status: {entry.Status})" : "";
-                    failureLines.Add($"[{entry.Level}] {entry.Message}{statusSuffix}");
-                }
-
-                // A FAILED_* stage is terminal for this facade -- stop the "실행 중"
-                // framing immediately instead of waiting for the subprocess to fully
-                // exit (which left the "실행 중" overlay and the already-failed stage
-                // label showing at the same time, reading as self-contradictory) and
-                // kill the now-pointless subprocess right away.
-                if (!failed && entry.Stage != null && entry.Stage.StartsWith("FAILED_"))
-                {
-                    ReportFailure($"{facadeId} 실패: {label}",
-                        failureLines.Count > 0 ? string.Join("\n", failureLines) : entry.Message);
-                }
-            };
-            tailer.Start();
-
-            // Idle watchdog: confirmed live that a stuck subprocess can sit with zero
-            // new log lines and flat CPU time for 10+ minutes with nothing else to
-            // signal it -- past PipelineIdleTimeout with no new line for this facade,
-            // treat it as hung and kill it instead of leaving the "실행 중" overlay up
-            // indefinitely.
-            watchdog.Tick += (_, _) =>
-            {
-                if (failed)
-                    return;
-                var idle = DateTime.UtcNow - lastActivityUtc;
-                if (idle <= PipelineIdleTimeout)
-                    return;
-                var minutes = (int)Math.Round(PipelineIdleTimeout.TotalMinutes);
-                var log = (failureLines.Count > 0 ? string.Join("\n", failureLines) + "\n\n" : "")
-                    + $"{minutes}분 동안 새 진행 로그가 없어 중단했습니다. (마지막 상태: {ProgressText})";
-                ReportFailure($"{facadeId} 실패: 응답 없음 ({minutes}분 초과)", log);
-            };
-            watchdog.Start();
-
-            var scriptPath = Path.Combine(RootPath, "tools", "stitch_for_ai_training.py");
+            var scriptPath = Path.Combine(RootPath, "tools", "detect_cracks_images.py");
             var psi = new ProcessStartInfo
             {
                 FileName = PythonEnvironment.DiscoverPythonExe(),
@@ -575,82 +489,145 @@ public partial class AiTrainingViewModel : ObservableObject
                 RedirectStandardError = true,
             };
             psi.ArgumentList.Add(scriptPath);
-            psi.ArgumentList.Add(folder);
-            psi.ArgumentList.Add(facadeId);
-            psi.ArgumentList.Add("--in-place");
+            psi.ArgumentList.Add(SelectedFolderPath);
 
             using var process = new Process { StartInfo = psi };
             process.Start();
-            runningProcess = process;
             ChildProcessRegistry.Register(process);
             try
             {
                 var stderrTask = process.StandardError.ReadToEndAsync();
-                // Every pipeline.log line is mirrored to stdout too (src/common/logging.py's
-                // StreamHandler(sys.stdout)) -- RedirectStandardOutput=true without ever
-                // reading it fills the OS pipe buffer after enough pairs, and the python
-                // process then blocks forever on its next stdout write. Confirmed live:
-                // this, not anything GPU/LoFTR-related, was the real cause of runs freezing
-                // at the same pair count every time -- MainViewModel's RunFacade already
-                // drains stdout the same way; this tab's PrepareImage was missing it.
                 var stdoutTask = process.StandardOutput.ReadToEndAsync();
                 await process.WaitForExitAsync();
-
-                // Already reported (message + log + kill) from the tailer callback above.
-                if (failed)
-                    return;
 
                 if (process.ExitCode != 0)
                 {
                     var stderr = await stderrTask;
                     var firstLine = stderr.Split('\n').FirstOrDefault(l => !string.IsNullOrWhiteSpace(l)) ?? "(no stderr output)";
-                    HasFailed = true;
-                    FailureLog = failureLines.Count > 0
-                        ? string.Join("\n", failureLines) + "\n\n" + firstLine.Trim()
-                        : firstLine.Trim();
-                    StatusText = $"파이프라인 실행 실패 (exit {process.ExitCode})";
+                    StatusText = $"크랙 탐지 실패 (exit {process.ExitCode}): {firstLine.Trim()}";
                     return;
-                }
-
-                // --in-place lands the result under <folder>/output/ -- COLMAP fallback
-                // (when triggered) produces the _analysis_colmap variant, so prefer
-                // that one when present, same as the main "분석 · 스티칭" tab's
-                // VisualColmapImagePath/VisualImagePath precedence.
-                var outputDir = Path.Combine(folder, "output");
-                var candidate = new[] { $"{facadeId}_analysis_colmap.tif", $"{facadeId}_analysis.tif" }
-                    .Select(name => Path.Combine(outputDir, name))
-                    .FirstOrDefault(File.Exists);
-
-                if (candidate != null)
-                {
-                    LoadImage(candidate);
-                }
-                else
-                {
-                    HasFailed = true;
-                    FailureLog = failureLines.Count > 0
-                        ? string.Join("\n", failureLines)
-                        : "파이프라인은 종료됐지만 결과 이미지를 찾지 못했습니다.";
-                    StatusText = "파이프라인 실패: 결과 이미지를 찾을 수 없습니다.";
                 }
             }
             finally
             {
                 ChildProcessRegistry.Unregister(process);
             }
+
+            _aiDetectionsByImageId.Clear();
+            LoadAiDetectionsIfPresent(SelectedFolderPath);
+            ShowAiCrackOverlay = true;
+            RebuildAiOverlay();
+            StatusText = $"크랙 탐지 완료 ({ImageList.Count}장) -- 체크박스로 오버레이를 켜고 끌 수 있습니다.";
         }
         catch (Exception ex)
         {
-            HasFailed = true;
-            FailureLog = ex.ToString();
-            StatusText = $"파이프라인을 시작할 수 없습니다: {ex.Message}";
+            StatusText = $"크랙 탐지를 시작할 수 없습니다: {ex.Message}";
         }
         finally
         {
-            watchdog.Stop();
-            tailer?.Dispose();
-            IsProcessing = false;
+            IsDetectingCracks = false;
         }
+    }
+
+    private void LoadAiDetectionsIfPresent(string folderPath)
+    {
+        var jsonPath = Path.Combine(folderPath, "output", "originals_cracks.json");
+        if (!File.Exists(jsonPath))
+            return;
+        try
+        {
+            var json = File.ReadAllText(jsonPath);
+            var entries = JsonSerializer.Deserialize<List<AiCracksEntry>>(json);
+            if (entries == null)
+                return;
+            foreach (var entry in entries)
+            {
+                var polygons = entry.Detections
+                    .Select(det => det.PolygonPx
+                        .Where(pt => pt.Count >= 2)
+                        .Select(pt => new CrackPolygonPoint((int)Math.Round(pt[0]), (int)Math.Round(pt[1])))
+                        .ToList())
+                    .Where(pts => pts.Count >= 3)
+                    .ToList();
+                _aiDetectionsByImageId[entry.ImageId] = polygons;
+            }
+        }
+        catch (JsonException)
+        {
+            // 탐지 중간에 저장된 파일이거나 아직 없음 -- 다음 재실행 때 다시 시도
+        }
+    }
+
+    private void RebuildAiOverlay()
+    {
+        AiDetectedBoxes.Clear();
+        if (!ShowAiCrackOverlay || string.IsNullOrEmpty(ImagePath))
+            return;
+
+        var imageId = Path.GetFileNameWithoutExtension(ImagePath);
+        if (!_aiDetectionsByImageId.TryGetValue(imageId, out var polygons))
+            return;
+
+        foreach (var polygon in polygons)
+        {
+            var canvasPoints = new PointCollection();
+            foreach (var p in polygon)
+                canvasPoints.Add(new Point(p.X * Scale, p.Y * Scale));
+            canvasPoints.Freeze();
+            AiDetectedBoxes.Add(new CrackBoxItem { CanvasPoints = canvasPoints, OrigPoints = polygon });
+        }
+    }
+
+    /// <summary>ViewMode가 바뀌거나 새 이미지를 불러올 때 호출 -- 이미 캐시된 처리 결과가
+    /// 있으면 즉시, 없으면 tools/identify_view.py를 실행한 뒤 DisplayBitmap만 바꾼다.
+    /// OrigWidth/OrigHeight/Scale/DisplayWidth/DisplayHeight는 항상 원본 사진 기준으로
+    /// LoadImage에서 이미 고정되어 있으므로 여기서 다시 계산하지 않는다.</summary>
+    private async Task ApplyViewModeAsync()
+    {
+        if (string.IsNullOrEmpty(ImagePath))
+            return;
+        var mode = ViewMode;
+        var path = ImagePath;
+        ViewModeError = "";
+
+        if (mode == "original")
+        {
+            SetDisplayBitmapFrom(path);
+            return;
+        }
+
+        var alreadyCached = File.Exists(IdentifyViewClient.CachePath(path, mode));
+        if (!alreadyCached)
+            IsBuildingView = true;
+        try
+        {
+            var (resultPath, error) = await IdentifyViewClient.GetOrBuildAsync(RootPath, path, mode);
+            // 실행 중에 사용자가 다른 사진/모드로 이미 넘어갔으면 이 결과는 버린다.
+            if (ImagePath != path || ViewMode != mode)
+                return;
+            if (error != null)
+            {
+                ViewModeError = $"보기 생성 실패: {error}";
+                return;
+            }
+            SetDisplayBitmapFrom(resultPath!);
+        }
+        finally
+        {
+            IsBuildingView = false;
+        }
+    }
+
+    private void SetDisplayBitmapFrom(string path)
+    {
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.DecodePixelWidth = (int)Math.Round(DisplayWidth);
+        bitmap.UriSource = new Uri(path);
+        bitmap.EndInit();
+        bitmap.Freeze();
+        DisplayBitmap = bitmap;
     }
 
     [RelayCommand]
@@ -724,9 +701,9 @@ public partial class AiTrainingViewModel : ObservableObject
             try
             {
                 var stderrTask = process.StandardError.ReadToEndAsync();
-                // See PrepareImage's identical fix above -- ultralytics' training output is
-                // even more verbose than the stitch pipeline's, so this is at least as
-                // exposed to the same stdout-pipe deadlock.
+                // ultralytics' training output is verbose enough that leaving stdout
+                // unread risks filling the OS pipe buffer and deadlocking the child
+                // process -- always drain it, same as DetectCracks/PrepareLabeledDataset.
                 var stdoutTask = process.StandardOutput.ReadToEndAsync();
                 await process.WaitForExitAsync();
 
@@ -870,8 +847,10 @@ public partial class AiTrainingViewModel : ObservableObject
 
     private string GetTrainingDataDir()
     {
-        var folderName = SelectedSource == "raw_crops" ? "training_data_raw_crops" : "training_data_stitched";
-        return Path.Combine(RootPath, folderName);
+        // Only "raw_crops" ever writes here (AddPolygon early-returns for "labeled",
+        // the read-only mask-preview source), so a single fixed folder is enough now
+        // that "stitched" no longer exists as a source.
+        return Path.Combine(RootPath, "training_data_raw_crops");
     }
 
     private void LoadSavedAnnotationsForCurrentImage()
@@ -978,7 +957,10 @@ public partial class AiTrainingViewModel : ObservableObject
             OnPropertyChanged(nameof(SourceImageName));
             if (SelectedSource != "labeled")
                 LoadSavedAnnotationsForCurrentImage();
+            RebuildAiOverlay();
             UpdateJson();
+            if (ViewMode != "original")
+                _ = ApplyViewModeAsync();
         }
         catch (Exception ex)
         {
@@ -1274,9 +1256,9 @@ public partial class AiTrainingViewModel : ObservableObject
     /// actual pixels to crop, and this file is purely an internal artifact of this
     /// app's own training pipeline, not something any external tool reads.
     ///
-    /// "raw_crops" and "stitched" each write into their OWN training_data_* folder
-    /// (train_from_viewer.py's SOURCES dict) so the two never mix into the same
-    /// dataset/model -- exactly the separation the AI 학습 탭 redesign was for.</summary>
+    /// "raw_crops" writes into its own training_data_raw_crops folder
+    /// (train_from_viewer.py's SOURCES dict) so it never mixes into the "labeled"
+    /// source's dataset/model -- exactly the separation the AI 학습 탭 redesign was for.</summary>
     [RelayCommand(CanExecute = nameof(HasBoxes))]
     private void SaveTrainingData()
     {
@@ -1308,4 +1290,19 @@ public partial class AiTrainingViewModel : ObservableObject
             SaveStatus = $"저장 실패: {ex.Message}";
         }
     }
+}
+
+file sealed class AiCracksEntry
+{
+    [JsonPropertyName("image_id")] public string ImageId { get; set; } = "";
+    [JsonPropertyName("file_name")] public string FileName { get; set; } = "";
+    [JsonPropertyName("width")] public int Width { get; set; }
+    [JsonPropertyName("height")] public int Height { get; set; }
+    [JsonPropertyName("detections")] public List<AiCrackDetection> Detections { get; set; } = new();
+}
+
+file sealed class AiCrackDetection
+{
+    [JsonPropertyName("polygon_px")] public List<List<double>> PolygonPx { get; set; } = new();
+    [JsonPropertyName("confidence")] public double Confidence { get; set; }
 }

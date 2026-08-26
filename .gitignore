@@ -38,6 +38,10 @@ metadata/*.parquet
 metadata/*.json
 *.pt
 
+# === Vendored illumination-correction model (PhaSR + Depth-Anything-V2 checkpoints,
+# ~2.2GB, CC-BY-NC licensed weights -- not committed while this stays non-commercial) ===
+src/illumination/phasr_vendor/
+
 # === Local scratch ===
 scratch_label_example.png
 tools/crack_annotator/output/

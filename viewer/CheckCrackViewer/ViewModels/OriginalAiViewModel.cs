@@ -42,6 +42,19 @@ public partial class OriginalAiViewModel : ObservableObject
     [ObservableProperty] private bool _isDetecting;
     [ObservableProperty] private string _statusText = "\"이미지 폴더 열기\"로 원본 사진 폴더를 선택하세요.";
 
+    /// <summary>식별 보조 보기 (원본/그림자 보정/이진화/스켈레톤/윤곽선) -- 균열 색이 벽과
+    /// 비슷해 식별이 어려울 때만 참고하는 화면 표시 전용 기능. tools/identify_view.py가
+    /// 만든 이미지로 DisplayBitmap만 바꿔치기할 뿐, OverlayBoxes(크랙 판단 영역 표시)는
+    /// 항상 원본 이미지 좌표계 그대로 -- 어떤 보기를 보고 있든 오버레이 좌표는 바뀌지
+    /// 않는다.</summary>
+    [ObservableProperty] private string _viewMode = "original";
+    [ObservableProperty] private bool _isBuildingView;
+    [ObservableProperty] private string _viewModeError = "";
+
+    public IReadOnlyList<ViewModeOption> ViewModeOptions => IdentifyViewClient.Options;
+
+    partial void OnViewModeChanged(string value) => _ = ApplyViewModeAsync();
+
     public ObservableCollection<CrackBoxItem> OverlayBoxes { get; } = new();
 
     public bool HasImage => DisplayBitmap != null;
@@ -248,11 +261,65 @@ public partial class OriginalAiViewModel : ObservableObject
             StatusText = $"{Path.GetFileName(path)} · {OrigWidth}×{OrigHeight}px · {Math.Round(scale * 100)}%로 표시 중";
             RebuildOverlay();
             OnPropertyChanged(nameof(HasImage));
+            if (ViewMode != "original")
+                _ = ApplyViewModeAsync();
         }
         catch (Exception ex)
         {
             StatusText = $"이미지를 불러올 수 없습니다: {ex.Message}";
         }
+    }
+
+    /// <summary>ViewMode가 바뀌거나 새 이미지를 불러올 때 호출 -- 이미 캐시된 처리 결과가
+    /// 있으면 즉시, 없으면 tools/identify_view.py를 실행한 뒤 DisplayBitmap만 바꾼다.
+    /// OrigWidth/OrigHeight/Scale/DisplayWidth/DisplayHeight는 항상 원본 사진 기준으로
+    /// LoadImage에서 이미 고정되어 있으므로 여기서 다시 계산하지 않는다.</summary>
+    private async Task ApplyViewModeAsync()
+    {
+        if (string.IsNullOrEmpty(ImagePath))
+            return;
+        var mode = ViewMode;
+        var path = ImagePath;
+        ViewModeError = "";
+
+        if (mode == "original")
+        {
+            SetDisplayBitmapFrom(path);
+            return;
+        }
+
+        var alreadyCached = File.Exists(IdentifyViewClient.CachePath(path, mode));
+        if (!alreadyCached)
+            IsBuildingView = true;
+        try
+        {
+            var (resultPath, error) = await IdentifyViewClient.GetOrBuildAsync(RootPath, path, mode);
+            // 실행 중에 사용자가 다른 사진/모드로 이미 넘어갔으면 이 결과는 버린다.
+            if (ImagePath != path || ViewMode != mode)
+                return;
+            if (error != null)
+            {
+                ViewModeError = $"보기 생성 실패: {error}";
+                return;
+            }
+            SetDisplayBitmapFrom(resultPath!);
+        }
+        finally
+        {
+            IsBuildingView = false;
+        }
+    }
+
+    private void SetDisplayBitmapFrom(string path)
+    {
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.DecodePixelWidth = (int)Math.Round(DisplayWidth);
+        bitmap.UriSource = new Uri(path);
+        bitmap.EndInit();
+        bitmap.Freeze();
+        DisplayBitmap = bitmap;
     }
 
     private void RebuildOverlay()

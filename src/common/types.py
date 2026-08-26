@@ -74,6 +74,10 @@ class OperatorSessionInfo:
     weather: Optional[str] = None
     lighting_condition: Optional[str] = None
     notes: Optional[str] = None
+    # RTK 장비 사용 시에만 채움 (SmartCrack V2 0.3mm 검증 준비물, 2026-08-26) --
+    # "FIX" 등 실제 RTK 고정 상태 문자열. 단순 GPS만으로는 이 필드를 채우지 않는다
+    # (GPS 위치만으로는 외벽면까지의 정확한 거리로 보지 않는다는 원칙과 동일).
+    rtk_fix_status: Optional[str] = None
 
 
 @dataclass

@@ -36,8 +36,21 @@
                     <Button Content="다음 ▶" Command="{Binding NextImageCommand}"/>
                 </StackPanel>
 
-                <CheckBox Content="크랙 표시" IsChecked="{Binding ShowCrackOverlay}" VerticalAlignment="Center"
+                <CheckBox Content="크랙 표시" IsChecked="{Binding ShowCrackOverlay}" VerticalAlignment="Center" Margin="0,0,12,0"
                           Visibility="{Binding HasImage, Converter={StaticResource TruthyToVisibilityConverter}}"/>
+
+                <!-- 균열 색이 벽과 비슷해 식별이 어려울 때만 참고하는 화면 표시 전용 보기.
+                     여기서 무엇을 선택하든 크랙 판단 영역 표시(OverlayBoxes)는 항상 원본 좌표계. -->
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                            Visibility="{Binding HasImage, Converter={StaticResource TruthyToVisibilityConverter}}">
+                    <TextBlock Text="보기" Foreground="{StaticResource Text2}" FontSize="11.5" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <ComboBox ItemsSource="{Binding ViewModeOptions}" SelectedValuePath="Value" DisplayMemberPath="Label"
+                              SelectedValue="{Binding ViewMode}" Width="110"/>
+                    <TextBlock Text="생성 중…" FontSize="11.5" Foreground="{StaticResource Accent}" VerticalAlignment="Center" Margin="8,0,0,0"
+                               Visibility="{Binding IsBuildingView, Converter={StaticResource TruthyToVisibilityConverter}}"/>
+                    <TextBlock Text="{Binding ViewModeError}" FontSize="11.5" Foreground="#FF7A7A" VerticalAlignment="Center" Margin="8,0,0,0"
+                               Visibility="{Binding ViewModeError, Converter={StaticResource TruthyToVisibilityConverter}}"/>
+                </StackPanel>
             </StackPanel>
         </Grid>
 
