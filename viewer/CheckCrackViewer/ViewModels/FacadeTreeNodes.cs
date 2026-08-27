@@ -17,9 +17,14 @@ public partial class ComplexNode : ObservableObject
     public ObservableCollection<object> Children { get; } = new();
 }
 
-/// <summary>동(Building) 노드 — 선택 사항 레벨. Children은 SideGroupNode만 담는다.</summary>
+/// <summary>동(Building) 노드 — 선택 사항 레벨. Children은 SideGroupNode만 담는다.
+/// ComplexId/ComplexName은 부모 노드 포인터가 없어서(RebuildFacadeTree가 매번 새로
+/// 만드는 트랜지언트 노드) 자신을 소유한 단지를 스스로 알 수 있게 별도로 들고 있음
+/// -- 우클릭 "추가"(2026-08-27)가 새 facade를 정확히 이 단지 밑에 붙이려면 필요.</summary>
 public partial class BuildingNode : ObservableObject
 {
+    public string ComplexId { get; init; } = "";
+    public string ComplexName { get; init; } = "";
     public string BuildingId { get; init; } = "";
     public string BuildingName { get; init; } = "";
     [ObservableProperty] private bool _isExpanded = true;

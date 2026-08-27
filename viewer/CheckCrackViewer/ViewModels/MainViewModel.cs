@@ -176,9 +176,12 @@ public partial class MainViewModel : ObservableObject
     private readonly AnalysisBridgeService _analysisBridge = new();
     private readonly DispatcherTimer _heartbeatTimer;
 
-    /// <summary>Backs the "원격 분석 작업" window (see RemoteAnalysisJobsWindow) -- exposed so
-    /// MainWindow's "원격 분석 작업" button can open a window bound to this same instance.</summary>
-    public RemoteAnalysisJobsViewModel RemoteJobs { get; }
+    /// <summary>Drives the automatic remote-analysis pipeline (FacadePreviewer dispatch ->
+    /// SFTP download -> extract -> auto-register on the left FACADES list -> run), entirely in
+    /// the background -- no UI of its own (the "원격 분석 작업" popup window was removed
+    /// 2026-08-27, operator request: the automatic processing should stay, but visibility into
+    /// it belongs on the main FACADES list + Settings' own DB browse, not a separate window).</summary>
+    private readonly RemoteAnalysisJobsViewModel _remoteJobs;
 
     public MainViewModel()
     {
@@ -203,16 +206,16 @@ public partial class MainViewModel : ObservableObject
         // until this resolves -- a few seconds of "CPU-only" caution at startup is harmless.
         _ = InitializeGpuDetectionAsync();
 
-        RemoteJobs = new RemoteAnalysisJobsViewModel(_analysisBridge, CrackVisionDbSettingsStore.Load,
+        _remoteJobs = new RemoteAnalysisJobsViewModel(_analysisBridge, CrackVisionDbSettingsStore.Load,
             RegisterAndRunExtractedArchiveAsync, RootPath);
-        _analysisBridge.AssignmentReceived += RemoteJobs.HandleAssignment;
+        _analysisBridge.AssignmentReceived += _remoteJobs.HandleAssignment;
         // Retry/Stop: only meaningful after an AnalysisErrorNotify the operator has acted on
         // (see FacadeAnalysis.idl's own comment on these two) -- this pass surfaces them as a
         // status update on the matching job row; actually re-invoking/aborting the underlying
         // python process per archive_id is left as a follow-up (RunFacade has no per-archive
         // handle to cancel/retry against yet).
-        _analysisBridge.RetryReceived += r => RemoteJobs.MarkControlReceived(r.ArchiveId, "재시도 요청됨 (미구현)");
-        _analysisBridge.StopReceived += s => RemoteJobs.MarkControlReceived(s.ArchiveId, "정지 요청됨 (미구현)");
+        _analysisBridge.RetryReceived += r => _remoteJobs.MarkControlReceived(r.ArchiveId, "재시도 요청됨 (미구현)");
+        _analysisBridge.StopReceived += s => _remoteJobs.MarkControlReceived(s.ArchiveId, "정지 요청됨 (미구현)");
 
         var workerId = string.IsNullOrWhiteSpace(CrackVisionWorkerId) ? Environment.MachineName : CrackVisionWorkerId;
         _analysisBridge.Start(domainId: 31, workerId: workerId);
@@ -654,7 +657,37 @@ public partial class MainViewModel : ObservableObject
     /// 확정은 항상 사용자가 한다(CLAUDE.local.md #7: 방향은 별도 metadata, Viewer가 추측해서
     /// 확정하지 않음).</summary>
     [RelayCommand]
-    private void BrowseImagesFolder()
+    private void BrowseImagesFolder() => BrowseAndAddFacades(fixedComplexName: null, fixedBuildingName: null);
+
+    /// <summary>FACADES 트리의 단지(ComplexNode) 헤더 우클릭 → "추가" (2026-08-27 요청) --
+    /// BrowseImagesFolder와 동일한 폴더 선택+분류 흐름이되, 단지명을 이 노드의 이름으로
+    /// 고정 제안해서 새로 추가하는 동/facade가 반드시 같은 단지 밑에 들어가게 한다(운영자가
+    /// 다이얼로그에서 여전히 수정 가능 -- 강제는 아니고 기본 제안일 뿐).</summary>
+    [RelayCommand]
+    private void AddFacadesToComplex(ComplexNode complexNode)
+    {
+        if (complexNode is null)
+            return;
+        BrowseAndAddFacades(complexNode.ComplexName, fixedBuildingName: null);
+    }
+
+    /// <summary>FACADES 트리의 동(BuildingNode) 헤더 우클릭 → "추가" -- 단지명/동명 둘 다
+    /// 고정 제안해서 새로 추가하는 facade가 이 동 바로 밑에 들어가게 한다.</summary>
+    [RelayCommand]
+    private void AddFacadesToBuilding(BuildingNode buildingNode)
+    {
+        if (buildingNode is null)
+            return;
+        BrowseAndAddFacades(buildingNode.ComplexName, buildingNode.BuildingName);
+    }
+
+    /// <summary>이미지 폴더 선택 → (하위 폴더가 있으면 각각 별도 facade로) → FacadeClassifyDialog로
+    /// 단지/동(선택)/방위 확인 → 등록. fixedComplexName/fixedBuildingName이 주어지면 그 값을
+    /// 다이얼로그의 기본 제안값으로 미리 채운다(트리에서 특정 단지/동에 "추가"로 진입한 경우) --
+    /// null이면 기존 BrowseImagesFolder 동작 그대로 선택한 폴더 이름에서 자동 제안한다. 최종
+    /// 확정은 항상 다이얼로그에서 운영자가 한다(CLAUDE.local.md #7: 방향은 별도 metadata,
+    /// Viewer가 추측해서 확정하지 않음).</summary>
+    private void BrowseAndAddFacades(string? fixedComplexName, string? fixedBuildingName)
     {
         var dialog = new OpenFolderDialog
         {
@@ -670,19 +703,19 @@ public partial class MainViewModel : ObservableObject
             : new List<string>();
 
         List<(string FolderPath, string FacadeId, string ProposedSide)> candidates;
-        string proposedComplexName;
+        string autoProposedComplexName;
         if (subfoldersWithImages.Count > 0)
         {
             candidates = subfoldersWithImages
                 .Select(sub => (FolderPath: sub, FacadeId: Path.GetFileName(sub), ProposedSide: Path.GetFileName(sub)))
                 .ToList();
-            proposedComplexName = Path.GetFileName(selected.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            autoProposedComplexName = Path.GetFileName(selected.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         }
         else if (HasImages(selected))
         {
             var facadeId = Path.GetFileName(selected.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
             candidates = new List<(string, string, string)> { (selected, facadeId, facadeId) };
-            proposedComplexName = facadeId; // 상위 폴더 개념이 없어 자기 이름을 기본 제안값으로 씀 -- 다이얼로그에서 수정 가능
+            autoProposedComplexName = facadeId; // 상위 폴더 개념이 없어 자기 이름을 기본 제안값으로 씀 -- 다이얼로그에서 수정 가능
         }
         else
         {
@@ -690,7 +723,7 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
-        var classifyDialog = new FacadeClassifyDialog(candidates, proposedComplexName)
+        var classifyDialog = new FacadeClassifyDialog(candidates, fixedComplexName ?? autoProposedComplexName, fixedBuildingName ?? "")
         {
             Owner = Application.Current.MainWindow,
         };
@@ -832,26 +865,103 @@ public partial class MainViewModel : ObservableObject
         RebuildFacadeTree();
     }
 
-    [RelayCommand]
-    private void SelectFacade(FacadeItemViewModel facade) => SelectedFacade = facade;
-
-    private Views.RemoteAnalysisJobsWindow? _remoteJobsWindow;
-
-    /// <summary>Opens (or re-activates) the "원격 분석 작업" window -- a separate window, not a
-    /// tab, per the 2026-08-27 requirement that incoming FacadePreviewer analysis commands show
-    /// in their own list window rather than mixed into the main facade list directly.</summary>
-    [RelayCommand]
-    private void OpenRemoteJobsWindow()
+    /// <summary>FACADES 트리 우클릭 메뉴의 "삭제" 3종(facade 1개/동 전체/단지 전체, 2026-08-27
+    /// 요청)이 공유하는 실제 제거 로직. 원본 파일/사진은 절대 건드리지 않는다
+    /// (crackvision_store.cpp의 delete_images와 동일한 "목록만 지우고 원본은 그대로" 원칙 --
+    /// "+ 폴더"로 추가한 facade는 SourceFolderPath가 운영자의 임의 위치(원본 사진이 실제로
+    /// 있는 곳)를 가리킬 수 있어서, 그 폴더를 이 앱이 마음대로 지우면 안 됨). Caller가 이미
+    /// 확인(MessageBox)과 실행-중 여부 체크를 끝낸 뒤 호출한다고 가정.</summary>
+    private void RemoveFacadeCore(FacadeItemViewModel facade)
     {
-        if (_remoteJobsWindow != null)
+        FacadeHierarchyStore.Remove(RootPath, FacadeHierarchyStore.KeyFor(facade.SourceFolderPath, facade.FacadeId));
+        Facades.Remove(facade);
+    }
+
+    /// <summary>"리스트에서 제거" (2026-08-27 요청, 우클릭 메뉴) -- FACADES 트리에서 facade
+    /// 하나를 지운다. remote_downloads/extracted 밑(자동 원격 분석 경로로 등록된 항목, 예:
+    /// 오늘 테스트한 예시_아파트/101동)처럼 RescanFacadeOutputs가 스캔하지 않는 위치의
+    /// facade는 이걸로 완전히/영구히 사라진다. 반면 RootPath/facades/&lt;facadeId&gt; 밑에
+    /// 실제 폴더가 있는 facade는(CLI 처리 결과가 거기 있으므로) 2초 폴링에서 다시 발견되어
+    /// 재등록될 수 있음 -- 이 경우엔 미분류 상태로 다시 나타남(원래 있던 단지/동 분류만
+    /// 사라짐, 완전히 없어지진 않음). 실행 중인 facade는 지울 수 없음.</summary>
+    [RelayCommand]
+    private void RemoveFacade(FacadeItemViewModel facade)
+    {
+        if (facade is null)
+            return;
+        if (facade.IsRunning)
         {
-            _remoteJobsWindow.Activate();
+            StatusText = $"{facade.FacadeId}: 실행 중에는 삭제할 수 없습니다.";
             return;
         }
-        _remoteJobsWindow = new Views.RemoteAnalysisJobsWindow(RemoteJobs) { Owner = Application.Current.MainWindow };
-        _remoteJobsWindow.Closed += (_, _) => _remoteJobsWindow = null;
-        _remoteJobsWindow.Show();
+
+        if (MessageBox.Show($"\"{facade.FacadeId}\"를 목록에서 삭제할까요?\n\n원본 사진/폴더는 그대로 유지되고 목록에서만 제거됩니다.",
+                "목록에서 삭제", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            return;
+
+        RemoveFacadeCore(facade);
+        RebuildFacadeTree();
+        RecomputeDashboardCounts();
+        StatusText = $"{facade.FacadeId} 목록에서 삭제됨.";
     }
+
+    /// <summary>동(BuildingNode) 헤더 우클릭 → "삭제" -- 이 동 밑의 facade 전체를 한 번에
+    /// 제거(각각 RemoveFacadeCore, RemoveFacade와 동일한 안전 원칙). 하나라도 실행 중이면
+    /// 전체를 거부(부분 삭제로 트리가 애매한 상태가 되는 것을 피함).</summary>
+    [RelayCommand]
+    private void RemoveBuilding(BuildingNode buildingNode)
+    {
+        if (buildingNode is null)
+            return;
+        var facades = Facades.Where(f => f.ComplexId == buildingNode.ComplexId && f.BuildingId == buildingNode.BuildingId).ToList();
+        if (facades.Count == 0)
+            return;
+        if (facades.Any(f => f.IsRunning))
+        {
+            StatusText = $"{buildingNode.BuildingName}: 실행 중인 facade가 있어 삭제할 수 없습니다.";
+            return;
+        }
+
+        if (MessageBox.Show($"\"{buildingNode.BuildingName}\" 전체({facades.Count}개 facade)를 목록에서 삭제할까요?\n\n원본 사진/폴더는 그대로 유지되고 목록에서만 제거됩니다.",
+                "동 전체 삭제", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            return;
+
+        foreach (var facade in facades)
+            RemoveFacadeCore(facade);
+        RebuildFacadeTree();
+        RecomputeDashboardCounts();
+        StatusText = $"{buildingNode.BuildingName} 전체({facades.Count}개) 목록에서 삭제됨.";
+    }
+
+    /// <summary>단지(ComplexNode) 헤더 우클릭 → "삭제" -- 이 단지 밑의 facade 전체(동 구분과
+    /// 무관하게)를 한 번에 제거. RemoveBuilding과 동일한 안전 원칙(실행 중이면 전체 거부).</summary>
+    [RelayCommand]
+    private void RemoveComplex(ComplexNode complexNode)
+    {
+        if (complexNode is null)
+            return;
+        var facades = Facades.Where(f => f.ComplexId == complexNode.ComplexId).ToList();
+        if (facades.Count == 0)
+            return;
+        if (facades.Any(f => f.IsRunning))
+        {
+            StatusText = $"{complexNode.ComplexName}: 실행 중인 facade가 있어 삭제할 수 없습니다.";
+            return;
+        }
+
+        if (MessageBox.Show($"\"{complexNode.ComplexName}\" 단지 전체({facades.Count}개 facade)를 목록에서 삭제할까요?\n\n원본 사진/폴더는 그대로 유지되고 목록에서만 제거됩니다.",
+                "단지 전체 삭제", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            return;
+
+        foreach (var facade in facades)
+            RemoveFacadeCore(facade);
+        RebuildFacadeTree();
+        RecomputeDashboardCounts();
+        StatusText = $"{complexNode.ComplexName} 단지 전체({facades.Count}개) 목록에서 삭제됨.";
+    }
+
+    [RelayCommand]
+    private void SelectFacade(FacadeItemViewModel facade) => SelectedFacade = facade;
 
     /// <summary>RootPath/facade_hierarchy.json에 저장된 분류를 지금 메모리에 있는
     /// Facades에 적용한다. "+ 폴더"로 추가했던 facade는 SourceFolderPath가 facades/
@@ -906,6 +1016,8 @@ public partial class MainViewModel : ObservableObject
             {
                 var buildingNode = new BuildingNode
                 {
+                    ComplexId = complexGroup.Key.ComplexId,
+                    ComplexName = complexGroup.Key.ComplexName,
                     BuildingId = buildingGroup.Key.BuildingId!,
                     BuildingName = buildingGroup.Key.BuildingName ?? buildingGroup.Key.BuildingId!,
                 };

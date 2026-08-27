@@ -95,7 +95,21 @@
         <!-- 단지(Complex) 노드: 최상위 레벨. Children은 BuildingNode/SideGroupNode가
              섞여 있을 수 있음(동은 선택 사항) — 아래 두 암시적 템플릿이 알아서 구분해 그림. -->
         <DataTemplate DataType="{x:Type vm:ComplexNode}">
-            <Expander Style="{StaticResource TreeGroupExpander}" IsExpanded="{Binding IsExpanded, Mode=TwoWay}">
+            <!-- Tag에 Window의 DataContext(MainViewModel)를 실어서, 별도 시각 트리 루트인
+                 ContextMenu 안에서도 PlacementTarget.Tag로 커맨드에 접근할 수 있게 함
+                 (2026-08-27, 단지/동/facade 우클릭 삭제·추가 기능 요청). -->
+            <Expander Style="{StaticResource TreeGroupExpander}" IsExpanded="{Binding IsExpanded, Mode=TwoWay}"
+                      Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
+                <Expander.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="추가 (이 단지에 폴더 추가)"
+                                  Command="{Binding PlacementTarget.Tag.AddFacadesToComplexCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                        <MenuItem Header="삭제 (단지 전체)"
+                                  Command="{Binding PlacementTarget.Tag.RemoveComplexCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                    </ContextMenu>
+                </Expander.ContextMenu>
                 <Expander.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -115,7 +129,18 @@
 
         <!-- 동(Building) 노드: 선택 사항 레벨. -->
         <DataTemplate DataType="{x:Type vm:BuildingNode}">
-            <Expander Style="{StaticResource TreeGroupExpander}" IsExpanded="{Binding IsExpanded, Mode=TwoWay}">
+            <Expander Style="{StaticResource TreeGroupExpander}" IsExpanded="{Binding IsExpanded, Mode=TwoWay}"
+                      Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
+                <Expander.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="추가 (이 동에 폴더 추가)"
+                                  Command="{Binding PlacementTarget.Tag.AddFacadesToBuildingCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                        <MenuItem Header="삭제 (동 전체)"
+                                  Command="{Binding PlacementTarget.Tag.RemoveBuildingCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                    </ContextMenu>
+                </Expander.ContextMenu>
                 <Expander.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -147,7 +172,15 @@
              ListBoxItem.IsSelected가 아니라 Border의 MouseBinding + SelectFacadeCommand +
              ReferenceEqualsToBrushConverter(참조 비교 하이라이트)로 처리. -->
         <DataTemplate DataType="{x:Type vm:FacadeItemViewModel}">
-            <Border Background="{StaticResource Surface2}" CornerRadius="7" Padding="10,8" Margin="0,3" BorderThickness="1" Cursor="Hand">
+            <Border Background="{StaticResource Surface2}" CornerRadius="7" Padding="10,8" Margin="0,3" BorderThickness="1" Cursor="Hand"
+                    Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
+                <Border.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="삭제"
+                                  Command="{Binding PlacementTarget.Tag.RemoveFacadeCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                    </ContextMenu>
+                </Border.ContextMenu>
                 <Border.BorderBrush>
                     <MultiBinding Converter="{StaticResource ReferenceEqualsToBrushConverter}">
                         <Binding/>
@@ -367,9 +400,6 @@
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="FACADES" Style="{StaticResource Kicker}" VerticalAlignment="Center"/>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                        <Button Content="원격 분석 작업" Command="{Binding OpenRemoteJobsWindowCommand}"
-                                Padding="8,3" FontSize="11" Margin="0,0,6,0"
-                                ToolTip="FacadePreviewer가 보낸 분석 실행 명령 목록 (다운로드/압축해제/자동 등록 진행 상황)"/>
                                         <Button Content="이미지 폴더 추가" Command="{Binding BrowseImagesFolderCommand}"
                                 Padding="8,3" FontSize="11"
                                 ToolTip="이미지 폴더 선택 — 하위 폴더가 있으면 각각 별도 facade로, 없으면 선택한 폴더 자체를 하나의 facade로 추가"/>

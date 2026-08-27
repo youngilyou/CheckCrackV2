@@ -94,4 +94,15 @@ public static class FacadeHierarchyStore
         index.Facades.Add(entry);
         Save(rootPath, index);
     }
+
+    // 2026-08-27: "리스트에서 제거" 기능 (MainViewModel.RemoveFacade) -- 파일은 절대 안 건드리고
+    // 분류 기록만 지운다(crackvision_store.cpp의 delete_images와 동일한 "목록만 지우고 원본은
+    // 그대로" 원칙). 키가 없어도 조용히 무시(이미 지워졌거나 애초에 등록된 적 없는 상태를 에러로
+    // 취급하지 않음).
+    public static void Remove(string rootPath, string key)
+    {
+        var index = Load(rootPath);
+        if (index.Facades.RemoveAll(f => f.Key == key) > 0)
+            Save(rootPath, index);
+    }
 }

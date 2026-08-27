@@ -1,5 +1,6 @@
 using System.IO;
 using Renci.SshNet;
+using Renci.SshNet.Common;
 
 namespace CheckCrackViewer.Services;
 
@@ -47,12 +48,31 @@ public static class SftpDownloadService
                     // progress just reports TotalBytes=0 until the transfer itself starts.
                 }
 
-                using var localStream = File.Create(localPath);
-                client.DownloadFile(remotePath, localStream, downloaded =>
+                try
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    progress?.Report(((long)downloaded, total));
-                });
+                    using var localStream = File.Create(localPath);
+                    client.DownloadFile(remotePath, localStream, downloaded =>
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        progress?.Report(((long)downloaded, total));
+                    });
+                }
+                catch (SftpPathNotFoundException ex)
+                {
+                    // 2026-08-27: 실제로 겪은 케이스 -- 오늘의 파일명/경로 수정(한글 파일명 보존
+                    // + 절대경로 저장) 이전에 만들어진 아카이브는 DB에 옛 상대경로/뭉개진 파일명이
+                    // 그대로 남아있어서 여기서 항상 404. 원본 SftpPathNotFoundException 메시지
+                    // ("No such file. Path: ...")는 운영자에게 원인을 설명해주지 않으므로, 여기서
+                    // 잡아서 "예전 형식" 프레이밍의 명확한 메시지로 바꿔치기(호출부의 기존
+                    // catch(Exception)이 그대로 이 메시지를 표시함 -- 호출부 자체는 안 죽음, 여기
+                    // 안 고쳐도 앱이 크래시하는 건 아니었지만 메시지가 안 친절했음). 실패 시 남는
+                    // 0바이트짜리 로컬 zip도 같이 정리.
+                    try { File.Delete(localPath); } catch (Exception) { /* best-effort cleanup */ }
+                    throw new InvalidOperationException(
+                        "원격 파일을 찾을 수 없습니다 -- 예전 형식으로 저장된 아카이브일 수 있습니다 " +
+                        "(2026-08-27 이전 아카이브는 파일명/경로 형식이 달라 다운로드가 안 될 수 있습니다). " +
+                        $"새로 저장한 아카이브로 다시 시도해 주세요. (경로: {remotePath})", ex);
+                }
             }
             finally
             {
