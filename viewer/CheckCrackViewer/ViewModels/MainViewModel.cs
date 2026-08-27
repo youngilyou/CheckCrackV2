@@ -418,7 +418,15 @@ public partial class MainViewModel : ObservableObject
         {
             row.Status = "다운로드 중...";
             var settings = BuildCrackVisionSettings();
-            var localZipPath = Path.Combine(settings.DownloadFolder, "zips", $"{archive.ArchiveId}.zip");
+            // 서버에 저장된 실제 파일명을 그대로 사용(archive_id.zip처럼 임의로 바꾸지 않음) --
+            // archive.ZipPath는 이제 backend_core가 항상 절대경로로 저장하므로(2026-08-27,
+            // crackvision_archive_manager 생성자에서 canonical화) Path.GetFileName으로 파일명
+            // 부분만 안전하게 뽑아낼 수 있음. 혹시라도 빈 문자열이면(옛 레코드 등) 기존처럼
+            // archive_id.zip으로 폴백.
+            var remoteFileName = Path.GetFileName(archive.ZipPath);
+            if (string.IsNullOrWhiteSpace(remoteFileName))
+                remoteFileName = $"{archive.ArchiveId}.zip";
+            var localZipPath = Path.Combine(settings.DownloadFolder, "zips", remoteFileName);
             await SftpDownloadService.DownloadAsync(settings, archive.ZipPath, localZipPath);
 
             row.Status = "압축 해제 중...";
