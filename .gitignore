@@ -14,6 +14,13 @@ viewer/.vs/
 *.vsidx
 *.suo
 
+# === Native CMake build output + vendored FastDDS SDK (installed locally via
+#     tools/Get-FastDdsGenModule.ps1, not committed -- same convention as
+#     FacadePreviewer/AnalysisLoadBalancer's own .gitignore) ===
+**/build/
+tools/ExtraModule/
+tools/Module/
+
 # === Large generated / captured data (keep folder structure only) ===
 datasets/*
 !datasets/README.md

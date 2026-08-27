@@ -17,11 +17,28 @@
     <PackageReference Include="BCrypt.Net-Next" Version="4.2.0" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
+    <PackageReference Include="Npgsql" Version="10.0.3" />
     <!-- PDF generation moved to Python (src/report/pdf_report.py, WeasyPrint).
          PDFsharp/PDFsharp-MigraDoc are no longer used. PDFtoImage stays: it only
          rasterizes an existing PDF for the 결과보기 screen's preview, independent
          of whatever generated it. -->
     <PackageReference Include="PDFtoImage" Version="5.4.0" />
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
+  </ItemGroup>
+
+  <!-- CheckCrackDdsBridge.dll is a separate native CMake project (../CheckCrackDdsBridge),
+       not built by this .csproj: build it first via CheckCrackDdsBridge/build.ps1 (that
+       script's /p:VCToolsVersion flag is required, see its comments). Same pattern
+       FacadePreviewer.csproj uses for its own FacadeDdsBridge.dll: independent codebase,
+       not shared code (see https://github.com/youngilyou/AnalysisLoadBalancer README
+       "독립성 원칙"). EPROSIMA_ALL_DYN_LINK always links the Release-named fastdds-3.6.dll/
+       fastcdr-2.3.dll (never a Debug-variant name) in both C++ Debug and Release configs, so
+       there's no per-Configuration FastDDS DLL to select here. -->
+  <ItemGroup>
+    <None Include="..\CheckCrackDdsBridge\build\$(Configuration)\CheckCrackDdsBridge.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" Condition="Exists('..\CheckCrackDdsBridge\build\$(Configuration)\CheckCrackDdsBridge.dll')" />
+    <None Include="..\..\tools\Module\FastDDSGen\FastDDS\bin\fastdds-3.6.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" Condition="Exists('..\..\tools\Module\FastDDSGen\FastDDS\bin\fastdds-3.6.dll')" />
+    <None Include="..\..\tools\Module\FastDDSGen\FastDDS\bin\fastcdr-2.3.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" Condition="Exists('..\..\tools\Module\FastDDSGen\FastDDS\bin\fastcdr-2.3.dll')" />
+    <None Include="..\..\tools\Module\FastDDSGen\FastDDS\bin\foonathan_memory-0.7.4.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" Condition="Exists('..\..\tools\Module\FastDDSGen\FastDDS\bin\foonathan_memory-0.7.4.dll')" />
   </ItemGroup>
 
 </Project>

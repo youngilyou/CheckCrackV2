@@ -169,7 +169,7 @@ def _run_facade_pipeline(
     )
     if result.quality.needs_colmap_fallback:
         log_event(
-            logger, "warning", "facade needs COLMAP fallback, stitch is NEEDS_MANUAL_REVIEW",
+            logger, "warning", "facade needs CM fallback, stitch is NEEDS_MANUAL_REVIEW",
             stage="NEEDS_MANUAL_REVIEW", facade_id=facade_id,
             reasons=result.quality.colmap_fallback_reasons,
         )
@@ -178,7 +178,7 @@ def _run_facade_pipeline(
             source_dirs = {str(Path(by_id[iid].file_path).parent) for iid in images.keys()}
             if len(source_dirs) != 1:
                 log_event(
-                    logger, "warning", "facade images span multiple source dirs, skipping COLMAP",
+                    logger, "warning", "facade images span multiple source dirs, skipping CM",
                     facade_id=facade_id, source_dirs=list(source_dirs),
                 )
             else:
@@ -190,7 +190,7 @@ def _run_facade_pipeline(
                         workspace_dir=output_dir.parent / "colmap", logger=logger,
                     )
                     log_event(
-                        logger, "info", "COLMAP fallback complete",
+                        logger, "info", "CM fallback complete",
                         stage="COLMAP_FALLBACK", facade_id=facade_id,
                         elapsed_s=round(time.time() - t_colmap, 2),
                         num_images_requested=colmap_result.num_images_requested,
@@ -217,7 +217,7 @@ def _run_facade_pipeline(
                             effective_utm_epsg = utm_epsg if utm_epsg is not None else estimate_utm_epsg(catalog)
                             if effective_utm_epsg is None:
                                 log_event(
-                                    logger, "warning", "no GPS on any image, cannot align COLMAP reconstruction for rectification",
+                                    logger, "warning", "no GPS on any image, cannot align CM reconstruction for rectification",
                                     facade_id=facade_id,
                                 )
                             else:
@@ -225,7 +225,7 @@ def _run_facade_pipeline(
                                 aligned = align_reconstruction_to_utm(reconstruction, by_id, effective_utm_epsg)
                                 if not aligned:
                                     log_event(
-                                        logger, "warning", "COLMAP reconstruction has too little GPS coverage to align to UTM, skipping rectification",
+                                        logger, "warning", "CM reconstruction has too little GPS coverage to align to UTM, skipping rectification",
                                         facade_id=facade_id,
                                     )
                                 else:
@@ -261,7 +261,7 @@ def _run_facade_pipeline(
                                     atomic_write_json(output_dir / f"{facade_id}_quality_report_colmap.json", asdict(rect_result.quality))
                                     _write_source_transform_artifacts(output_dir, facade_id, "_colmap", rect_result)
                                     log_event(
-                                        logger, "info", "COLMAP-rectified mosaic complete",
+                                        logger, "info", "CM-rectified mosaic complete",
                                         stage="RECTIFIED_COLMAP", facade_id=facade_id,
                                         elapsed_s=round(time.time() - t_rect, 2),
                                         coverage_ratio=rect_result.quality.coverage_ratio,
@@ -269,12 +269,12 @@ def _run_facade_pipeline(
                                     )
                         except Exception as exc:
                             log_event(
-                                logger, "warning", "COLMAP-pose rectification failed",
+                                logger, "warning", "CM-pose rectification failed",
                                 facade_id=facade_id, error=str(exc),
                             )
                 except ImportError:
                     log_event(
-                        logger, "warning", "pycolmap not installed, cannot run COLMAP fallback",
+                        logger, "warning", "pycolmap not installed, cannot run CM fallback",
                         facade_id=facade_id,
                     )
 

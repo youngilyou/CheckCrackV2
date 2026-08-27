@@ -168,6 +168,18 @@ public partial class MainViewModel : ObservableObject
     private PipelineLogTailer? _tailer;
     private readonly DispatcherTimer _facadeScanTimer;
 
+    /// <summary>Total concurrent-analysis cap shared by manual "실행" clicks (RunFacade below)
+    /// and remote-triggered runs (AnalysisAssignment, see AnalysisBridgeService) -- see
+    /// AnalysisConcurrencyManager's own doc comment for why this didn't exist before.</summary>
+    private readonly AnalysisConcurrencyManager _concurrency = new();
+
+    private readonly AnalysisBridgeService _analysisBridge = new();
+    private readonly DispatcherTimer _heartbeatTimer;
+
+    /// <summary>Backs the "원격 분석 작업" window (see RemoteAnalysisJobsWindow) -- exposed so
+    /// MainWindow's "원격 분석 작업" button can open a window bound to this same instance.</summary>
+    public RemoteAnalysisJobsViewModel RemoteJobs { get; }
+
     public MainViewModel()
     {
         ErrorLogView = new ListCollectionView(LogEntries)
@@ -183,7 +195,38 @@ public partial class MainViewModel : ObservableObject
         OriginalAi.RootPath = RootPath;
         ResultsCompare.RootPath = RootPath;
         LoadDbSettings();
+        LoadCrackVisionSettings();
         AttachToRoot();
+
+        // Fire-and-forget: GPU detection shells out to python (see GpuDetectionService), so it
+        // can't block the constructor. _concurrency.MaxConcurrent stays at its safe default (1)
+        // until this resolves -- a few seconds of "CPU-only" caution at startup is harmless.
+        _ = InitializeGpuDetectionAsync();
+
+        RemoteJobs = new RemoteAnalysisJobsViewModel(_analysisBridge, CrackVisionDbSettingsStore.Load,
+            RegisterAndRunExtractedArchiveAsync, RootPath);
+        _analysisBridge.AssignmentReceived += RemoteJobs.HandleAssignment;
+        // Retry/Stop: only meaningful after an AnalysisErrorNotify the operator has acted on
+        // (see FacadeAnalysis.idl's own comment on these two) -- this pass surfaces them as a
+        // status update on the matching job row; actually re-invoking/aborting the underlying
+        // python process per archive_id is left as a follow-up (RunFacade has no per-archive
+        // handle to cancel/retry against yet).
+        _analysisBridge.RetryReceived += r => RemoteJobs.MarkControlReceived(r.ArchiveId, "재시도 요청됨 (미구현)");
+        _analysisBridge.StopReceived += s => RemoteJobs.MarkControlReceived(s.ArchiveId, "정지 요청됨 (미구현)");
+
+        var workerId = string.IsNullOrWhiteSpace(CrackVisionWorkerId) ? Environment.MachineName : CrackVisionWorkerId;
+        _analysisBridge.Start(domainId: 31, workerId: workerId);
+
+        _heartbeatTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        _heartbeatTimer.Tick += (_, _) => _analysisBridge.SendHeartbeat(
+            _concurrency.MaxConcurrent, (uint)Math.Max(0, _concurrency.RunningCount), (uint)_concurrency.QueuedCount);
+        _heartbeatTimer.Start();
+    }
+
+    private async Task InitializeGpuDetectionAsync()
+    {
+        var gpuAvailable = await GpuDetectionService.DetectCudaAvailableAsync();
+        _concurrency.MaxConcurrent = GpuDetectionService.ComputeMaxConcurrent(gpuAvailable);
     }
 
     partial void OnRootPathChanged(string value)
@@ -238,6 +281,129 @@ public partial class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             DbSettingsStatus = $"DB 설정을 읽을 수 없습니다: {ex.Message}";
+        }
+    }
+
+    // === CrackVisionDB(PostgreSQL)/SFTP 설정 + 수동 다운로드 (SettingsView) ===
+    // 별도 파일/클래스(CrackVisionDbSettingsStore)로 저장 -- 위 DbHost/DbPort 등(MySQL, 완전히
+    // 다른 미래 기능용)과는 절대 혼동하지 않게 분리, 원격 자동 경로는 이 설정을 전혀 안 씀(archive_id
+    // 하나당 필요한 모든 정보가 이미 AnalysisAssignment에 담겨 옴 -- SFTP 접속 정보만 예외).
+
+    [ObservableProperty] private string _crackVisionPostgresHost = "";
+    [ObservableProperty] private int _crackVisionPostgresPort = 5432;
+    [ObservableProperty] private string _crackVisionPostgresDatabase = "mngdata";
+    [ObservableProperty] private string _crackVisionPostgresUser = "mngdata";
+    [ObservableProperty] private string _crackVisionPostgresPassword = "";
+    [ObservableProperty] private string _crackVisionSftpHost = "";
+    [ObservableProperty] private int _crackVisionSftpPort = 22;
+    [ObservableProperty] private string _crackVisionSftpUser = "";
+    [ObservableProperty] private string _crackVisionSftpPassword = "";
+    [ObservableProperty] private string _crackVisionSftpPrivateKeyPath = "";
+    [ObservableProperty] private string _crackVisionWorkerId = "";
+    [ObservableProperty] private string _crackVisionSettingsStatus = "";
+    [ObservableProperty] private bool _isLoadingRemoteArchives;
+
+    /// <summary>수동 다운로드 목록 -- "새로고침" 클릭 시 CrackVisionDB(crackvision_archives)를
+    /// 직접 조회해서 채움. 자동(원격 명령) 경로는 이 목록/쿼리와 전혀 무관.</summary>
+    public ObservableCollection<CrackVisionArchiveRecord> RemoteArchives { get; } = new();
+
+    private void LoadCrackVisionSettings()
+    {
+        var s = CrackVisionDbSettingsStore.Load();
+        CrackVisionPostgresHost = s.PostgresHost;
+        CrackVisionPostgresPort = s.PostgresPort;
+        CrackVisionPostgresDatabase = s.PostgresDatabase;
+        CrackVisionPostgresUser = s.PostgresUser;
+        CrackVisionPostgresPassword = s.PostgresPassword;
+        CrackVisionSftpHost = s.SftpHost;
+        CrackVisionSftpPort = s.SftpPort;
+        CrackVisionSftpUser = s.SftpUser;
+        CrackVisionSftpPassword = s.SftpPassword;
+        CrackVisionSftpPrivateKeyPath = s.SftpPrivateKeyPath;
+        CrackVisionWorkerId = s.WorkerId;
+    }
+
+    private CrackVisionDbSettings BuildCrackVisionSettings() => new()
+    {
+        PostgresHost = CrackVisionPostgresHost.Trim(),
+        PostgresPort = CrackVisionPostgresPort,
+        PostgresDatabase = CrackVisionPostgresDatabase.Trim(),
+        PostgresUser = CrackVisionPostgresUser.Trim(),
+        PostgresPassword = CrackVisionPostgresPassword,
+        SftpHost = CrackVisionSftpHost.Trim(),
+        SftpPort = CrackVisionSftpPort,
+        SftpUser = CrackVisionSftpUser.Trim(),
+        SftpPassword = CrackVisionSftpPassword,
+        SftpPrivateKeyPath = CrackVisionSftpPrivateKeyPath.Trim(),
+        WorkerId = CrackVisionWorkerId.Trim(),
+    };
+
+    [RelayCommand]
+    private void SaveCrackVisionSettings()
+    {
+        try
+        {
+            CrackVisionDbSettingsStore.Save(BuildCrackVisionSettings());
+            CrackVisionSettingsStatus = $"저장됨: {CrackVisionDbSettingsStore.SettingsPath} (worker_id 변경은 앱 재시작 후 반영됩니다)";
+        }
+        catch (Exception ex)
+        {
+            CrackVisionSettingsStatus = $"저장 실패: {ex.Message}";
+        }
+    }
+
+    /// <summary>CrackVisionDB(crackvision_archives)를 직접 조회 -- 자동 경로와 무관, 관리자가
+    /// "수동 다운로드" 목록을 채울 때만 호출됨.</summary>
+    [RelayCommand]
+    private async Task RefreshRemoteArchives()
+    {
+        IsLoadingRemoteArchives = true;
+        try
+        {
+            var records = await CrackVisionArchiveQueryService.ListArchivesAsync(BuildCrackVisionSettings());
+            RemoteArchives.Clear();
+            foreach (var r in records)
+                RemoteArchives.Add(r);
+            CrackVisionSettingsStatus = $"{records.Count}건 조회됨";
+        }
+        catch (Exception ex)
+        {
+            CrackVisionSettingsStatus = $"조회 실패: {ex.Message}";
+        }
+        finally
+        {
+            IsLoadingRemoteArchives = false;
+        }
+    }
+
+    /// <summary>관리자가 "수동 다운로드" 목록에서 직접 선택 -- 다운로드+압축해제+등록까지만 하고
+    /// 분석은 시작하지 않는다(수동으로 폴더를 추가했을 때와 동일한 관례, 실행은 별도 "실행"
+    /// 클릭으로). 자동(원격 명령) 경로의 RegisterAndRunExtractedArchiveAsync와 다른 점이 바로
+    /// 이 부분 -- "수동은 관리자가 선택"(다운로드 시점 + 실행 시점 둘 다).</summary>
+    [RelayCommand]
+    private async Task DownloadAndRegisterArchive(CrackVisionArchiveRecord archive)
+    {
+        try
+        {
+            CrackVisionSettingsStatus = $"다운로드 중: archive_id={archive.ArchiveId}";
+            var settings = BuildCrackVisionSettings();
+            var localZipPath = Path.Combine(RootPath, "remote_downloads", "zips", $"{archive.ArchiveId}.zip");
+            await SftpDownloadService.DownloadAsync(settings, archive.ZipPath, localZipPath);
+
+            CrackVisionSettingsStatus = $"압축 해제 중: archive_id={archive.ArchiveId}";
+            var extractDir = Path.Combine(RootPath, "remote_downloads", "extracted",
+                $"{archive.Company}_{archive.Building}_{archive.ArchiveId}");
+            if (Directory.Exists(extractDir))
+                Directory.Delete(extractDir, recursive: true);
+            Directory.CreateDirectory(Path.GetDirectoryName(extractDir)!);
+            System.IO.Compression.ZipFile.ExtractToDirectory(localZipPath, extractDir);
+
+            RegisterExtractedArchive(extractDir, archive.Company, archive.Building);
+            CrackVisionSettingsStatus = $"등록 완료: archive_id={archive.ArchiveId} -- 왼쪽 목록에서 직접 실행하세요.";
+        }
+        catch (Exception ex)
+        {
+            CrackVisionSettingsStatus = $"다운로드/등록 실패 (archive_id={archive.ArchiveId}): {ex.Message}";
         }
     }
 
@@ -494,6 +660,71 @@ public partial class MainViewModel : ObservableObject
         RebuildFacadeTree();
     }
 
+    /// <summary>Called by RemoteAnalysisJobsViewModel once a downloaded archive has been
+    /// extracted to <paramref name="extractedRootDir"/> -- registers each direction subfolder as
+    /// its own facade (same "1 Facade = 1 Flight" mapping BrowseImagesFolder uses for a manually
+    /// browsed multi-direction folder) and immediately starts analysis for each, automatically
+    /// (no operator confirmation step -- the remote path is always "자동 실행", see
+    /// AnalysisLoadBalancer README). Falls back to treating the extracted root itself as a
+    /// single facade if it has no direction subfolders (a single-direction archive).</summary>
+    /// <summary>Registers each direction subfolder under <paramref name="extractedRootDir"/> as
+    /// its own facade (same "1 Facade = 1 Flight" mapping BrowseImagesFolder uses for a manually
+    /// browsed multi-direction folder) WITHOUT starting analysis -- same "add now, run later"
+    /// split as BrowseImagesFolder/AddRunnableCandidate already uses for manually-browsed
+    /// folders. Falls back to treating the extracted root itself as a single facade if it has no
+    /// direction subfolders (a single-direction archive). Returns the registered facades so the
+    /// caller can decide whether to also run them.</summary>
+    public List<FacadeItemViewModel> RegisterExtractedArchive(string extractedRootDir, string company, string building)
+    {
+        var directionDirs = Directory.Exists(extractedRootDir)
+            ? Directory.GetDirectories(extractedRootDir).Where(HasImages).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList()
+            : new List<string>();
+
+        List<FacadeClassifyResult> candidates;
+        if (directionDirs.Count > 0)
+        {
+            candidates = directionDirs
+                .Select(d => new FacadeClassifyResult(d, Path.GetFileName(d), company, company, building, building, Path.GetFileName(d)))
+                .ToList();
+        }
+        else
+        {
+            var facadeId = Path.GetFileName(extractedRootDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            candidates = new List<FacadeClassifyResult> { new(extractedRootDir, facadeId, company, company, building, building, "") };
+        }
+
+        var facades = new List<FacadeItemViewModel>();
+        foreach (var candidate in candidates)
+        {
+            AddRunnableCandidate(candidate);
+            facades.Add(GetOrCreateFacade(candidate.FacadeId));
+        }
+        RebuildFacadeTree();
+        return facades;
+    }
+
+    /// <summary>Remote (자동) path only -- registers AND immediately starts analysis for every
+    /// resulting facade, no operator confirmation step (see AnalysisLoadBalancer README: the
+    /// remote path is always "자동 실행"). The manual download path (SettingsView) calls
+    /// RegisterExtractedArchive alone instead and leaves running as a separate deliberate
+    /// "실행" click, matching how a manually browsed folder already works.</summary>
+    public async Task<bool> RegisterAndRunExtractedArchiveAsync(string extractedRootDir, string company, string building)
+    {
+        var facades = RegisterExtractedArchive(extractedRootDir, company, building);
+
+        // Each RunFacadeCommand call independently acquires its own slot from the same
+        // _concurrency gate the manual "실행" button uses -- see RemoteAnalysisJobsViewModel's
+        // own doc comment for why this method does NOT also acquire an archive-level slot itself.
+        await Task.WhenAll(facades.Select(f => RunFacadeCommand.ExecuteAsync(f)));
+
+        // RunFacade swallows its own per-facade pipeline failures (logs to facade.AddIssue,
+        // never throws) -- awaiting it above always completes without an exception even if the
+        // pipeline itself failed. Check the actual OverallStatus each run left behind instead, so
+        // the AnalysisResult reported back to FacadePreviewer reflects reality rather than just
+        // "the C# call didn't throw".
+        return facades.All(f => f.OverallStatus != FacadeOverallStatus.Failed);
+    }
+
     private static bool HasImages(string dir)
     {
         try
@@ -560,6 +791,24 @@ public partial class MainViewModel : ObservableObject
 
     [RelayCommand]
     private void SelectFacade(FacadeItemViewModel facade) => SelectedFacade = facade;
+
+    private Views.RemoteAnalysisJobsWindow? _remoteJobsWindow;
+
+    /// <summary>Opens (or re-activates) the "원격 분석 작업" window -- a separate window, not a
+    /// tab, per the 2026-08-27 requirement that incoming FacadePreviewer analysis commands show
+    /// in their own list window rather than mixed into the main facade list directly.</summary>
+    [RelayCommand]
+    private void OpenRemoteJobsWindow()
+    {
+        if (_remoteJobsWindow != null)
+        {
+            _remoteJobsWindow.Activate();
+            return;
+        }
+        _remoteJobsWindow = new Views.RemoteAnalysisJobsWindow(RemoteJobs) { Owner = Application.Current.MainWindow };
+        _remoteJobsWindow.Closed += (_, _) => _remoteJobsWindow = null;
+        _remoteJobsWindow.Show();
+    }
 
     /// <summary>RootPath/facade_hierarchy.json에 저장된 분류를 지금 메모리에 있는
     /// Facades에 적용한다. "+ 폴더"로 추가했던 facade는 SourceFolderPath가 facades/
@@ -656,6 +905,11 @@ public partial class MainViewModel : ObservableObject
         facade.IsRunning = true;
         facade.LivePreviewImagePath = null;
 
+        // Waits here (not before setting IsRunning above) if this workstation is already at
+        // MaxConcurrent -- the facade still shows "진행 중" while queued, matching how a
+        // remote-triggered job would report AnalysisJobQueued instead of a silent block.
+        await _concurrency.WaitForSlotAsync();
+
         var baseOutputDir = Path.Combine(facade.SourceFolderPath, "output");
         var (versionLabel, versionDir) = FacadeVersionStore.AllocateNextVersionDir(baseOutputDir);
         var succeeded = false;
@@ -713,6 +967,7 @@ public partial class MainViewModel : ObservableObject
         {
             facade.IsRunning = false;
             facade.LivePreviewImagePath = null;
+            _concurrency.Release();
 
             // 실패 시 current를 전진시키지 않는다 — 화면/이후 단계는 자동으로
             // 이전 성공 버전을 계속 가리킨다 (atomic_io.py의 "실패 시 버전을

@@ -310,6 +310,144 @@
                     </Grid>
                 </ScrollViewer>
             </TabItem>
+            <!-- === 원격 분석 연동: CrackVisionDB(PostgreSQL, MngData backend_core)/SFTP 접속
+                 정보 + 수동 다운로드. MySQL 연결(계정/연결 탭)과 완전히 별개: 저 카드의
+                 DbHost/DbUser 등과 여기 CrackVisionPostgresHost/SftpHost 등은 서로 다른 설정
+                 파일(각각 db_settings.json / crackvision_db_settings.json)에 저장됨. 자동
+                 (원격 명령) 경로는 SFTP 정보만 사용하고 이 화면과 무관하게 동작한다:
+                 archive_id/company/building/zip_remote_path가 이미 AnalysisAssignment에
+                 담겨 오기 때문. -->
+            <TabItem Header="원격 분석 연동" Foreground="{StaticResource Text4}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <Grid Margin="32,16,32,28" HorizontalAlignment="Stretch">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="48*" MinWidth="480"/>
+                            <ColumnDefinition Width="20"/>
+                            <ColumnDefinition Width="52*" MinWidth="480"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3"
+                                   Text="FacadePreviewer의 분석 실행 명령(원격, 자동)과 관리자가 직접 고르는 수동 다운로드가 함께 쓰는 접속 정보입니다."
+                                   Foreground="{StaticResource Text4}" Margin="0,0,0,20" TextWrapping="Wrap"/>
+
+                        <!-- CrackVisionDB (PostgreSQL) -->
+                        <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource CardBorder}" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="CrackVisionDB (PostgreSQL)" Style="{StaticResource Kicker}" Margin="0,0,0,10"/>
+                                <TextBlock Text="수동 다운로드 목록 조회에만 사용됩니다 (자동 경로는 DB에 접속하지 않음)."
+                                           Foreground="{StaticResource Text2}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                                <TextBlock Text="Host" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <TextBox Text="{Binding CrackVisionPostgresHost, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,10"
+                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+
+                                <TextBlock Text="Port" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <TextBox Text="{Binding CrackVisionPostgresPort, UpdateSourceTrigger=PropertyChanged}" Width="100" HorizontalAlignment="Left" Padding="8,5" Margin="0,0,0,10"
+                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+
+                                <TextBlock Text="Database" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <TextBox Text="{Binding CrackVisionPostgresDatabase, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,10"
+                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+
+                                <TextBlock Text="User" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <TextBox Text="{Binding CrackVisionPostgresUser, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,10"
+                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+
+                                <TextBlock Text="Password" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <TextBox Text="{Binding CrackVisionPostgresPassword, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
+                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- SFTP -->
+                        <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource CardBorder}" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="SFTP (zip 다운로드)" Style="{StaticResource Kicker}" Margin="0,0,0,10"/>
+                                <TextBlock Text="자동/수동 경로 둘 다 이 정보로 zip 파일을 내려받습니다. 개인키를 쓰려면 Private Key Path만 입력(비밀번호는 비워둠)."
+                                           Foreground="{StaticResource Text2}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                                <TextBlock Text="Host" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <TextBox Text="{Binding CrackVisionSftpHost, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,10"
+                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+
+                                <TextBlock Text="Port" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <TextBox Text="{Binding CrackVisionSftpPort, UpdateSourceTrigger=PropertyChanged}" Width="100" HorizontalAlignment="Left" Padding="8,5" Margin="0,0,0,10"
+                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+
+                                <TextBlock Text="User" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <TextBox Text="{Binding CrackVisionSftpUser, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,10"
+                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+
+                                <TextBlock Text="Password (선택)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <TextBox Text="{Binding CrackVisionSftpPassword, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,10"
+                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+
+                                <TextBlock Text="Private Key Path (선택)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <TextBox Text="{Binding CrackVisionSftpPrivateKeyPath, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,10"
+                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+
+                                <TextBlock Text="Worker ID (비워두면 컴퓨터 이름 사용, 재시작 후 반영)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                <TextBox Text="{Binding CrackVisionWorkerId, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
+                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                            </StackPanel>
+                        </Border>
+
+                        <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" Margin="0,0,0,16">
+                            <Button Content="저장" Command="{Binding SaveCrackVisionSettingsCommand}" Margin="0,0,8,0" Padding="10,5"/>
+                            <TextBlock Text="{Binding CrackVisionSettingsStatus}" Foreground="{StaticResource Text2}" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                        </StackPanel>
+
+                        <!-- 수동 다운로드 -->
+                        <Border Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" Style="{StaticResource CardBorder}">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="수동 다운로드 (관리자가 직접 선택)" Style="{StaticResource Kicker}" VerticalAlignment="Center"/>
+                                    <Button Grid.Column="1" Content="목록 새로고침" Command="{Binding RefreshRemoteArchivesCommand}" Padding="8,4"/>
+                                </Grid>
+                                <TextBlock Text="다운로드+압축해제+왼쪽 목록 등록까지만 자동으로 하고, 분석 실행은 직접 하셔야 합니다 (폴더를 직접 추가했을 때와 동일)."
+                                           Foreground="{StaticResource Text2}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                <ItemsControl ItemsSource="{Binding RemoteArchives}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="{StaticResource Surface2}" CornerRadius="6" Padding="10,7" Margin="0,0,0,6">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="70"/>
+                                                        <ColumnDefinition Width="160"/>
+                                                        <ColumnDefinition Width="160"/>
+                                                        <ColumnDefinition Width="70"/>
+                                                        <ColumnDefinition Width="140"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0" Text="{Binding ArchiveId}" FontFamily="Consolas" Foreground="{StaticResource Text}"/>
+                                                    <TextBlock Grid.Column="1" Text="{Binding Company}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock Grid.Column="2" Text="{Binding Building}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock Grid.Column="3" Text="{Binding ImageCount}" Foreground="{StaticResource Text2}"/>
+                                                    <TextBlock Grid.Column="4" Text="{Binding CreatedAt}" Foreground="{StaticResource Text2}" FontSize="11"/>
+                                                    <TextBlock Grid.Column="5"/>
+                                                    <Button Grid.Column="6" Content="다운로드+등록"
+                                                            Command="{Binding DataContext.DownloadAndRegisterArchiveCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                            CommandParameter="{Binding}" Padding="8,4"/>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </ScrollViewer>
+            </TabItem>
         </TabControl>
     </Grid>
 </UserControl>

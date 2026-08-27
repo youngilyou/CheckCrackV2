@@ -366,9 +366,14 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="FACADES" Style="{StaticResource Kicker}" VerticalAlignment="Center"/>
-                                    <Button Grid.Column="1" Content="이미지 폴더 추가" Command="{Binding BrowseImagesFolderCommand}"
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                        <Button Content="원격 분석 작업" Command="{Binding OpenRemoteJobsWindowCommand}"
+                                Padding="8,3" FontSize="11" Margin="0,0,6,0"
+                                ToolTip="FacadePreviewer가 보낸 분석 실행 명령 목록 (다운로드/압축해제/자동 등록 진행 상황)"/>
+                                        <Button Content="이미지 폴더 추가" Command="{Binding BrowseImagesFolderCommand}"
                                 Padding="8,3" FontSize="11"
                                 ToolTip="이미지 폴더 선택 — 하위 폴더가 있으면 각각 별도 facade로, 없으면 선택한 폴더 자체를 하나의 facade로 추가"/>
+                                    </StackPanel>
                                 </Grid>
                                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="6,0">
                                     <ItemsControl ItemsSource="{Binding FacadeTree}" Margin="0,0,0,10"/>
