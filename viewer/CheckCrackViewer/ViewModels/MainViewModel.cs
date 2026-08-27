@@ -52,6 +52,14 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _statusText = "대기 중";
     [ObservableProperty] private bool _autoScrollLog = true;
 
+    /// <summary>2026-08-27: top-bar "수신 상태" indicator -- mirrors RemoteAnalysisJobsViewModel's
+    /// latest stage message (수신/다운로드/압축 해제/분석 시작/완료/오류) so an operator watching
+    /// only the top of the window (not scrolled into LIVE LOG) can tell whether a remote dispatch
+    /// from FacadePreviewer actually arrived. Empty string (hidden, see MainWindow.xaml's
+    /// visibility binding) until the first AnalysisAssignment of this session is received --
+    /// never reset back to empty afterward, so the last-seen status stays visible.</summary>
+    [ObservableProperty] private string _remoteReceiveStatusText = "";
+
     /// <summary>Set by App.xaml.cs right after MainWindow is constructed,
     /// from LoginWindow's AppUser -- MainViewModel itself has no dependency
     /// on the login flow (no constructor param), it just displays whatever
@@ -207,7 +215,7 @@ public partial class MainViewModel : ObservableObject
         _ = InitializeGpuDetectionAsync();
 
         _remoteJobs = new RemoteAnalysisJobsViewModel(_analysisBridge, CrackVisionDbSettingsStore.Load,
-            RegisterAndRunExtractedArchiveAsync, RootPath);
+            RegisterAndRunExtractedArchiveAsync, RootPath, OnRemoteJobProgress);
         _analysisBridge.AssignmentReceived += _remoteJobs.HandleAssignment;
         // Retry/Stop: only meaningful after an AnalysisErrorNotify the operator has acted on
         // (see FacadeAnalysis.idl's own comment on these two) -- this pass surfaces them as a
@@ -1501,6 +1509,21 @@ public partial class MainViewModel : ObservableObject
         var insertAt = Facades.TakeWhile(f => string.Compare(f.FacadeId, facadeId, StringComparison.Ordinal) < 0).Count();
         Facades.Insert(insertAt, created);
         return created;
+    }
+
+    /// <summary>RemoteAnalysisJobsViewModel's onProgress callback (2026-08-27) -- already on the
+    /// UI thread by the time this fires (see that class's Report/RunOnUi). Mirrors into both the
+    /// top-bar indicator and LIVE LOG, since a remote-dispatch message has no facade_id yet at
+    /// the "수신"/"다운로드" stages (only after extraction does MainViewModel.RunFacade attribute
+    /// its own log lines to a real facade), so it's synthesized as a Stage="remote_analysis"
+    /// entry with no FacadeId rather than trying to force-fit it into the per-facade event list
+    /// OnLogEntry below also maintains.</summary>
+    private void OnRemoteJobProgress(string level, string message)
+    {
+        RemoteReceiveStatusText = message;
+        LogEntries.Add(new PipelineLogEntry { Level = level, Message = message, Stage = "remote_analysis" });
+        while (LogEntries.Count > 2000)
+            LogEntries.RemoveAt(0);
     }
 
     private void OnLogEntry(PipelineLogEntry entry)

@@ -277,22 +277,28 @@ bool AnalysisBridge::Start(int domain_id, const char* worker_id, const char* top
     status_wqos.history().depth = 10;
     impl->status_writer = impl->publisher->create_datawriter(impl->status_topic, status_wqos);
 
-    // RELIABLE + TRANSIENT_LOCAL for every discrete command/result -- same defensive pattern as
-    // FacadeStorageStatus's cancel/requirements/finalize writers (the operator-facing outcome
-    // must not be lost even if the reader's participant hasn't finished matching yet).
-    auto make_reliable_wqos = []() {
+    // 2026-08-27: switched from RELIABLE+TRANSIENT_LOCAL to BEST_EFFORT+VOLATILE (operator
+    // request: "UDP 형식으로 휘발성"). TRANSIENT_LOCAL's durability cache was replaying old
+    // AnalysisAssignment samples to this reader every time this app restarted (its DDS
+    // participant re-matches AnalysisLoadBalancer's writer on every launch) -- confirmed via a
+    // real bug this session: archive_ids already fully processed kept getting silently
+    // re-downloaded/re-extracted/re-run on every relaunch, with no new command ever sent by
+    // FacadePreviewer. Reliability is now handled at the application layer instead (see
+    // TransferSettingsWindow's 2s/3-attempt resend-on-timeout loop) plus ProcessedArchiveStore's
+    // persisted dedup as a second line of defense against any redelivery.
+    auto make_volatile_wqos = []() {
         DataWriterQos wqos = DATAWRITER_QOS_DEFAULT;
-        wqos.reliability().kind = RELIABLE_RELIABILITY_QOS;
-        wqos.durability().kind = TRANSIENT_LOCAL_DURABILITY_QOS;
+        wqos.reliability().kind = BEST_EFFORT_RELIABILITY_QOS;
+        wqos.durability().kind = VOLATILE_DURABILITY_QOS;
         wqos.history().kind = KEEP_LAST_HISTORY_QOS;
         wqos.history().depth = 20;
         return wqos;
     };
-    impl->accepted_writer = impl->publisher->create_datawriter(impl->accepted_topic, make_reliable_wqos());
-    impl->queued_writer = impl->publisher->create_datawriter(impl->queued_topic, make_reliable_wqos());
-    impl->started_writer = impl->publisher->create_datawriter(impl->started_topic, make_reliable_wqos());
-    impl->error_writer = impl->publisher->create_datawriter(impl->error_topic, make_reliable_wqos());
-    impl->result_writer = impl->publisher->create_datawriter(impl->result_topic, make_reliable_wqos());
+    impl->accepted_writer = impl->publisher->create_datawriter(impl->accepted_topic, make_volatile_wqos());
+    impl->queued_writer = impl->publisher->create_datawriter(impl->queued_topic, make_volatile_wqos());
+    impl->started_writer = impl->publisher->create_datawriter(impl->started_topic, make_volatile_wqos());
+    impl->error_writer = impl->publisher->create_datawriter(impl->error_topic, make_volatile_wqos());
+    impl->result_writer = impl->publisher->create_datawriter(impl->result_topic, make_volatile_wqos());
 
     if (!impl->heartbeat_writer || !impl->status_writer || !impl->accepted_writer || !impl->queued_writer ||
             !impl->started_writer || !impl->error_writer || !impl->result_writer)
@@ -301,19 +307,19 @@ bool AnalysisBridge::Start(int domain_id, const char* worker_id, const char* top
         return false;
     }
 
-    // RELIABLE + TRANSIENT_LOCAL readers -- matches the writer side above (AnalysisLoadBalancer/
-    // FacadePreviewer are expected to use the same durability for their matching writers).
-    auto make_reliable_rqos = []() {
+    // BEST_EFFORT + VOLATILE readers -- matches the writer side above (AnalysisLoadBalancer/
+    // FacadePreviewer use the same QoS for their matching writers).
+    auto make_volatile_rqos = []() {
         DataReaderQos rqos = DATAREADER_QOS_DEFAULT;
-        rqos.reliability().kind = RELIABLE_RELIABILITY_QOS;
-        rqos.durability().kind = TRANSIENT_LOCAL_DURABILITY_QOS;
+        rqos.reliability().kind = BEST_EFFORT_RELIABILITY_QOS;
+        rqos.durability().kind = VOLATILE_DURABILITY_QOS;
         rqos.history().kind = KEEP_LAST_HISTORY_QOS;
         rqos.history().depth = 20;
         return rqos;
     };
-    impl->assignment_reader = impl->subscriber->create_datareader(impl->assignment_topic, make_reliable_rqos(), &impl->assignment_listener);
-    impl->retry_reader = impl->subscriber->create_datareader(impl->retry_topic, make_reliable_rqos(), &impl->retry_listener);
-    impl->stop_reader = impl->subscriber->create_datareader(impl->stop_topic, make_reliable_rqos(), &impl->stop_listener);
+    impl->assignment_reader = impl->subscriber->create_datareader(impl->assignment_topic, make_volatile_rqos(), &impl->assignment_listener);
+    impl->retry_reader = impl->subscriber->create_datareader(impl->retry_topic, make_volatile_rqos(), &impl->retry_listener);
+    impl->stop_reader = impl->subscriber->create_datareader(impl->stop_topic, make_volatile_rqos(), &impl->stop_listener);
     if (!impl->assignment_reader || !impl->retry_reader || !impl->stop_reader)
     {
         fprintf(stderr, "AnalysisBridge: failed to create one or more readers\n");
