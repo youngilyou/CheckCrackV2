@@ -343,25 +343,70 @@
                                 <TextBlock Text="수동 다운로드 목록 조회에만 사용됩니다 (자동 경로는 DB에 접속하지 않음)."
                                            Foreground="{StaticResource Text2}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
-                                <TextBlock Text="Host" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
-                                <TextBox Text="{Binding CrackVisionPostgresHost, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,10"
-                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Host" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                        <TextBox Text="{Binding CrackVisionPostgresHost, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
+                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Port" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                        <TextBox Text="{Binding CrackVisionPostgresPort, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
+                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                    </StackPanel>
+                                </Grid>
 
-                                <TextBlock Text="Port" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
-                                <TextBox Text="{Binding CrackVisionPostgresPort, UpdateSourceTrigger=PropertyChanged}" Width="100" HorizontalAlignment="Left" Padding="8,5" Margin="0,0,0,10"
-                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Database" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                        <TextBox Text="{Binding CrackVisionPostgresDatabase, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
+                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="User" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                        <TextBox Text="{Binding CrackVisionPostgresUser, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
+                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                    </StackPanel>
+                                </Grid>
 
-                                <TextBlock Text="Database" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
-                                <TextBox Text="{Binding CrackVisionPostgresDatabase, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,10"
-                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                <Grid Margin="0,0,0,14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Password" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                        <TextBox Text="{Binding CrackVisionPostgresPassword, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
+                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                    </StackPanel>
+                                </Grid>
 
-                                <TextBlock Text="User" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
-                                <TextBox Text="{Binding CrackVisionPostgresUser, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,10"
-                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
-
-                                <TextBlock Text="Password" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
-                                <TextBox Text="{Binding CrackVisionPostgresPassword, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
-                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                <!-- 점검/실행 절차: 2026-08-27 mngdata_backend OOM 종료 + Postgres 원격 접속
+                                     차단 복구 작업 중 반복 확인한 순서 그대로 (전체 배경은
+                                     MngData/CLAUDE.local.md "mngdata_backend OOM 종료 + CrackVisionDB
+                                     원격 접속 막힘 복구" 참고). -->
+                                <Border Background="{StaticResource Surface2}" CornerRadius="6" Padding="10,8">
+                                    <StackPanel>
+                                        <TextBlock Text="점검 · 실행 절차" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <TextBlock Foreground="{StaticResource Text2}" FontSize="10.5" TextWrapping="Wrap" LineHeight="16">
+                                            1) 서버에서 mngdata_backend 상태 확인 (curl http://서버IP:18080/api/system/health)<LineBreak/>
+                                            2) 죽어있으면: backend_core/scripts/start.sh<LineBreak/>
+                                            3) DB 접속이 막혀있으면: sudo scripts/allow_postgres_remote_access.sh &lt;이 PC의 IP&gt;<LineBreak/>
+                                            4) 위 값 입력 후 저장 → 아래 "목록 새로고침"으로 연결 테스트
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
                             </StackPanel>
                         </Border>
 
@@ -372,29 +417,59 @@
                                 <TextBlock Text="자동/수동 경로 둘 다 이 정보로 zip 파일을 내려받습니다. 개인키를 쓰려면 Private Key Path만 입력(비밀번호는 비워둠)."
                                            Foreground="{StaticResource Text2}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
-                                <TextBlock Text="Host" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
-                                <TextBox Text="{Binding CrackVisionSftpHost, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,10"
-                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Host" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                        <TextBox Text="{Binding CrackVisionSftpHost, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
+                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Port" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                        <TextBox Text="{Binding CrackVisionSftpPort, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
+                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                    </StackPanel>
+                                </Grid>
 
-                                <TextBlock Text="Port" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
-                                <TextBox Text="{Binding CrackVisionSftpPort, UpdateSourceTrigger=PropertyChanged}" Width="100" HorizontalAlignment="Left" Padding="8,5" Margin="0,0,0,10"
-                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="User" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                        <TextBox Text="{Binding CrackVisionSftpUser, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
+                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Password (선택)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                        <TextBox Text="{Binding CrackVisionSftpPassword, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
+                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                    </StackPanel>
+                                </Grid>
 
-                                <TextBlock Text="User" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
-                                <TextBox Text="{Binding CrackVisionSftpUser, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,10"
-                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
-
-                                <TextBlock Text="Password (선택)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
-                                <TextBox Text="{Binding CrackVisionSftpPassword, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,10"
-                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
-
-                                <TextBlock Text="Private Key Path (선택)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
-                                <TextBox Text="{Binding CrackVisionSftpPrivateKeyPath, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,10"
-                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
-
-                                <TextBlock Text="Worker ID (비워두면 컴퓨터 이름 사용, 재시작 후 반영)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
-                                <TextBox Text="{Binding CrackVisionWorkerId, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
-                                         Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Private Key Path (선택)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                        <TextBox Text="{Binding CrackVisionSftpPrivateKeyPath, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
+                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Worker ID (비워두면 컴퓨터 이름 사용)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                        <TextBox Text="{Binding CrackVisionWorkerId, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
+                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                    </StackPanel>
+                                </Grid>
                             </StackPanel>
                         </Border>
 
