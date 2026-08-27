@@ -414,7 +414,7 @@
                         <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource CardBorder}" Margin="0,0,0,16">
                             <StackPanel>
                                 <TextBlock Text="SFTP (zip 다운로드)" Style="{StaticResource Kicker}" Margin="0,0,0,10"/>
-                                <TextBlock Text="자동/수동 경로 둘 다 이 정보로 zip 파일을 내려받습니다. 개인키를 쓰려면 Private Key Path만 입력(비밀번호는 비워둠)."
+                                <TextBlock Text="자동/수동 경로 둘 다 이 정보로 zip 파일을 내려받습니다. Password 방식만 지원하므로 반드시 입력해야 합니다."
                                            Foreground="{StaticResource Text2}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
                                 <Grid Margin="0,0,0,10">
@@ -447,7 +447,7 @@
                                                  Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
-                                        <TextBlock Text="Password (선택)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                        <TextBlock Text="Password (필수)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
                                         <TextBox Text="{Binding CrackVisionSftpPassword, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
                                                  Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
                                     </StackPanel>
@@ -456,15 +456,8 @@
                                 <Grid Margin="0,0,0,10">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="12"/>
-                                        <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
-                                        <TextBlock Text="Private Key Path (선택)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
-                                        <TextBox Text="{Binding CrackVisionSftpPrivateKeyPath, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
-                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="2">
                                         <TextBlock Text="Worker ID (비워두면 컴퓨터 이름 사용)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
                                         <TextBox Text="{Binding CrackVisionWorkerId, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
                                                  Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
@@ -490,12 +483,25 @@
                                     <Button Grid.Column="1" Content="목록 새로고침" Command="{Binding RefreshRemoteArchivesCommand}" Padding="8,4"/>
                                 </Grid>
                                 <TextBlock Text="다운로드+압축해제+왼쪽 목록 등록까지만 자동으로 하고, 분석 실행은 직접 하셔야 합니다 (폴더를 직접 추가했을 때와 동일)."
-                                           Foreground="{StaticResource Text2}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,4"/>
-                                <TextBlock Foreground="{StaticResource Text2}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10">
-                                    <TextBlock.Text>
-                                        <Binding Path="RootPath" StringFormat="저장 위치: {0}\remote_downloads\extracted\ 아래에 회사명_동_ID 폴더로 저장됩니다."/>
-                                    </TextBlock.Text>
-                                </TextBlock>
+                                           Foreground="{StaticResource Text2}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
+
+                                <!-- 저장 위치: 이전엔 앱 프로젝트 루트 밑에 고정이었는데, 운용자가 직접
+                                     고를 수 있어야 한다는 요청(2026-08-27)으로 편집 가능하게 변경.
+                                     기본값은 CrackVisionDbSettingsStore의 DownloadFolder(C:\temp). -->
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="저장 위치 (아래에 zips/, extracted/ 하위 폴더가 생성됩니다)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+                                        <TextBox Text="{Binding CrackVisionDownloadFolder, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
+                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="2" Content="찾아보기..." Command="{Binding BrowseCrackVisionDownloadFolderCommand}"
+                                            Padding="10,5" VerticalAlignment="Bottom"/>
+                                </Grid>
                                 <ItemsControl ItemsSource="{Binding RemoteArchives}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>

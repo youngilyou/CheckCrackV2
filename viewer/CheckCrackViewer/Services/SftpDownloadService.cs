@@ -22,6 +22,12 @@ public static class SftpDownloadService
     {
         if (string.IsNullOrWhiteSpace(settings.SftpHost))
             throw new InvalidOperationException("SFTP host가 설정되지 않았습니다 (설정 화면에서 CrackVisionDB/SFTP 접속 정보를 입력하세요).");
+        // Password auth only (no private-key option) -- a blank password here means the actual
+        // SSH.NET connect below would throw a raw SshAuthenticationException instead of this
+        // clear, actionable message. SaveCrackVisionSettings already blocks saving a blank
+        // password, but this still catches settings.json files saved before that check existed.
+        if (string.IsNullOrWhiteSpace(settings.SftpPassword))
+            throw new InvalidOperationException("SFTP password가 설정되지 않았습니다 (설정 화면에서 CrackVisionDB/SFTP 접속 정보를 입력하세요).");
 
         using var client = CreateClient(settings);
         await Task.Run(() =>
@@ -55,13 +61,7 @@ public static class SftpDownloadService
         }, cancellationToken);
     }
 
-    private static SftpClient CreateClient(CrackVisionDbSettings settings)
-    {
-        if (!string.IsNullOrWhiteSpace(settings.SftpPrivateKeyPath))
-        {
-            var keyFile = new PrivateKeyFile(settings.SftpPrivateKeyPath);
-            return new SftpClient(settings.SftpHost, settings.SftpPort, settings.SftpUser, keyFile);
-        }
-        return new SftpClient(settings.SftpHost, settings.SftpPort, settings.SftpUser, settings.SftpPassword);
-    }
+    // Password auth only (2026-08-27 operator decision) -- no private-key option here.
+    private static SftpClient CreateClient(CrackVisionDbSettings settings) =>
+        new(settings.SftpHost, settings.SftpPort, settings.SftpUser, settings.SftpPassword);
 }

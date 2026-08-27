@@ -298,8 +298,8 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private int _crackVisionSftpPort = 22;
     [ObservableProperty] private string _crackVisionSftpUser = "";
     [ObservableProperty] private string _crackVisionSftpPassword = "";
-    [ObservableProperty] private string _crackVisionSftpPrivateKeyPath = "";
     [ObservableProperty] private string _crackVisionWorkerId = "";
+    [ObservableProperty] private string _crackVisionDownloadFolder = @"C:\temp";
     [ObservableProperty] private string _crackVisionSettingsStatus = "";
     [ObservableProperty] private bool _isLoadingRemoteArchives;
 
@@ -321,8 +321,8 @@ public partial class MainViewModel : ObservableObject
         CrackVisionSftpPort = s.SftpPort;
         CrackVisionSftpUser = s.SftpUser;
         CrackVisionSftpPassword = s.SftpPassword;
-        CrackVisionSftpPrivateKeyPath = s.SftpPrivateKeyPath;
         CrackVisionWorkerId = s.WorkerId;
+        CrackVisionDownloadFolder = string.IsNullOrWhiteSpace(s.DownloadFolder) ? @"C:\temp" : s.DownloadFolder;
     }
 
     private CrackVisionDbSettings BuildCrackVisionSettings() => new()
@@ -336,13 +336,22 @@ public partial class MainViewModel : ObservableObject
         SftpPort = CrackVisionSftpPort,
         SftpUser = CrackVisionSftpUser.Trim(),
         SftpPassword = CrackVisionSftpPassword,
-        SftpPrivateKeyPath = CrackVisionSftpPrivateKeyPath.Trim(),
         WorkerId = CrackVisionWorkerId.Trim(),
+        DownloadFolder = string.IsNullOrWhiteSpace(CrackVisionDownloadFolder) ? @"C:\temp" : CrackVisionDownloadFolder.Trim(),
     };
 
     [RelayCommand]
     private void SaveCrackVisionSettings()
     {
+        // Password-only SFTP auth (2026-08-27 operator decision, no private-key option) means a
+        // blank password isn't "no auth configured yet" -- it's a guaranteed SshAuthenticationException
+        // at download time. Require it here instead, at the point where it's still easy to fix.
+        if (string.IsNullOrWhiteSpace(CrackVisionSftpHost) || string.IsNullOrWhiteSpace(CrackVisionSftpPassword))
+        {
+            CrackVisionSettingsStatus = "저장 실패: SFTP Host/Password는 필수입니다 (Password 방식만 지원).";
+            return;
+        }
+
         try
         {
             CrackVisionDbSettingsStore.Save(BuildCrackVisionSettings());
@@ -352,6 +361,22 @@ public partial class MainViewModel : ObservableObject
         {
             CrackVisionSettingsStatus = $"저장 실패: {ex.Message}";
         }
+    }
+
+    /// <summary>"수동 다운로드" zip/압축해제 저장 위치 선택 -- 이전엔 RootPath(앱 프로젝트 루트)
+    /// 밑에 고정이었는데, 운용자가 직접 고를 수 있어야 한다는 요청(2026-08-27)으로 분리. 여기서
+    /// 바꾼 값은 "저장" 버튼을 눌러야 crackvision_db_settings.json에 실제로 저장됨(다른
+    /// CrackVisionDB/SFTP 필드와 동일한 관례).</summary>
+    [RelayCommand]
+    private void BrowseCrackVisionDownloadFolder()
+    {
+        var dialog = new OpenFolderDialog
+        {
+            Title = "수동 다운로드 저장 위치 선택",
+            InitialDirectory = Directory.Exists(CrackVisionDownloadFolder) ? CrackVisionDownloadFolder : @"C:\",
+        };
+        if (dialog.ShowDialog() == true)
+            CrackVisionDownloadFolder = dialog.FolderName;
     }
 
     /// <summary>CrackVisionDB(crackvision_archives)를 직접 조회 -- 자동 경로와 무관, 관리자가
@@ -393,11 +418,11 @@ public partial class MainViewModel : ObservableObject
         {
             row.Status = "다운로드 중...";
             var settings = BuildCrackVisionSettings();
-            var localZipPath = Path.Combine(RootPath, "remote_downloads", "zips", $"{archive.ArchiveId}.zip");
+            var localZipPath = Path.Combine(settings.DownloadFolder, "zips", $"{archive.ArchiveId}.zip");
             await SftpDownloadService.DownloadAsync(settings, archive.ZipPath, localZipPath);
 
             row.Status = "압축 해제 중...";
-            var extractDir = Path.Combine(RootPath, "remote_downloads", "extracted",
+            var extractDir = Path.Combine(settings.DownloadFolder, "extracted",
                 $"{archive.Company}_{archive.Building}_{archive.ArchiveId}");
             if (Directory.Exists(extractDir))
                 Directory.Delete(extractDir, recursive: true);

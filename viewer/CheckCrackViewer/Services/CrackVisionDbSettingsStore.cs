@@ -25,16 +25,20 @@ public sealed class CrackVisionDbSettings
     // SFTP -- the actual zip download transport, used by BOTH the automatic (AnalysisAssignment)
     // and manual paths. Same host as the DDS-Router/backend_core host in the common case (the
     // archive zip lives on that host's local disk, see crackvision_archive_manager.cpp).
+    // Password auth only (2026-08-27 operator decision) -- no private-key option here.
     public string SftpHost { get; set; } = "";
     public int SftpPort { get; set; } = 22;
     public string SftpUser { get; set; } = "";
     public string SftpPassword { get; set; } = "";
-    public string SftpPrivateKeyPath { get; set; } = ""; // empty -> use SftpPassword instead
 
     // This workstation's own identity for facade_analysis_msgs (WorkerHeartbeat.worker_id,
     // stamped on every outgoing message). Defaults to the machine's hostname if left blank --
     // see AnalysisBridgeService callers.
     public string WorkerId { get; set; } = "";
+
+    // "수동 다운로드" 목록에서 zip을 받고 압축 해제할 위치 -- 이전엔 RootPath(앱 프로젝트 루트)
+    // 밑에 고정이었는데, 운용자가 직접 고를 수 있어야 한다는 요청으로 분리(2026-08-27).
+    public string DownloadFolder { get; set; } = @"C:\temp";
 }
 
 public static class CrackVisionDbSettingsStore
