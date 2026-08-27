@@ -490,7 +490,12 @@
                                     <Button Grid.Column="1" Content="목록 새로고침" Command="{Binding RefreshRemoteArchivesCommand}" Padding="8,4"/>
                                 </Grid>
                                 <TextBlock Text="다운로드+압축해제+왼쪽 목록 등록까지만 자동으로 하고, 분석 실행은 직접 하셔야 합니다 (폴더를 직접 추가했을 때와 동일)."
-                                           Foreground="{StaticResource Text2}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                           Foreground="{StaticResource Text2}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                                <TextBlock Foreground="{StaticResource Text2}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10">
+                                    <TextBlock.Text>
+                                        <Binding Path="RootPath" StringFormat="저장 위치: {0}\remote_downloads\extracted\ 아래에 회사명_동_ID 폴더로 저장됩니다."/>
+                                    </TextBlock.Text>
+                                </TextBlock>
                                 <ItemsControl ItemsSource="{Binding RemoteArchives}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
@@ -510,8 +515,9 @@
                                                     <TextBlock Grid.Column="2" Text="{Binding Building}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis"/>
                                                     <TextBlock Grid.Column="3" Text="{Binding ImageCount}" Foreground="{StaticResource Text2}"/>
                                                     <TextBlock Grid.Column="4" Text="{Binding CreatedAt}" Foreground="{StaticResource Text2}" FontSize="11"/>
-                                                    <TextBlock Grid.Column="5"/>
-                                                    <Button Grid.Column="6" Content="다운로드+등록"
+                                                    <TextBlock Grid.Column="5" Text="{Binding Status}" Foreground="{StaticResource Accent}" FontSize="11"
+                                                               TextWrapping="Wrap" VerticalAlignment="Center" Margin="10,0"/>
+                                                    <Button Grid.Column="6" Content="다운로드+등록" IsEnabled="{Binding IsNotBusy}"
                                                             Command="{Binding DataContext.DownloadAndRegisterArchiveCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                             CommandParameter="{Binding}" Padding="8,4"/>
                                                 </Grid>

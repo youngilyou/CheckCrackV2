@@ -304,8 +304,10 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _isLoadingRemoteArchives;
 
     /// <summary>수동 다운로드 목록 -- "새로고침" 클릭 시 CrackVisionDB(crackvision_archives)를
-    /// 직접 조회해서 채움. 자동(원격 명령) 경로는 이 목록/쿼리와 전혀 무관.</summary>
-    public ObservableCollection<CrackVisionArchiveRecord> RemoteArchives { get; } = new();
+    /// 직접 조회해서 채움. 자동(원격 명령) 경로는 이 목록/쿼리와 전혀 무관. 각 행은
+    /// RemoteArchiveRowViewModel로 감싸서 다운로드 진행 상태를 그 행 자리에서 바로 보여줌
+    /// (예전엔 저장 버튼 옆의 공용 상태 텍스트 하나뿐이라 실제로는 안 보였음).</summary>
+    public ObservableCollection<RemoteArchiveRowViewModel> RemoteArchives { get; } = new();
 
     private void LoadCrackVisionSettings()
     {
@@ -363,7 +365,7 @@ public partial class MainViewModel : ObservableObject
             var records = await CrackVisionArchiveQueryService.ListArchivesAsync(BuildCrackVisionSettings());
             RemoteArchives.Clear();
             foreach (var r in records)
-                RemoteArchives.Add(r);
+                RemoteArchives.Add(new RemoteArchiveRowViewModel(r));
             CrackVisionSettingsStatus = $"{records.Count}건 조회됨";
         }
         catch (Exception ex)
@@ -379,18 +381,22 @@ public partial class MainViewModel : ObservableObject
     /// <summary>관리자가 "수동 다운로드" 목록에서 직접 선택 -- 다운로드+압축해제+등록까지만 하고
     /// 분석은 시작하지 않는다(수동으로 폴더를 추가했을 때와 동일한 관례, 실행은 별도 "실행"
     /// 클릭으로). 자동(원격 명령) 경로의 RegisterAndRunExtractedArchiveAsync와 다른 점이 바로
-    /// 이 부분 -- "수동은 관리자가 선택"(다운로드 시점 + 실행 시점 둘 다).</summary>
+    /// 이 부분 -- "수동은 관리자가 선택"(다운로드 시점 + 실행 시점 둘 다). 진행 상태는 해당
+    /// row.Status에 바로 표시(리스트 항목 자리, 클릭한 버튼 바로 옆) -- 예전엔 저장 버튼 옆
+    /// 공용 텍스트 하나뿐이라 실제로는 안 보였음(2026-08-27 피드백).</summary>
     [RelayCommand]
-    private async Task DownloadAndRegisterArchive(CrackVisionArchiveRecord archive)
+    private async Task DownloadAndRegisterArchive(RemoteArchiveRowViewModel row)
     {
+        var archive = row.Record;
+        row.IsBusy = true;
         try
         {
-            CrackVisionSettingsStatus = $"다운로드 중: archive_id={archive.ArchiveId}";
+            row.Status = "다운로드 중...";
             var settings = BuildCrackVisionSettings();
             var localZipPath = Path.Combine(RootPath, "remote_downloads", "zips", $"{archive.ArchiveId}.zip");
             await SftpDownloadService.DownloadAsync(settings, archive.ZipPath, localZipPath);
 
-            CrackVisionSettingsStatus = $"압축 해제 중: archive_id={archive.ArchiveId}";
+            row.Status = "압축 해제 중...";
             var extractDir = Path.Combine(RootPath, "remote_downloads", "extracted",
                 $"{archive.Company}_{archive.Building}_{archive.ArchiveId}");
             if (Directory.Exists(extractDir))
@@ -399,11 +405,15 @@ public partial class MainViewModel : ObservableObject
             System.IO.Compression.ZipFile.ExtractToDirectory(localZipPath, extractDir);
 
             RegisterExtractedArchive(extractDir, archive.Company, archive.Building);
-            CrackVisionSettingsStatus = $"등록 완료: archive_id={archive.ArchiveId} -- 왼쪽 목록에서 직접 실행하세요.";
+            row.Status = $"등록 완료 -- 왼쪽 목록에서 직접 실행하세요. 저장 위치: {extractDir}";
         }
         catch (Exception ex)
         {
-            CrackVisionSettingsStatus = $"다운로드/등록 실패 (archive_id={archive.ArchiveId}): {ex.Message}";
+            row.Status = $"실패: {ex.Message}";
+        }
+        finally
+        {
+            row.IsBusy = false;
         }
     }
 
