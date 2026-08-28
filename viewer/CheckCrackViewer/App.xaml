@@ -7,11 +7,18 @@
     <Application.Resources>
         <ResourceDictionary>
 
-            <!-- ===== palette ===== -->
-            <SolidColorBrush x:Key="Bg" Color="#14181A"/>
-            <SolidColorBrush x:Key="Surface" Color="#1C2124"/>
-            <SolidColorBrush x:Key="Surface2" Color="#242A2D"/>
-            <SolidColorBrush x:Key="Border" Color="#333B3E"/>
+            <!-- ===== palette =====
+                 2026-08-28: 로그인 후 화면(일반 배경/햄버거 사이드바 포함) 전체를 사용자가
+                 지정한 어두운 무채색 계열로 전환: 기존엔 청록빛이 살짝 도는 검정
+                 (#14181A 등)이었는데, 완전 중립(neutral) 톤의 짙은 회색으로 바꾼다.
+                 Bg(일반 배경)/Surface(햄버거 사이드바)를 서로 다른 밝기로 두어 구별되게
+                 하고, Surface2(카드/버튼)/Border는 그 위에 같은 간격으로 밝아지는 기존
+                 구조를 그대로 유지한다. 로그인 화면(LoginWindow)은 별도 라이트 팔레트를
+                 쓰므로 이 값들의 영향을 받지 않는다. -->
+            <SolidColorBrush x:Key="Bg" Color="#2B2B2E"/>
+            <SolidColorBrush x:Key="Surface" Color="#39393C"/>
+            <SolidColorBrush x:Key="Surface2" Color="#45454A"/>
+            <SolidColorBrush x:Key="Border" Color="#57575C"/>
             <SolidColorBrush x:Key="Text" Color="#E7E9E4"/>
             <SolidColorBrush x:Key="Text2" Color="#9AA39C"/>
             <SolidColorBrush x:Key="Text3" Color="#6F7872"/>
