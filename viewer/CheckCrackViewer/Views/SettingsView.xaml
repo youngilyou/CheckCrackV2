@@ -203,23 +203,14 @@
                         </Border>
 
                         <!-- === NEW: 환경 설정 (읽기 전용) === -->
+                        <!-- 2026-08-28: "Python 실행 파일"(로컬 PC의 python.exe 절대경로, 사용자명
+                             포함) 표시는 제거: 화면에 노출할 필요 없는 로컬 환경 정보. -->
                         <Border Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" Style="{StaticResource CardBorder}">
                             <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="24"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-
-                                <StackPanel Grid.Column="0">
+                                <StackPanel>
                                     <TextBlock Text="환경 설정" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
                                     <TextBlock Text="RootPath" Foreground="{StaticResource Text2}" FontSize="11"/>
-                                    <TextBlock Text="{Binding RootPath}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,0,0,10"/>
-                                </StackPanel>
-
-                                <StackPanel Grid.Column="2" Margin="0,26,0,0">
-                                    <TextBlock Text="Python 실행 파일" Foreground="{StaticResource Text2}" FontSize="11"/>
-                                    <TextBlock Text="{Binding PythonExePath}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap"/>
+                                    <TextBlock Text="{Binding RootPath}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap"/>
                                 </StackPanel>
                             </Grid>
                         </Border>
@@ -502,30 +493,67 @@
                                     <Button Grid.Column="2" Content="찾아보기..." Command="{Binding BrowseCrackVisionDownloadFolderCommand}"
                                             Padding="10,5" VerticalAlignment="Bottom"/>
                                 </Grid>
+                                <!-- 헤더 행: 아래 ItemsControl의 각 행과 정확히 같은 컬럼 폭. -->
+                                <Grid Margin="10,0,10,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="60"/>
+                                        <ColumnDefinition Width="140"/>
+                                        <ColumnDefinition Width="110"/>
+                                        <ColumnDefinition Width="120"/>
+                                        <ColumnDefinition Width="60"/>
+                                        <ColumnDefinition Width="130"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Archive ID" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold"/>
+                                    <TextBlock Grid.Column="1" Text="회사" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold"/>
+                                    <TextBlock Grid.Column="2" Text="고객 ID" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold"/>
+                                    <TextBlock Grid.Column="3" Text="동" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold"/>
+                                    <TextBlock Grid.Column="4" Text="이미지 수" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold"/>
+                                    <TextBlock Grid.Column="5" Text="생성 시각" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold"/>
+                                    <TextBlock Grid.Column="6" Text="진행 상태" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" Margin="10,0"/>
+                                    <TextBlock Grid.Column="7" Text="원본" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold"/>
+                                    <TextBlock Grid.Column="8" Text="스티칭 결과" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" Margin="6,0,0,0"/>
+                                    <TextBlock Grid.Column="9" Text="보고서" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" Margin="6,0,0,0"/>
+                                </Grid>
                                 <ItemsControl ItemsSource="{Binding RemoteArchives}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <Border Background="{StaticResource Surface2}" CornerRadius="6" Padding="10,7" Margin="0,0,0,6">
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="70"/>
-                                                        <ColumnDefinition Width="160"/>
-                                                        <ColumnDefinition Width="160"/>
-                                                        <ColumnDefinition Width="70"/>
+                                                        <ColumnDefinition Width="60"/>
                                                         <ColumnDefinition Width="140"/>
+                                                        <ColumnDefinition Width="110"/>
+                                                        <ColumnDefinition Width="120"/>
+                                                        <ColumnDefinition Width="60"/>
+                                                        <ColumnDefinition Width="130"/>
                                                         <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="Auto"/>
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
                                                     <TextBlock Grid.Column="0" Text="{Binding ArchiveId}" FontFamily="Consolas" Foreground="{StaticResource Text}"/>
                                                     <TextBlock Grid.Column="1" Text="{Binding Company}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis"/>
-                                                    <TextBlock Grid.Column="2" Text="{Binding Building}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis"/>
-                                                    <TextBlock Grid.Column="3" Text="{Binding ImageCount}" Foreground="{StaticResource Text2}"/>
-                                                    <TextBlock Grid.Column="4" Text="{Binding CreatedAt}" Foreground="{StaticResource Text2}" FontSize="11"/>
-                                                    <TextBlock Grid.Column="5" Text="{Binding Status}" Foreground="{StaticResource Accent}" FontSize="11"
+                                                    <TextBlock Grid.Column="2" Text="{Binding ContractId}" Foreground="{StaticResource Text2}" FontFamily="Consolas" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock Grid.Column="3" Text="{Binding Building}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock Grid.Column="4" Text="{Binding ImageCount}" Foreground="{StaticResource Text2}"/>
+                                                    <TextBlock Grid.Column="5" Text="{Binding CreatedAt}" Foreground="{StaticResource Text2}" FontSize="11"/>
+                                                    <TextBlock Grid.Column="6" Text="{Binding DisplayStatus}" Foreground="{StaticResource Accent}" FontSize="11"
                                                                TextWrapping="Wrap" VerticalAlignment="Center" Margin="10,0"/>
-                                                    <Button Grid.Column="6" Content="다운로드+등록" IsEnabled="{Binding IsNotBusy}"
+                                                    <Button Grid.Column="7" Content="다운로드+등록" IsEnabled="{Binding IsNotBusy}"
                                                             Command="{Binding DataContext.DownloadAndRegisterArchiveCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                             CommandParameter="{Binding}" Padding="8,4"/>
+                                                    <Button Grid.Column="8" Content="스티칭 결과" Margin="6,0,0,0" Padding="8,4"
+                                                            IsEnabled="{Binding CanDownloadStitchingResult}"
+                                                            Command="{Binding DataContext.DownloadStitchingResultCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                            CommandParameter="{Binding}"/>
+                                                    <Button Grid.Column="9" Content="보고서" Margin="6,0,0,0" Padding="8,4"
+                                                            IsEnabled="{Binding CanDownloadReport}"
+                                                            Command="{Binding DataContext.DownloadReportCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                            CommandParameter="{Binding}"/>
                                                 </Grid>
                                             </Border>
                                         </DataTemplate>

@@ -33,8 +33,9 @@ public sealed class RemoteAnalysisJobsViewModel
 {
     private readonly AnalysisBridgeService _bridge;
     private readonly Func<CrackVisionDbSettings> _settingsProvider;
-    private readonly Func<string, string, string, Task<bool>> _registerAndRun;
+    private readonly Func<string, string, string, long?, string?, Task<bool>> _registerAndRun;
     private readonly Action<string, string>? _onProgress;
+    private readonly Action? _onAssignmentReceived;
     private readonly string _rootPath;
     private readonly string _downloadRoot;
     private readonly string _extractRoot;
@@ -47,21 +48,30 @@ public sealed class RemoteAnalysisJobsViewModel
 
     public ObservableCollection<RemoteAnalysisJobViewModel> Jobs { get; } = new();
 
-    /// <param name="registerAndRun">(extractedDir, company, building) -> Task -- calls back into
-    /// MainViewModel.RegisterAndRunExtractedArchiveAsync.</param>
+    /// <param name="registerAndRun">(extractedDir, company, building, archiveId) -> Task -- calls
+    /// back into MainViewModel.RegisterAndRunExtractedArchiveAsync. archiveId lets GenerateReport
+    /// later write analysis results back to this archive's crackvision_archives row.</param>
     /// <param name="onProgress">2026-08-27: (level, message) -- fired at every stage transition
     /// (수신됨/다운로드 중/압축 해제 중/분석 시작/완료/오류) so MainViewModel can mirror this into
     /// the top-bar "수신 상태" indicator and the LIVE LOG panel. Already marshaled to the UI
     /// thread by the time it's invoked (see Report below) -- MainViewModel's handler must NOT
     /// dispatch again. Null is fine (tests / no-op).</param>
+    /// <param name="onAssignmentReceived">2026-08-28: fired once per genuinely-new assignment
+    /// (after the dedup check, before any download starts) -- MainViewModel uses this to switch
+    /// SelectedMenu to "analysis" so the operator sees the incoming job even if some other tab
+    /// (설정 등) was open (operator request: "다른 창에 선택이 되어 있어도... 분석-스티칭 창으로
+    /// 전환이 되어야함"). Deliberately NOT folded into onProgress -- that fires on every
+    /// subsequent stage too, and repeatedly yanking the operator back to this tab while they've
+    /// since navigated elsewhere on purpose would be worse than not switching at all.</param>
     public RemoteAnalysisJobsViewModel(AnalysisBridgeService bridge, Func<CrackVisionDbSettings> settingsProvider,
-        Func<string, string, string, Task<bool>> registerAndRun, string rootPath,
-        Action<string, string>? onProgress = null)
+        Func<string, string, string, long?, string?, Task<bool>> registerAndRun, string rootPath,
+        Action<string, string>? onProgress = null, Action? onAssignmentReceived = null)
     {
         _bridge = bridge;
         _settingsProvider = settingsProvider;
         _registerAndRun = registerAndRun;
         _onProgress = onProgress;
+        _onAssignmentReceived = onAssignmentReceived;
         _rootPath = rootPath;
         _downloadRoot = Path.Combine(rootPath, "remote_downloads", "zips");
         _extractRoot = Path.Combine(rootPath, "remote_downloads", "extracted");
@@ -83,6 +93,7 @@ public sealed class RemoteAnalysisJobsViewModel
             return;
         }
         ProcessedArchiveStore.Append(_rootPath, assignment.ArchiveId);
+        RunOnUi(() => _onAssignmentReceived?.Invoke());
 
         var job = new RemoteAnalysisJobViewModel
         {
@@ -151,7 +162,7 @@ public sealed class RemoteAnalysisJobsViewModel
             // 스레드에서의 해당 SourceCollection에 대한 변경 내용을 지원하지 않습니다." (confirmed via
             // an actual remote-dispatch run, archive #39 -- the manual "실행" button never hit this
             // because a WPF Command execution is already on the UI thread by construction).
-            var success = await RunOnUiAsync(() => _registerAndRun(extractDir, assignment.Company, assignment.Building));
+            var success = await RunOnUiAsync(() => _registerAndRun(extractDir, assignment.Company, assignment.Building, assignment.ArchiveId, assignment.ZipRemotePath));
 
             SetStatus(job, success ? "완료" : "완료 (일부 실패)");
             Report(success ? "INFO" : "WARNING", $"[{(success ? "완료" : "완료 (일부 실패)")}] {tag}");

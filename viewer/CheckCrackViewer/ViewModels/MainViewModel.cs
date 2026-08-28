@@ -82,7 +82,6 @@ public partial class MainViewModel : ObservableObject
 
     // --- 설정 > 시스템 상태 탭: 읽기 전용 모니터링 값 (실제 신호만, 지어내지 않음) ---
     [ObservableProperty] private string _aiModelPath = "확인 중...";
-    [ObservableProperty] private string _pythonExePath = "확인 중...";
     [ObservableProperty] private string _storageStatusText = "확인 중...";
 
     // --- 계정(로그인) 아이디/비밀번호 변경, "설정" 페이지 -- UserStore(SQLite)가
@@ -215,7 +214,8 @@ public partial class MainViewModel : ObservableObject
         _ = InitializeGpuDetectionAsync();
 
         _remoteJobs = new RemoteAnalysisJobsViewModel(_analysisBridge, CrackVisionDbSettingsStore.Load,
-            RegisterAndRunExtractedArchiveAsync, RootPath, OnRemoteJobProgress);
+            RegisterAndRunExtractedArchiveAsync, RootPath, OnRemoteJobProgress,
+            onAssignmentReceived: () => SelectedMenu = "analysis");
         _analysisBridge.AssignmentReceived += _remoteJobs.HandleAssignment;
         // Retry/Stop: only meaningful after an AnalysisErrorNotify the operator has acted on
         // (see FacadeAnalysis.idl's own comment on these two) -- this pass surfaces them as a
@@ -448,8 +448,63 @@ public partial class MainViewModel : ObservableObject
             Directory.CreateDirectory(Path.GetDirectoryName(extractDir)!);
             System.IO.Compression.ZipFile.ExtractToDirectory(localZipPath, extractDir);
 
-            RegisterExtractedArchive(extractDir, archive.Company, archive.Building);
+            RegisterExtractedArchive(extractDir, archive.Company, archive.Building, archive.ArchiveId, archive.ZipPath);
             row.Status = $"등록 완료 -- 왼쪽 목록에서 직접 실행하세요. 저장 위치: {extractDir}";
+        }
+        catch (Exception ex)
+        {
+            row.Status = $"실패: {ex.Message}";
+        }
+        finally
+        {
+            row.IsBusy = false;
+        }
+    }
+
+    /// <summary>2026-08-28: 스티칭/COLMAP 결과 zip 단순 다운로드 -- 원본 zip과 달리 재분석 대상이
+    /// 아니라 압축 해제/FACADES 등록 없이 파일만 받는다("찾아보기"로 고른 저장 위치 밑
+    /// analysis_results/에). GenerateReport의 write-back이 채워주기 전까지는
+    /// row.HasStitchingResult가 false라 버튼 자체가 비활성.</summary>
+    [RelayCommand]
+    private async Task DownloadStitchingResult(RemoteArchiveRowViewModel row)
+    {
+        var remotePath = row.StitchingZipPath;
+        if (string.IsNullOrEmpty(remotePath))
+            return;
+        row.IsBusy = true;
+        try
+        {
+            row.Status = "스티칭 결과 다운로드 중...";
+            var settings = BuildCrackVisionSettings();
+            var localPath = Path.Combine(settings.DownloadFolder, "analysis_results", Path.GetFileName(remotePath));
+            await SftpDownloadService.DownloadAsync(settings, remotePath, localPath);
+            row.Status = $"스티칭 결과 다운로드 완료: {localPath}";
+        }
+        catch (Exception ex)
+        {
+            row.Status = $"실패: {ex.Message}";
+        }
+        finally
+        {
+            row.IsBusy = false;
+        }
+    }
+
+    /// <summary>2026-08-28: 보고서 PDF 단순 다운로드 -- DownloadStitchingResult와 동일한 패턴.</summary>
+    [RelayCommand]
+    private async Task DownloadReport(RemoteArchiveRowViewModel row)
+    {
+        var remotePath = row.ReportPath;
+        if (string.IsNullOrEmpty(remotePath))
+            return;
+        row.IsBusy = true;
+        try
+        {
+            row.Status = "보고서 다운로드 중...";
+            var settings = BuildCrackVisionSettings();
+            var localPath = Path.Combine(settings.DownloadFolder, "analysis_results", Path.GetFileName(remotePath));
+            await SftpDownloadService.DownloadAsync(settings, remotePath, localPath);
+            row.Status = $"보고서 다운로드 완료: {localPath}";
         }
         catch (Exception ex)
         {
@@ -481,7 +536,6 @@ public partial class MainViewModel : ObservableObject
         RecomputeDashboardCounts();
         AiModelPath = PipelineConfigReader.ReadCrackModelPath(RootPath)
             ?? "확인 불가 (config/pipeline.yaml에서 crack.model을 찾을 수 없음)";
-        PythonExePath = PythonEnvironment.DiscoverPythonExe();
         RefreshStorageStatus();
         RecomputeActiveJobs();
         _facadeScanTimer.Start();
@@ -739,7 +793,19 @@ public partial class MainViewModel : ObservableObject
             return;
 
         foreach (var result in classifyDialog.ViewModel.Result)
+        {
             AddRunnableCandidate(result);
+            // 2026-08-28: 로컬 폴더 브라우즈는 CrackVisionDB와 무관 -- 결과는 로컬에만 저장하고
+            // 서버 DB에는 절대 안 씀(운영자 요청). GetOrCreateFacade는 FacadeId로 찾으므로, 같은
+            // FacadeId(예: "ROOF")로 예전에 CrackVisionDB 등록된 적이 있으면 그 옛 ArchiveId가
+            // 이 facade 객체에 남아있을 수 있음 -- GenerateReport의 write-back(ArchiveId 있으면
+            // DB에 반영)이 지금부터는 로컬 폴더를 가리키는 이 facade에 대해 절대 실행되지
+            // 않도록 여기서 명시적으로 지움. ReclassifyFacade는 이 경로를 안 타므로(같은 폴더의
+            // 분류만 바꿈) 영향 없음.
+            var facade = GetOrCreateFacade(result.FacadeId);
+            facade.ArchiveId = null;
+            facade.RemoteZipPath = null;
+        }
 
         RebuildFacadeTree();
     }
@@ -758,7 +824,15 @@ public partial class MainViewModel : ObservableObject
     /// folders. Falls back to treating the extracted root itself as a single facade if it has no
     /// direction subfolders (a single-direction archive). Returns the registered facades so the
     /// caller can decide whether to also run them.</summary>
-    public List<FacadeItemViewModel> RegisterExtractedArchive(string extractedRootDir, string company, string building)
+    /// <param name="archiveId">crackvision_archives.archive_id this extraction came from --
+    /// null when not registered via CrackVisionDB. Stamped onto every resulting facade so
+    /// GenerateReport can later write its output paths back to that row (see
+    /// FacadeItemViewModel.ArchiveId's own comment for the multi-direction-per-archive caveat).</param>
+    /// <param name="remoteZipPath">The original zip's remote SFTP path (archive.ZipPath / DDS
+    /// AnalysisAssignment.ZipRemotePath) -- GenerateReport derives its upload destination folder
+    /// from this (a sibling analysis_results/ directory), see FacadeItemViewModel.RemoteZipPath.</param>
+    public List<FacadeItemViewModel> RegisterExtractedArchive(string extractedRootDir, string company, string building,
+        long? archiveId = null, string? remoteZipPath = null)
     {
         var directionDirs = Directory.Exists(extractedRootDir)
             ? Directory.GetDirectories(extractedRootDir).Where(HasImages).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList()
@@ -781,7 +855,12 @@ public partial class MainViewModel : ObservableObject
         foreach (var candidate in candidates)
         {
             AddRunnableCandidate(candidate);
-            facades.Add(GetOrCreateFacade(candidate.FacadeId));
+            var facade = GetOrCreateFacade(candidate.FacadeId);
+            if (archiveId is not null)
+                facade.ArchiveId = archiveId;
+            if (remoteZipPath is not null)
+                facade.RemoteZipPath = remoteZipPath;
+            facades.Add(facade);
         }
         RebuildFacadeTree();
         return facades;
@@ -792,21 +871,42 @@ public partial class MainViewModel : ObservableObject
     /// remote path is always "자동 실행"). The manual download path (SettingsView) calls
     /// RegisterExtractedArchive alone instead and leaves running as a separate deliberate
     /// "실행" click, matching how a manually browsed folder already works.</summary>
-    public async Task<bool> RegisterAndRunExtractedArchiveAsync(string extractedRootDir, string company, string building)
+    public async Task<bool> RegisterAndRunExtractedArchiveAsync(string extractedRootDir, string company, string building,
+        long? archiveId = null, string? remoteZipPath = null)
     {
-        var facades = RegisterExtractedArchive(extractedRootDir, company, building);
+        var facades = RegisterExtractedArchive(extractedRootDir, company, building, archiveId, remoteZipPath);
 
-        // Each RunFacadeCommand call independently acquires its own slot from the same
-        // _concurrency gate the manual "실행" button uses -- see RemoteAnalysisJobsViewModel's
-        // own doc comment for why this method does NOT also acquire an archive-level slot itself.
-        await Task.WhenAll(facades.Select(f => RunFacadeCommand.ExecuteAsync(f)));
+        // Each RunFullRemotePipelineAsync call independently acquires its own slot from the same
+        // _concurrency gate the manual "실행" button uses (inside RunFacade) -- see
+        // RemoteAnalysisJobsViewModel's own doc comment for why this method does NOT also
+        // acquire an archive-level slot itself.
+        await Task.WhenAll(facades.Select(RunFullRemotePipelineAsync));
 
-        // RunFacade swallows its own per-facade pipeline failures (logs to facade.AddIssue,
+        // Each stage swallows its own per-facade pipeline failures (logs to facade.AddIssue,
         // never throws) -- awaiting it above always completes without an exception even if the
         // pipeline itself failed. Check the actual OverallStatus each run left behind instead, so
         // the AnalysisResult reported back to FacadePreviewer reflects reality rather than just
         // "the C# call didn't throw".
         return facades.All(f => f.OverallStatus != FacadeOverallStatus.Failed);
+    }
+
+    /// <summary>2026-08-28: 원격(자동) 경로 전용 -- 스티칭만 자동으로 돌고 크랙검사/보고서는 사람이
+    /// CheckCrackViewer에서 따로 클릭해야 했던 것을 "ONE STOP"으로 만들어달라는 요청. 각 단계는
+    /// 이전 단계가 실제로 성공(다음 단계가 요구하는 HasMosaic/HasCrackResults)했을 때만 진행 --
+    /// 수동 "실행" 버튼(단계별 개별 클릭)의 기존 동작은 이 메서드와 무관하게 그대로 유지됨
+    /// (RunFacadeCommand/DetectCracksCommand/GenerateReportCommand를 개별적으로 바인딩하는 XAML
+    /// 버튼들은 안 건드림).</summary>
+    private async Task RunFullRemotePipelineAsync(FacadeItemViewModel facade)
+    {
+        await RunFacadeCommand.ExecuteAsync(facade);
+        if (facade.OverallStatus == FacadeOverallStatus.Failed || !facade.HasMosaic)
+            return;
+
+        await DetectCracksCommand.ExecuteAsync(facade);
+        if (!facade.HasCrackResults)
+            return;
+
+        await GenerateReportCommand.ExecuteAsync(facade);
     }
 
     private static bool HasImages(string dir)
@@ -1327,6 +1427,22 @@ public partial class MainViewModel : ObservableObject
             {
                 ChildProcessRegistry.Unregister(process);
             }
+
+            // 2026-08-28: 스티칭->크랙검사->보고서 전체 파이프라인의 마지막 완료 시점 -- 이
+            // facade가 CrackVisionDB archive에서 왔으면(ArchiveId 있음) 결과를 그 row에
+            // write-back. 이 실패가 방금 성공한 보고서 생성 자체를 실패로 되돌리면 안 되므로
+            // 별도 try/catch(succeeded는 이미 위에서 확정됨, 여기서 안 건드림).
+            if (succeeded && facade.ArchiveId is long archiveId)
+            {
+                try
+                {
+                    await WriteBackAnalysisResultsAsync(facade, outputDir, archiveId);
+                }
+                catch (Exception ex)
+                {
+                    facade.AddIssue($"[WARN] 분석 결과를 CrackVisionDB에 반영하지 못했습니다: {ex.Message}");
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -1337,6 +1453,55 @@ public partial class MainViewModel : ObservableObject
             facade.IsGeneratingReport = false;
             FacadeVersionStore.UpdateStageStatus(baseOutputDir, "report", succeeded ? "OK" : "FAILED");
             RefreshRunVersions(facade, baseOutputDir);
+        }
+    }
+
+    /// <summary>Zips outputDir(스티칭/COLMAP 이미지 + 기타 산출물, 보고서 PDF 포함) and uploads
+    /// it alongside the report PDF to a sibling "analysis_results/" folder next to the original
+    /// image zip on the same SFTP host (see FacadeItemViewModel.RemoteZipPath), then writes both
+    /// remote paths + "검사완료" back to crackvision_archives via
+    /// CrackVisionArchiveQueryService.UpdateAnalysisResultAsync. No-op (returns immediately) if
+    /// RemoteZipPath is unknown -- can't compute an upload destination without it (e.g. a facade
+    /// registered before this feature existed, or a plain local Browse-added folder that was
+    /// never tagged with ArchiveId at all -- though the caller already checked ArchiveId is set,
+    /// RemoteZipPath could in principle still be missing from an older in-memory facade).</summary>
+    private async Task WriteBackAnalysisResultsAsync(FacadeItemViewModel facade, string outputDir, long archiveId)
+    {
+        if (string.IsNullOrEmpty(facade.RemoteZipPath))
+            return;
+
+        var settings = BuildCrackVisionSettings();
+        // 원본 zip 경로는 Linux(backend_core) 호스트의 POSIX 절대경로 -- 그 형제 디렉터리로
+        // analysis_results/를 둔다. Path.GetDirectoryName은 로컬(Windows) 구분자 규칙을 쓰므로
+        // 여기선 직접 마지막 '/' 기준으로 자른다.
+        var lastSlash = facade.RemoteZipPath.LastIndexOf('/');
+        if (lastSlash < 0)
+            throw new InvalidOperationException($"원격 zip 경로 형식이 예상과 다릅니다: {facade.RemoteZipPath}");
+        var remoteResultsDir = facade.RemoteZipPath[..lastSlash] + "/analysis_results";
+
+        var localStitchingZip = Path.Combine(Path.GetTempPath(), $"{facade.FacadeId}_{archiveId}_stitching_{Guid.NewGuid():N}.zip");
+        try
+        {
+            System.IO.Compression.ZipFile.CreateFromDirectory(outputDir, localStitchingZip);
+
+            var stitchingRemoteName = $"{archiveId}_{facade.FacadeId}_stitching.zip";
+            await SftpUploadService.UploadAsync(settings, localStitchingZip, remoteResultsDir, stitchingRemoteName);
+            var stitchingRemotePath = SftpUploadService.RemotePathFor(remoteResultsDir, stitchingRemoteName);
+
+            string? reportRemotePath = null;
+            if (!string.IsNullOrEmpty(facade.ReportPath) && File.Exists(facade.ReportPath))
+            {
+                var reportRemoteName = $"{archiveId}_{facade.FacadeId}_report.pdf";
+                await SftpUploadService.UploadAsync(settings, facade.ReportPath, remoteResultsDir, reportRemoteName);
+                reportRemotePath = SftpUploadService.RemotePathFor(remoteResultsDir, reportRemoteName);
+            }
+
+            await CrackVisionArchiveQueryService.UpdateAnalysisResultAsync(settings, archiveId,
+                stitchingRemotePath, reportRemotePath, "검사완료");
+        }
+        finally
+        {
+            try { File.Delete(localStitchingZip); } catch (Exception) { /* best-effort cleanup */ }
         }
     }
 

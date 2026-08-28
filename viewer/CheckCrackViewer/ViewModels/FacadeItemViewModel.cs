@@ -27,6 +27,20 @@ public partial class FacadeItemViewModel : ObservableObject
     [ObservableProperty] private bool _isRunning;
     [ObservableProperty] private string? _livePreviewImagePath;
 
+    // 2026-08-28: 원격/수동 CrackVisionDB 경로로 등록된 facade만 채워짐(RegisterExtractedArchive의
+    // archiveId 인자, MainViewModel.AddRunnableCandidate가 전달) -- 순수 Browse로 추가된 facade는
+    // 대응하는 archive_id가 없으므로 계속 null. GenerateReport 성공 시 이 값이 있으면
+    // crackvision_archives의 해당 row에 stitching_zip_path/report_path/analysis_status를
+    // write-back한다(MainViewModel.GenerateReport 참고). 방향이 여러 개(archive 하나에 facade
+    // 여러 개)인 경우 전부 같은 archive_id를 공유 -- 이 경우 write-back은 마지막으로 완료된
+    // facade 것이 최종 반영됨(알려진 단순화, 지금 실사용 archive는 전부 방향 1개뿐).
+    [ObservableProperty] private long? _archiveId;
+
+    // ArchiveId와 함께 채워짐(같은 등록 경로) -- GenerateReport가 스티칭/보고서 업로드 대상 원격
+    // 폴더를 이 zip의 형제 디렉터리(analysis_results/)로 계산하는 데 씀. 원본 zip 자체를
+    // 재사용/재업로드하지는 않음, 경로 계산용.
+    [ObservableProperty] private string? _remoteZipPath;
+
     // --- homography-chain stitch (always produced) ---
     [ObservableProperty] private int _imageCount;
     [ObservableProperty] private double? _coverageRatio;
