@@ -60,6 +60,11 @@
                                VerticalAlignment="Center" Margin="0,0,6,0"/>
                     <Button Content="다음 ▶" Command="{Binding NextImageCommand}"/>
                 </StackPanel>
+                <!-- 학습 시작 전 운용자가 직접 입력하는 산출물 이름 (2026-08-28). 비어 있으면
+                     학습/Fine-tuning 버튼이 비활성화됨 (CanTrain 참고). -->
+                <TextBlock Text="산출물 이름" Foreground="{StaticResource Text2}" FontSize="11.5" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <TextBox Text="{Binding TrainingOutputName, UpdateSourceTrigger=PropertyChanged}" Width="140" Margin="0,0,12,0" VerticalContentAlignment="Center"/>
+
                 <!-- 새로 만들 때 = 학습, 기존 것에 이어서 = Fine-tuning (train_from_viewer.py의 mode=new|finetune, 항상 source도 같이 전달) -->
                 <Button Content="학습" Command="{Binding StartTrainingCommand}" Margin="0,0,8,0"/>
                 <Button Content="Fine-tuning" Command="{Binding StartFineTuneCommand}"/>

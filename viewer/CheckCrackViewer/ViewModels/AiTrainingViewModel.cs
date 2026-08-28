@@ -42,6 +42,13 @@ public partial class AiTrainingViewModel : ObservableObject
 
     [ObservableProperty] private bool _isTraining;
     [ObservableProperty] private string _trainingStatusText = "";
+    /// <summary>운용자가 학습 시작 전에 직접 입력하는 산출물 이름 (2026-08-28).
+    /// 이전엔 $"{source}_{mode}_{timestamp}"로 완전 자동 생성했는데, 나중에
+    /// logs/training_runs/나 runs/ 목록에서 어떤 학습이 무엇을 위한 것이었는지
+    /// 알아볼 수 없다는 문제가 있었음. 타임스탬프는 계속 붙여서 같은 이름을
+    /// 재사용해도 기존 run과 충돌/덮어쓰기가 나지 않게 함 (RunTraining 참고).
+    /// CanTrain이 이 값을 비어있지 않아야 하는 조건으로 요구.</summary>
+    [ObservableProperty] private string _trainingOutputName = "";
     [ObservableProperty] private int _trainingEpoch;
     [ObservableProperty] private int _trainingEpochs;
     [ObservableProperty] private string _metricsText = "";
@@ -237,7 +244,13 @@ public partial class AiTrainingViewModel : ObservableObject
     // than one run at a time.
     private bool CanRunPipeline() => !IsProcessing && !IsTraining && !IsDetectingCracks;
     private bool CanPrepareLabeledDataset() => !IsProcessing && !IsTraining && !IsDetectingCracks && SelectedSource == "labeled";
-    private bool CanTrain() => !IsProcessing && !IsTraining && !IsDetectingCracks;
+    private bool CanTrain() => !IsProcessing && !IsTraining && !IsDetectingCracks && !string.IsNullOrWhiteSpace(TrainingOutputName);
+
+    partial void OnTrainingOutputNameChanged(string value)
+    {
+        StartTrainingCommand.NotifyCanExecuteChanged();
+        StartFineTuneCommand.NotifyCanExecuteChanged();
+    }
     private bool CanDetectCracks() => !IsProcessing && !IsTraining && !IsDetectingCracks && !string.IsNullOrEmpty(SelectedFolderPath);
 
     /// <summary>Set by SelectImageFolder, consumed by DetectCracks/PrepareLabeledDataset/
@@ -656,6 +669,18 @@ public partial class AiTrainingViewModel : ObservableObject
             return;
         }
 
+        // CanTrain already gates the buttons on this, but RunTraining is a plain
+        // private method (not itself a guarded entry point) -- defensive check
+        // mirrors the labeled-folder validation above.
+        if (string.IsNullOrWhiteSpace(TrainingOutputName))
+        {
+            var message = "학습 산출물 이름을 입력하세요.";
+            TrainingErrorText = message;
+            TrainingStatusText = message;
+            HasTrainingResult = true;
+            return;
+        }
+
         IsTraining = true;
         TrainingEpoch = 0;
         TrainingEpochs = 0;
@@ -664,7 +689,12 @@ public partial class AiTrainingViewModel : ObservableObject
         MetricsText = "";
         TrainingErrorText = "";
 
-        var runId = $"{SelectedSource}_{mode}_{DateTime.Now:yyyyMMdd_HHmmss}";
+        // 운용자가 입력한 이름을 산출물 식별자로 쓰되, ultralytics가 이 값을 그대로
+        // runs/ 폴더명(project/name)과 logs/training_runs/<run_id>로 쓰므로
+        // 경로에 쓸 수 없는 문자는 제거/치환 -- 타임스탬프를 뒤에 붙여 같은 이름을
+        // 여러 번 써도 기존 run을 덮어쓰지 않게 함.
+        var sanitizedOutputName = SanitizeForFileName(TrainingOutputName);
+        var runId = $"{SelectedSource}_{mode}_{sanitizedOutputName}_{DateTime.Now:yyyyMMdd_HHmmss}";
         var statusPath = Path.Combine(RootPath, "logs", "training_runs", runId, "status.json");
         var pollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         pollTimer.Tick += (_, _) => PollTrainingStatus(statusPath);
@@ -813,6 +843,18 @@ public partial class AiTrainingViewModel : ObservableObject
         return new[] { "*.jpg", "*.jpeg", "*.tif", "*.tiff", "*.bmp" }
             .SelectMany(pattern => Directory.GetFiles(dir, pattern))
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>TrainingOutputName은 ultralytics의 project/name(=runs 폴더명)과
+    /// logs/training_runs/<run_id>에 그대로 쓰이므로, 경로에 쓸 수 없는 문자
+    /// (Path.GetInvalidFileNameChars, 공백 포함)는 '_'로 치환. 전부 치환돼서
+    /// 빈 문자열이 되면(예: 특수문자만 입력) "run"으로 대체.</summary>
+    private static string SanitizeForFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var chars = name.Trim().Select(c => invalid.Contains(c) || char.IsWhiteSpace(c) ? '_' : c).ToArray();
+        var sanitized = new string(chars).Trim('_');
+        return string.IsNullOrEmpty(sanitized) ? "run" : sanitized;
     }
 
     private bool ValidateLabeledDatasetFolder(string dir, out string error)
