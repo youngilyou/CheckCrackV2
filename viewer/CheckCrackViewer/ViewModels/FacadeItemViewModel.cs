@@ -68,6 +68,17 @@ public partial class FacadeItemViewModel : ObservableObject
     [ObservableProperty] private string? _reportPath;
     [ObservableProperty] private bool _isGeneratingReport;
 
+    // 2026-08-29: {facade_id}_quality_flags.json (FacadeQualityFlagsStore) 참고 -- OutputDir은
+    // MainViewModel.ApplySnapshot이 FacadeSnapshot.OutputDir에서 복사(체크박스 토글 시 저장
+    // 경로 계산용, GetFacadeOutputDir()가 계산하는 "베이스" 경로가 아니라 실제 버전 폴더까지
+    // resolve된 경로가 필요해서 매번 다시 계산하는 대신 스냅샷이 이미 아는 값을 그대로 씀).
+    // NeedsRetake(누락 재촬영 필요)는 순수 운영자 판단, NeedsDetailCapture(정밀촬영 필요)는
+    // 앱의 초기 자동 의심 + 운영자 최종 확인 — 결과보기 화면(FacadeSnapshot)과 같은 파일을
+    // 공유하므로 어느 화면에서 체크해도 즉시 일관됨.
+    [ObservableProperty] private string? _outputDir;
+    [ObservableProperty] private bool _needsRetake;
+    [ObservableProperty] private bool _needsDetailCapture;
+
     // --- image previews ---
     [ObservableProperty] private string? _analysisImagePath;
     [ObservableProperty] private string? _visualImagePath;
@@ -127,6 +138,14 @@ public partial class FacadeItemViewModel : ObservableObject
         VisualImagePath = null;
         AnalysisColmapImagePath = null;
         VisualColmapImagePath = null;
+
+        // 2026-08-29: 새 실행은 새 버전 폴더(output/Vnnn)에 쓰므로 그 폴더의 quality_flags.json은
+        // 아직 존재하지 않음 -- 이전 실행에서 체크했던 값이 새 실행 완료 전까지 잘못 남아있지
+        // 않게 초기화. ApplySnapshot이 새 OutputDir의 실제 값(대부분 처음엔 둘 다 false)으로
+        // 다시 채운다.
+        OutputDir = null;
+        NeedsRetake = false;
+        NeedsDetailCapture = false;
     }
 
     public void AddIssue(string text)

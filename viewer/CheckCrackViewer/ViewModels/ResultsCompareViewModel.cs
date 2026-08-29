@@ -188,6 +188,24 @@ public partial class ResultsCompareViewModel : ObservableObject
     [RelayCommand]
     private void SelectFacade(FacadeSnapshot facade) => SelectedFacade = facade;
 
+    /// <summary>2026-08-29: 정밀촬영 필요만 이 화면에 둠(운영자 요청 -- 누락 재촬영 필요는
+    /// 분석·스티칭 화면 쪽 전용, MainViewModel.ToggleNeedsRetake 참고). 앱이 먼저 의심(자동)
+    /// 하고 운영자가 최종 판단하는 항목 -- 체크박스를 한 번이라도 클릭하면
+    /// DetailCaptureAutoSuggested를 false로 고정해서, 이후 재스캔의 자동 재판정
+    /// (FacadeQualityFlagsStore.Reconcile)이 운영자의 최종 결정을 다시 덮어쓰지 못하게 한다.
+    /// IsChecked TwoWay 바인딩이 클릭 시점에 이미 값을 바꿔놓은 뒤(WPF CheckBox는 Command를
+    /// IsChecked 갱신 다음에 실행) 이 커맨드가 그 값을 파일에 저장만 한다.</summary>
+    [RelayCommand]
+    private void ToggleNeedsDetailCapture(FacadeSnapshot facade)
+    {
+        if (facade.OutputDir == null)
+            return;
+        var flags = FacadeQualityFlagsStore.Load(facade.OutputDir, facade.FacadeId) ?? new FacadeQualityFlagsFile();
+        flags.NeedsDetailCapture = facade.NeedsDetailCapture;
+        flags.DetailCaptureAutoSuggested = false;
+        FacadeQualityFlagsStore.Save(facade.OutputDir, facade.FacadeId, flags);
+    }
+
     private static void CopySnapshot(FacadeSnapshot src, FacadeSnapshot dst)
     {
         dst.OutputDir = src.OutputDir;
@@ -206,6 +224,8 @@ public partial class ResultsCompareViewModel : ObservableObject
         dst.AnalysisColmapImagePath = src.AnalysisColmapImagePath;
         dst.VisualColmapImagePath = src.VisualColmapImagePath;
         dst.ReportPath = src.ReportPath;
+        dst.NeedsRetake = src.NeedsRetake;
+        dst.NeedsDetailCapture = src.NeedsDetailCapture;
     }
 
     private void ReloadPanel(ComparePanelState panel)

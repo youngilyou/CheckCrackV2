@@ -207,7 +207,21 @@
                                   Command="{Binding DataContext.SelectFacadeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                   CommandParameter="{Binding}"/>
                 </Border.InputBindings>
-                <TextBlock Text="{Binding FacadeId}" FontWeight="Bold" Foreground="{StaticResource Text}"/>
+                <StackPanel>
+                    <TextBlock Text="{Binding FacadeId}" FontWeight="Bold" Foreground="{StaticResource Text}"/>
+                    <!-- 2026-08-29: 정밀촬영 필요만 이 화면(결과보기)에 둔다. 앱이 먼저
+                         의심되면 자동으로 체크해두고 운영자가 최종 확인/해제(운영자 요청
+                         사양). 누락 재촬영 필요는 분석·스티칭 화면 쪽에만 있음(운영자 요청,
+                         두 화면 모두에 두지 않기로 정정). IsChecked TwoWay 바인딩이 값을
+                         먼저 바꾼 뒤 Click에서 그 값을 파일에 저장(ResultsCompareViewModel.
+                         ToggleNeedsDetailCapture 주석 참고). -->
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <CheckBox Content="정밀촬영 필요" FontSize="10.5" Foreground="{StaticResource Text2}"
+                                  IsChecked="{Binding NeedsDetailCapture, Mode=TwoWay}"
+                                  Command="{Binding DataContext.ToggleNeedsDetailCaptureCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                  CommandParameter="{Binding}"/>
+                    </StackPanel>
+                </StackPanel>
             </Border>
         </DataTemplate>
     </UserControl.Resources>

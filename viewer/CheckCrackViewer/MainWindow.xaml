@@ -221,6 +221,18 @@
                                     Command="{Binding DataContext.ReclassifyFacadeCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                     CommandParameter="{Binding}"/>
                         </StackPanel>
+                        <!-- 2026-08-29: 누락 재촬영 필요만 이 화면(분석·스티칭)에 둔다.
+                             순수 운영자 판단(스티칭 결과를 보고 직접 체크), 자동 판정 없음.
+                             정밀촬영 필요는 결과보기 화면 쪽에만 있음(운영자 요청, 두 화면
+                             모두에 두지 않기로 정정). MainViewModel.ToggleNeedsRetake 참고,
+                             결과보기 화면과 같은 파일을 공유하므로 어느 화면에서 체크해도
+                             다음 재스캔에 서로 반영됨. -->
+                        <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                            <CheckBox Content="누락 재촬영 필요" FontSize="10.5" Foreground="{StaticResource Text2}"
+                                      IsChecked="{Binding NeedsRetake, Mode=TwoWay}"
+                                      Command="{Binding DataContext.ToggleNeedsRetakeCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                      CommandParameter="{Binding}"/>
+                        </StackPanel>
                     </StackPanel>
                 </Grid>
             </Border>
@@ -350,9 +362,7 @@
                 <Grid Visibility="{Binding SelectedMenu, Converter={StaticResource StringEqualsToVisibilityConverter}, ConverterParameter=dashboard}">
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel Margin="28">
-                            <TextBlock Text="작업 현황" FontSize="24" FontWeight="Bold" Foreground="{StaticResource Text}" Margin="0,0,0,6"/>
-                            <TextBlock Text="누락 재촬영 필요 · 정밀촬영 필요는 이 Viewer가 촬영 단계를 직접 관측하지 않아 항상 0으로 표시됩니다."
-                                       Foreground="{StaticResource Text2}" TextWrapping="Wrap" Margin="0,0,0,20"/>
+                            <TextBlock Text="작업 현황" FontSize="24" FontWeight="Bold" Foreground="{StaticResource Text}" Margin="0,0,0,20"/>
                             <ItemsControl ItemsSource="{Binding DashboardCounts}">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>

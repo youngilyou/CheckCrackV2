@@ -3,10 +3,19 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using CheckCrackViewer.Models;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace CheckCrackViewer.Services;
 
-public class FacadeSnapshot
+/// <summary>2026-08-29: ObservableObject로 전환(NeedsRetake/NeedsDetailCapture만 [ObservableProperty]
+/// -- 나머지 필드는 그대로 plain get/set). 결과 목록(ResultsCompareView)의 체크박스가 IsChecked를
+/// TwoWay 바인딩하면서 화면이 즉시 갱신되려면 PropertyChanged 알림이 필요했음(기존 plain class로는
+/// 체크는 되지만 다른 바인딩 갱신 트리거가 없었음). 저장(파일 쓰기)은 이 클래스 자체가 하지 않고
+/// ResultsCompareViewModel의 Command가 명시적으로 호출 -- rescan(CopySnapshot)이 매 2초마다
+/// 같은 값을 다시 대입할 때마다 불필요하게 재저장되는 것을 피하기 위해 property-changed를
+/// "저장 트리거"로 쓰지 않음(MVVM Toolkit의 SetProperty는 값이 실제로 바뀔 때만 알림을 내므로
+/// 값이 같으면 어차피 무시되긴 하지만, 저장 책임 자체를 명시적 Command로 분리하는 게 더 명확함).</summary>
+public partial class FacadeSnapshot : ObservableObject
 {
     public string FacadeId { get; set; } = "";
     /// <summary>The resolved output dir this snapshot was actually read from --
@@ -32,6 +41,14 @@ public class FacadeSnapshot
     public QualityReportModel? QualityColmap { get; set; }
     public ColmapReportModel? Colmap { get; set; }
     public List<CrackResultModel>? Cracks { get; set; }
+
+    // 2026-08-29: 운영자가 직접(누락 재촬영 필요) 또는 앱의 초기 의심 판정 + 운영자 최종
+    // 확인(정밀촬영 필요)으로 채워짐 -- {facade_id}_quality_flags.json, FacadeQualityFlagsStore
+    // 참고. 결과보기 화면(이 FacadeSnapshot 자체가 결과 목록의 leaf)과 분석·스티칭 화면
+    // (FacadeItemViewModel, MainViewModel.ApplySnapshot이 여기서 복사)이 OutputDir+FacadeId를
+    // 키로 하는 같은 파일을 읽고 쓰므로, 두 화면 중 어디서 체크해도 즉시 일관됨.
+    [ObservableProperty] private bool _needsRetake;
+    [ObservableProperty] private bool _needsDetailCapture;
 
     public string? AnalysisImagePath { get; set; }
     public string? VisualImagePath { get; set; }
@@ -122,19 +139,26 @@ public static class FacadeOutputScanner
         if (!Directory.Exists(outputDir))
             return null;
 
+        var quality = ReadJson<QualityReportModel>(Path.Combine(outputDir, $"{facadeId}_quality_report.json"));
+        var colmap = ReadJson<ColmapReportModel>(Path.Combine(outputDir, $"{facadeId}_colmap_report.json"));
+        var flags = FacadeQualityFlagsStore.Reconcile(
+            outputDir, facadeId, quality?.MeanInlierRatio, colmap?.NumImagesRequested ?? 0, colmap?.NumImagesRegistered ?? 0);
+
         return new FacadeSnapshot
         {
             FacadeId = facadeId,
             OutputDir = outputDir,
-            Quality = ReadJson<QualityReportModel>(Path.Combine(outputDir, $"{facadeId}_quality_report.json")),
+            Quality = quality,
             QualityColmap = ReadJson<QualityReportModel>(Path.Combine(outputDir, $"{facadeId}_quality_report_colmap.json")),
-            Colmap = ReadJson<ColmapReportModel>(Path.Combine(outputDir, $"{facadeId}_colmap_report.json")),
+            Colmap = colmap,
             Cracks = ReadJson<List<CrackResultModel>>(Path.Combine(outputDir, $"{facadeId}_cracks.json")),
             AnalysisImagePath = ExistsOrNull(Path.Combine(outputDir, $"{facadeId}_analysis.tif")),
             VisualImagePath = ExistsOrNull(Path.Combine(outputDir, $"{facadeId}_visual.tif")),
             AnalysisColmapImagePath = ExistsOrNull(Path.Combine(outputDir, $"{facadeId}_analysis_colmap.tif")),
             VisualColmapImagePath = ExistsOrNull(Path.Combine(outputDir, $"{facadeId}_visual_colmap.tif")),
             ReportPath = ExistsOrNull(Path.Combine(outputDir, $"{facadeId}_report.pdf")),
+            NeedsRetake = flags.NeedsRetake,
+            NeedsDetailCapture = flags.NeedsDetailCapture,
         };
     }
 

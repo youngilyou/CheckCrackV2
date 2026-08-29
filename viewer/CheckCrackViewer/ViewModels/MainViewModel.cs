@@ -127,10 +127,16 @@ public partial class MainViewModel : ObservableObject
     /// 스냅샷 폴링에서 이미 겪은 것과 같은 종류의 object-identity 버그 재발 방지).</summary>
     public ObservableCollection<ComplexNode> FacadeTree { get; } = new();
 
-    /// <summary>"작업 현황" 대시보드 12개 카드 — 순서 고정, 항목 자체는 절대 재생성하지
-    /// 않고 .Count만 갱신(RecomputeDashboardCounts). 촬영예정/촬영중/촬영완료/누락
-    /// 재촬영 필요/정밀촬영 필요는 이 Viewer가 실제 신호를 가진 적이 없으므로 항상 0
-    /// (DashboardStatusCount.cs 참고).</summary>
+    /// <summary>"작업 현황" 대시보드 카드 — 순서 고정, 항목 자체는 절대 재생성하지
+    /// 않고 .Count만 갱신(RecomputeDashboardCounts). 촬영예정/촬영중/촬영완료는 이 Viewer가
+    /// 실제 신호를 가진 적이 없으므로 표시하지 않음. 누락 재촬영 필요/정밀촬영 필요는
+    /// 2026-08-29부터 운영자 직접 체크(+ 자동 판정 기준 결정되는 대로 병행)로 채워짐
+    /// (DashboardStatusCount.cs 참고). "보고서 생성중"은 삭제됨(운영자 요청 — HasReport
+    /// 기준의 "완료" 하나로 충분, 별도 카드로 나눌 필요 없음).
+    /// 2026-08-29: Stitching 대기/Stitching 중/AI 분석중도 운영자 요청으로 화면에서 뺌 —
+    /// ClassifyForDashboard는 여전히 이 3개 카테고리를 반환할 수 있으므로(진행 중인 facade를
+    /// 구분하는 내부 로직 자체는 그대로 둠), RecomputeDashboardCounts가 대응하는 카드가 없는
+    /// 분류 결과는 그냥 어디에도 집계하지 않고 건너뛴다(예외 방지).</summary>
     public ObservableCollection<DashboardStatusCount> DashboardCounts { get; } = BuildDashboardCounts();
 
     private static ObservableCollection<DashboardStatusCount> BuildDashboardCounts()
@@ -141,12 +147,11 @@ public partial class MainViewModel : ObservableObject
             //(DashboardStatusCategory.Capturing, "촬영중"),
             //(DashboardStatusCategory.CaptureDone, "촬영완료"),
             (DashboardStatusCategory.CoverageRetakeNeeded, "누락 재촬영 필요"),
-            (DashboardStatusCategory.StitchQueued, "Stitching 대기"),
-            (DashboardStatusCategory.Stitching, "Stitching 중"),
-            (DashboardStatusCategory.AiAnalyzing, "AI 분석중"),
+            //(DashboardStatusCategory.StitchQueued, "Stitching 대기"),
+            //(DashboardStatusCategory.Stitching, "Stitching 중"),
+            //(DashboardStatusCategory.AiAnalyzing, "AI 분석중"),
             (DashboardStatusCategory.DetailCaptureNeeded, "정밀촬영 필요"),
             (DashboardStatusCategory.NeedsManualReview, "사용자 검토 필요"),
-            (DashboardStatusCategory.GeneratingReport, "보고서 생성중"),
             (DashboardStatusCategory.Done, "완료"),
             (DashboardStatusCategory.Failed, "실패"),
         };
@@ -1126,6 +1131,22 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void SelectFacade(FacadeItemViewModel facade) => SelectedFacade = facade;
 
+    /// <summary>2026-08-29: 누락 재촬영 필요만 이 화면(분석·스티칭)에 둠(운영자 요청 --
+    /// 정밀촬영 필요는 결과보기 화면 쪽 전용, ResultsCompareViewModel.ToggleNeedsDetailCapture
+    /// 참고). 순수 운영자 판단, 자동 판정 없음 -- DetailCaptureAutoSuggested는 안 건드림.
+    /// 같은 {facade_id}_quality_flags.json을 OutputDir+FacadeId로 공유하므로 여기서 체크해도
+    /// 결과보기 화면에 다음 2초 재스캔에서 반영됨. IsChecked TwoWay 바인딩이 값을 먼저 바꾼
+    /// 뒤 Click에서 저장만 한다.</summary>
+    [RelayCommand]
+    private void ToggleNeedsRetake(FacadeItemViewModel facade)
+    {
+        if (facade.OutputDir == null)
+            return;
+        var flags = FacadeQualityFlagsStore.Load(facade.OutputDir, facade.FacadeId) ?? new FacadeQualityFlagsFile { DetailCaptureAutoSuggested = true };
+        flags.NeedsRetake = facade.NeedsRetake;
+        FacadeQualityFlagsStore.Save(facade.OutputDir, facade.FacadeId, flags);
+    }
+
     /// <summary>RootPath/facade_hierarchy.json에 저장된 분류를 지금 메모리에 있는
     /// Facades에 적용한다. "+ 폴더"로 추가했던 facade는 SourceFolderPath가 facades/
     /// 바깥일 수 있어 재시작 시 RescanFacadeOutputs(facades/* 스캔)로는 다시 발견되지
@@ -1902,9 +1923,12 @@ public partial class MainViewModel : ObservableObject
             ActiveJobs.Add(f);
     }
 
-    /// <summary>Facades를 순회해 12개 대시보드 카드의 Count만 갱신(항목 오브젝트는 재사용).
-    /// ClassifyForDashboard가 절대 선택하지 않는 5개 카테고리(촬영예정 등)는 항상 0으로
-    /// 남는다 — 이 Viewer에 그 상태들을 판정할 실제 신호가 없기 때문(지어내지 않는다).</summary>
+    /// <summary>Facades를 순회해 대시보드 카드의 Count만 갱신(항목 오브젝트는 재사용).
+    /// ClassifyForDashboard가 절대 선택하지 않는 카테고리(촬영예정 등)는 항상 0으로
+    /// 남는다 — 이 Viewer에 그 상태들을 판정할 실제 신호가 없기 때문(지어내지 않는다).
+    /// 2026-08-29: Stitching 대기/중, AI 분석중은 화면에서 뺐지만 ClassifyForDashboard는
+    /// 여전히 그 분류를 반환할 수 있어서, FirstOrDefault로 대응 카드가 없으면 그냥
+    /// 건너뛴다(그 facade들은 이 대시보드 어디에도 집계되지 않음 — 의도된 동작).</summary>
     private void RecomputeDashboardCounts()
     {
         foreach (var c in DashboardCounts)
@@ -1913,8 +1937,9 @@ public partial class MainViewModel : ObservableObject
         foreach (var facade in Facades)
         {
             var category = ClassifyForDashboard(facade);
-            var entry = DashboardCounts.First(c => c.Category == category);
-            entry.Count++;
+            var entry = DashboardCounts.FirstOrDefault(c => c.Category == category);
+            if (entry != null)
+                entry.Count++;
         }
     }
 
@@ -1938,7 +1963,12 @@ public partial class MainViewModel : ObservableObject
     {
         if (facade.IsRunning) return DashboardStatusCategory.Stitching;
         if (facade.IsDetectingCracks) return DashboardStatusCategory.AiAnalyzing;
-        if (facade.IsGeneratingReport) return DashboardStatusCategory.GeneratingReport;
+        // 2026-08-29: 운영자가 체크한 후속 조치 필요 항목은 스티칭/보고서가 이미 끝난
+        // facade("완료"/"검토 필요")라도 그 상태보다 우선 노출 -- 체크했다는 건 아직 할 일이
+        // 남았다는 뜻이므로 "완료"에 묻혀서 안 보이면 안 됨. 둘 다 체크됐으면 재촬영(더
+        // 심각한 문제: 커버리지 자체가 없음)을 정밀촬영보다 먼저 보여준다.
+        if (facade.NeedsRetake) return DashboardStatusCategory.CoverageRetakeNeeded;
+        if (facade.NeedsDetailCapture) return DashboardStatusCategory.DetailCaptureNeeded;
         if (facade.OverallStatus == FacadeOverallStatus.Failed) return DashboardStatusCategory.Failed;
         if (facade.OverallStatus == FacadeOverallStatus.NeedsManualReview) return DashboardStatusCategory.NeedsManualReview;
         if (facade.HasReport) return DashboardStatusCategory.Done;
@@ -2005,5 +2035,9 @@ public partial class MainViewModel : ObservableObject
         facade.VisualImagePath = snap.VisualImagePath;
         facade.AnalysisColmapImagePath = snap.AnalysisColmapImagePath;
         facade.VisualColmapImagePath = snap.VisualColmapImagePath;
+
+        facade.OutputDir = snap.OutputDir;
+        facade.NeedsRetake = snap.NeedsRetake;
+        facade.NeedsDetailCapture = snap.NeedsDetailCapture;
     }
 }
