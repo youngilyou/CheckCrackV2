@@ -31,6 +31,14 @@ public sealed partial class RemoteArchiveRowViewModel : ObservableObject
     public bool HasStitchingResult => !string.IsNullOrEmpty(Record.StitchingZipPath);
     public bool HasReport => !string.IsNullOrEmpty(Record.ReportPath);
 
+    /// <summary>2026-08-29: 방위(면)가 여러 개인 archive는 facade마다 결과가 따로 있음
+    /// (facade_analysis_results, 위 flat StitchingZipPath/ReportPath는 그중 가장 최근 것뿐).
+    /// 화면은 단일 방향(대다수 케이스)일 땐 기존 버튼 그대로, 다중 방향일 때만 facade별
+    /// 미니 다운로드 목록을 추가로 보여준다(MainViewModel.DownloadFacadeStitchingResult/
+    /// DownloadFacadeReport, SettingsView.xaml).</summary>
+    public IReadOnlyList<FacadeAnalysisResultEntry> FacadeResults => Record.FacadeResults;
+    public bool HasMultipleFacadeResults => Record.FacadeResults.Count > 1;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsNotBusy))]
     [NotifyPropertyChangedFor(nameof(CanDownloadStitchingResult))]
@@ -56,3 +64,9 @@ public sealed partial class RemoteArchiveRowViewModel : ObservableObject
         Record = record;
     }
 }
+
+/// <summary>Bundles a row with one of its (possibly several) FacadeAnalysisResultEntry items --
+/// the per-facade mini download buttons need both: the entry for the remote path, the row for
+/// IsBusy/Status feedback (same as the existing single-result download buttons use). Built via
+/// RowAndFacadeToRequestConverter (MultiBinding) in SettingsView.xaml.</summary>
+public sealed record FacadeDownloadRequest(RemoteArchiveRowViewModel Row, FacadeAnalysisResultEntry Entry);

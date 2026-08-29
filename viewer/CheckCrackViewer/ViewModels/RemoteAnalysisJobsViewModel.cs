@@ -128,9 +128,17 @@ public sealed class RemoteAnalysisJobsViewModel
         var tag = $"#{assignment.ArchiveId} {assignment.Company}/{assignment.Building}";
         try
         {
+            // 2026-08-29: FacadePreviewer는 "현장 프로그램"이고 역할은 촬영 이미지를 backend_core의
+            // PostgreSQL에 저장 + 분석 시작 명령 전달까지 -- 그 이후는 신경 쓰지 않는다는 사용자의
+            // 명시적 재정의. 분석 시작(SendJobAccepted) 확인 이후로는 그 어떤 DDS 메시지도
+            // FacadePreviewer로 더 보내지 않는다: 다운로드/압축해제/분석시작 단계별
+            // AnalysisStatusUpdate 발행(DOWNLOAD_START/EXTRACT_START/EXTRACT_DONE/ANALYSIS_START)과
+            // 최종 AnalysisResult 발행(성공/실패) 둘 다 제거함. 최종 결과(리포트/스티칭+COLMAP zip)는
+            // write-back(WriteBackAnalysisResultsAsync)으로 backend_core PostgreSQL에 직접
+            // 저장되므로 DDS로 따로 알릴 필요가 없다는 것도 같은 맥락. 로컬 UI(SetStatus)/로그
+            // (Report)는 그대로 유지 -- 이 워크스테이션 화면에서는 계속 단계별로 보임, DDS로만 안 나감.
             SetStatus(job, "다운로드 중");
             Report("INFO", $"[다운로드 시작] {tag}");
-            _bridge.SendStatusUpdate(assignment.ArchiveId, "DOWNLOAD_START", "");
             var settings = _settingsProvider();
             var localZipPath = Path.Combine(_downloadRoot, $"{assignment.ArchiveId}.zip");
             var progress = new Progress<(long Downloaded, long Total)>(p =>
@@ -139,20 +147,17 @@ public sealed class RemoteAnalysisJobsViewModel
             Report("INFO", $"[다운로드 완료] {tag}");
 
             SetStatus(job, "압축 해제 중");
-            _bridge.SendStatusUpdate(assignment.ArchiveId, "EXTRACT_START", "");
             var extractDir = Path.Combine(_extractRoot,
                 $"{SafeName(assignment.Company)}_{SafeName(assignment.Building)}_{assignment.ArchiveId}");
             if (Directory.Exists(extractDir))
                 Directory.Delete(extractDir, recursive: true);
             Directory.CreateDirectory(Path.GetDirectoryName(extractDir)!);
             ZipFile.ExtractToDirectory(localZipPath, extractDir);
-            _bridge.SendStatusUpdate(assignment.ArchiveId, "EXTRACT_DONE", "");
             Report("INFO", $"[압축 해제 완료] {tag}");
 
             SetStatus(job, "분석 시작");
             Report("INFO", $"[분석 시작] {tag}");
             _bridge.SendJobAccepted(assignment.ArchiveId, startedImmediately: true);
-            _bridge.SendStatusUpdate(assignment.ArchiveId, "ANALYSIS_START", "");
 
             // 2026-08-27: must run on the UI thread, not this method's own thread (the native DDS
             // listener thread -- see HandleAssignment, which never dispatches before calling this
@@ -166,7 +171,6 @@ public sealed class RemoteAnalysisJobsViewModel
 
             SetStatus(job, success ? "완료" : "완료 (일부 실패)");
             Report(success ? "INFO" : "WARNING", $"[{(success ? "완료" : "완료 (일부 실패)")}] {tag}");
-            _bridge.SendResult(assignment.ArchiveId, success);
         }
         catch (Exception ex)
         {
@@ -174,7 +178,6 @@ public sealed class RemoteAnalysisJobsViewModel
             RunOnUi(() => job.ErrorMessage = ex.Message);
             Report("ERROR", $"[오류] {tag}: {ex.Message}");
             _bridge.SendErrorNotify(assignment.ArchiveId, job.Status, ex.Message);
-            _bridge.SendResult(assignment.ArchiveId, success: false);
         }
     }
 

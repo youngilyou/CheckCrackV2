@@ -3,6 +3,8 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Media;
+using CheckCrackViewer.Services;
+using CheckCrackViewer.ViewModels;
 
 namespace CheckCrackViewer.Converters;
 
@@ -72,6 +74,22 @@ public class TwoStringsEqualToBrushConverter : IMultiValueConverter
         => throw new NotSupportedException();
 }
 
+/// <summary>2026-08-29: packs a RemoteArchiveRowViewModel + one of its FacadeAnalysisResultEntry
+/// items into a single FacadeDownloadRequest CommandParameter -- the per-facade mini download
+/// buttons need both (see that record's own doc comment). values[0] = the row (reached via
+/// AncestorType=ItemsControl from inside the nested per-facade ItemTemplate), values[1] = the
+/// entry (the nested ItemsControl's own per-item DataContext, plain {Binding}).</summary>
+public class RowAndFacadeToRequestConverter : IMultiValueConverter
+{
+    public object? Convert(object?[] values, Type targetType, object parameter, CultureInfo culture)
+        => values.Length == 2 && values[0] is RemoteArchiveRowViewModel row && values[1] is FacadeAnalysisResultEntry entry
+            ? new FacadeDownloadRequest(row, entry)
+            : null;
+
+    public object[] ConvertBack(object? value, Type[] targetTypes, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
 /// <summary>value.ToString() == parameter.ToString() -> true/false (plain bool, not
 /// Visibility) -- for bindings like IsEnabled/IsHitTestVisible that
 /// StringEqualsToVisibilityConverter can't target. Invert=True flips the sense, same
@@ -126,6 +144,30 @@ public class TruthyToVisibilityConverter : IValueConverter
         };
         if (Invert) truthy = !truthy;
         return truthy ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
+/// <summary>Same truthy check as TruthyToVisibilityConverter, but for IsEnabled-style bool
+/// targets (e.g. per-facade download buttons whose StitchingZipPath/ReportPath may legitimately
+/// be null for one facade while present for another -- see FacadeAnalysisResultEntry).</summary>
+public class TruthyToBoolConverter : IValueConverter
+{
+    public bool Invert { get; set; }
+
+    public object Convert(object? value, Type targetType, object parameter, CultureInfo culture)
+    {
+        bool truthy = value switch
+        {
+            null => false,
+            bool b => b,
+            string s => !string.IsNullOrEmpty(s),
+            int i => i != 0,
+            _ => true,
+        };
+        return Invert ? !truthy : truthy;
     }
 
     public object ConvertBack(object? value, Type targetType, object parameter, CultureInfo culture)

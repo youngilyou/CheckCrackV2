@@ -378,8 +378,9 @@
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
                                         <TextBlock Text="Password" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
-                                        <TextBox Text="{Binding CrackVisionPostgresPassword, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
-                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                        <PasswordBox x:Name="CrackVisionPostgresPasswordInput" Padding="8,5"
+                                                     Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"
+                                                     PasswordChanged="CrackVisionPostgresPasswordInput_PasswordChanged"/>
                                     </StackPanel>
                                 </Grid>
 
@@ -439,8 +440,9 @@
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
                                         <TextBlock Text="Password (필수)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
-                                        <TextBox Text="{Binding CrackVisionSftpPassword, UpdateSourceTrigger=PropertyChanged}" Padding="8,5"
-                                                 Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+                                        <PasswordBox x:Name="CrackVisionSftpPasswordInput" Padding="8,5"
+                                                     Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"
+                                                     PasswordChanged="CrackVisionSftpPasswordInput_PasswordChanged"/>
                                     </StackPanel>
                                 </Grid>
 
@@ -522,39 +524,83 @@
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <Border Background="{StaticResource Surface2}" CornerRadius="6" Padding="10,7" Margin="0,0,0,6">
-                                                <Grid>
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="60"/>
-                                                        <ColumnDefinition Width="140"/>
-                                                        <ColumnDefinition Width="110"/>
-                                                        <ColumnDefinition Width="120"/>
-                                                        <ColumnDefinition Width="60"/>
-                                                        <ColumnDefinition Width="130"/>
-                                                        <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                    </Grid.ColumnDefinitions>
-                                                    <TextBlock Grid.Column="0" Text="{Binding ArchiveId}" FontFamily="Consolas" Foreground="{StaticResource Text}"/>
-                                                    <TextBlock Grid.Column="1" Text="{Binding Company}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis"/>
-                                                    <TextBlock Grid.Column="2" Text="{Binding ContractId}" Foreground="{StaticResource Text2}" FontFamily="Consolas" FontSize="11" TextTrimming="CharacterEllipsis"/>
-                                                    <TextBlock Grid.Column="3" Text="{Binding Building}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis"/>
-                                                    <TextBlock Grid.Column="4" Text="{Binding ImageCount}" Foreground="{StaticResource Text2}"/>
-                                                    <TextBlock Grid.Column="5" Text="{Binding CreatedAt}" Foreground="{StaticResource Text2}" FontSize="11"/>
-                                                    <TextBlock Grid.Column="6" Text="{Binding DisplayStatus}" Foreground="{StaticResource Accent}" FontSize="11"
-                                                               TextWrapping="Wrap" VerticalAlignment="Center" Margin="10,0"/>
-                                                    <Button Grid.Column="7" Content="다운로드+등록" IsEnabled="{Binding IsNotBusy}"
-                                                            Command="{Binding DataContext.DownloadAndRegisterArchiveCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                            CommandParameter="{Binding}" Padding="8,4"/>
-                                                    <Button Grid.Column="8" Content="스티칭 결과" Margin="6,0,0,0" Padding="8,4"
-                                                            IsEnabled="{Binding CanDownloadStitchingResult}"
-                                                            Command="{Binding DataContext.DownloadStitchingResultCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                            CommandParameter="{Binding}"/>
-                                                    <Button Grid.Column="9" Content="보고서" Margin="6,0,0,0" Padding="8,4"
-                                                            IsEnabled="{Binding CanDownloadReport}"
-                                                            Command="{Binding DataContext.DownloadReportCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                            CommandParameter="{Binding}"/>
-                                                </Grid>
+                                                <StackPanel>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="60"/>
+                                                            <ColumnDefinition Width="140"/>
+                                                            <ColumnDefinition Width="110"/>
+                                                            <ColumnDefinition Width="120"/>
+                                                            <ColumnDefinition Width="60"/>
+                                                            <ColumnDefinition Width="130"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="{Binding ArchiveId}" FontFamily="Consolas" Foreground="{StaticResource Text}"/>
+                                                        <TextBlock Grid.Column="1" Text="{Binding Company}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock Grid.Column="2" Text="{Binding ContractId}" Foreground="{StaticResource Text2}" FontFamily="Consolas" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock Grid.Column="3" Text="{Binding Building}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock Grid.Column="4" Text="{Binding ImageCount}" Foreground="{StaticResource Text2}"/>
+                                                        <TextBlock Grid.Column="5" Text="{Binding CreatedAt}" Foreground="{StaticResource Text2}" FontSize="11"/>
+                                                        <TextBlock Grid.Column="6" Text="{Binding DisplayStatus}" Foreground="{StaticResource Accent}" FontSize="11"
+                                                                   TextWrapping="Wrap" VerticalAlignment="Center" Margin="10,0"/>
+                                                        <Button Grid.Column="7" Content="다운로드+등록" IsEnabled="{Binding IsNotBusy}"
+                                                                Command="{Binding DataContext.DownloadAndRegisterArchiveCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                CommandParameter="{Binding}" Padding="8,4"/>
+                                                        <!-- 단일 방향(대다수 케이스)일 때만: archive의 "가장 최근" 결과를 바로 다운로드.
+                                                             방향이 여러 개면 아래 facade별 목록으로 대체(HasMultipleFacadeResults). -->
+                                                        <Button Grid.Column="8" Content="스티칭 결과" Margin="6,0,0,0" Padding="8,4"
+                                                                Visibility="{Binding HasMultipleFacadeResults, Converter={StaticResource FalsyToVisibilityConverter}}"
+                                                                IsEnabled="{Binding CanDownloadStitchingResult}"
+                                                                Command="{Binding DataContext.DownloadStitchingResultCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                CommandParameter="{Binding}"/>
+                                                        <Button Grid.Column="9" Content="보고서" Margin="6,0,0,0" Padding="8,4"
+                                                                Visibility="{Binding HasMultipleFacadeResults, Converter={StaticResource FalsyToVisibilityConverter}}"
+                                                                IsEnabled="{Binding CanDownloadReport}"
+                                                                Command="{Binding DataContext.DownloadReportCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                CommandParameter="{Binding}"/>
+                                                    </Grid>
+
+                                                    <!-- 방향(면)이 여러 개인 archive: 면마다 결과가 따로 있으므로(facade_analysis_results,
+                                                         2026-08-29) 면별로 별도 다운로드 버튼을 보여준다: 위 단일 버튼 하나로는
+                                                         어느 면 결과인지 알 수 없고, 예전엔 가장 나중에 끝난 면 것으로 덮어써져서
+                                                         나머지 면 결과를 아예 받을 방법이 없었음. -->
+                                                    <ItemsControl ItemsSource="{Binding FacadeResults}" Margin="0,6,0,0"
+                                                                  Visibility="{Binding HasMultipleFacadeResults, Converter={StaticResource TruthyToVisibilityConverter}}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <StackPanel Orientation="Horizontal" Margin="76,2,0,0">
+                                                                    <TextBlock Text="{Binding FacadeId}" Foreground="{StaticResource Text2}" FontSize="11"
+                                                                               Width="90" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                                                    <TextBlock Text="{Binding Status}" Foreground="{StaticResource Text2}" FontSize="10.5"
+                                                                               Width="80" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                                                    <Button Content="스티칭 결과" Padding="7,3" FontSize="10.5" Margin="0,0,4,0"
+                                                                            IsEnabled="{Binding StitchingZipPath, Converter={StaticResource TruthyToBoolConverter}}"
+                                                                            Command="{Binding DataContext.DownloadFacadeStitchingResultCommand, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                                                                        <Button.CommandParameter>
+                                                                            <MultiBinding Converter="{StaticResource RowAndFacadeToRequestConverter}">
+                                                                                <Binding Path="DataContext" RelativeSource="{RelativeSource AncestorType=ItemsControl}"/>
+                                                                                <Binding/>
+                                                                            </MultiBinding>
+                                                                        </Button.CommandParameter>
+                                                                    </Button>
+                                                                    <Button Content="보고서" Padding="7,3" FontSize="10.5"
+                                                                            IsEnabled="{Binding ReportPath, Converter={StaticResource TruthyToBoolConverter}}"
+                                                                            Command="{Binding DataContext.DownloadFacadeReportCommand, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                                                                        <Button.CommandParameter>
+                                                                            <MultiBinding Converter="{StaticResource RowAndFacadeToRequestConverter}">
+                                                                                <Binding Path="DataContext" RelativeSource="{RelativeSource AncestorType=ItemsControl}"/>
+                                                                                <Binding/>
+                                                                            </MultiBinding>
+                                                                        </Button.CommandParameter>
+                                                                    </Button>
+                                                                </StackPanel>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </StackPanel>
                                             </Border>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>

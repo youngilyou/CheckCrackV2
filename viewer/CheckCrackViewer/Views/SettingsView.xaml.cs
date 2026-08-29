@@ -38,6 +38,13 @@ public partial class SettingsView : UserControl
                     CurrentPasswordInput.Clear();
                 }
             };
+
+            // 2026-08-29: CrackVisionDB Postgres/SFTP 비밀번호는 (계정 비밀번호 변경 필드들과
+            // 달리) 저장된 설정에서 로드되어 화면에 채워져 있어야 하는 값 -- PasswordBox.Password는
+            // 바인딩을 지원하지 않으므로 로드 시점에 한 번 직접 밀어넣는다. LoadCrackVisionSettings()가
+            // 이미 생성자에서 실행 완료된 뒤 이 Loaded가 붙으므로 이 시점의 VM 값이 곧 저장된 값이다.
+            CrackVisionPostgresPasswordInput.Password = vm.CrackVisionPostgresPassword;
+            CrackVisionSftpPasswordInput.Password = vm.CrackVisionSftpPassword;
         };
     }
 
@@ -57,5 +64,17 @@ public partial class SettingsView : UserControl
     {
         if (DataContext is MainViewModel vm)
             vm.ConfirmNewPassword = ConfirmNewPasswordInput.Password;
+    }
+
+    private void CrackVisionPostgresPasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel vm)
+            vm.CrackVisionPostgresPassword = CrackVisionPostgresPasswordInput.Password;
+    }
+
+    private void CrackVisionSftpPasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel vm)
+            vm.CrackVisionSftpPassword = CrackVisionSftpPasswordInput.Password;
     }
 }

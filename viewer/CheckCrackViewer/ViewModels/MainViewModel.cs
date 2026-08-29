@@ -516,6 +516,61 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>2026-08-29: 방위(면)가 여러 개인 archive용 -- DownloadStitchingResult/
+    /// DownloadReport와 동일한 패턴이지만 row가 아니라 특정 facade의 결과(FacadeDownloadRequest,
+    /// RowAndFacadeToRequestConverter로 조립됨)를 받는다.</summary>
+    [RelayCommand]
+    private async Task DownloadFacadeStitchingResult(FacadeDownloadRequest request)
+    {
+        var (row, entry) = (request.Row, request.Entry);
+        var remotePath = entry.StitchingZipPath;
+        if (string.IsNullOrEmpty(remotePath))
+            return;
+        row.IsBusy = true;
+        try
+        {
+            row.Status = $"[{entry.FacadeId}] 스티칭 결과 다운로드 중...";
+            var settings = BuildCrackVisionSettings();
+            var localPath = Path.Combine(settings.DownloadFolder, "analysis_results", Path.GetFileName(remotePath));
+            await SftpDownloadService.DownloadAsync(settings, remotePath, localPath);
+            row.Status = $"[{entry.FacadeId}] 스티칭 결과 다운로드 완료: {localPath}";
+        }
+        catch (Exception ex)
+        {
+            row.Status = $"[{entry.FacadeId}] 실패: {ex.Message}";
+        }
+        finally
+        {
+            row.IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task DownloadFacadeReport(FacadeDownloadRequest request)
+    {
+        var (row, entry) = (request.Row, request.Entry);
+        var remotePath = entry.ReportPath;
+        if (string.IsNullOrEmpty(remotePath))
+            return;
+        row.IsBusy = true;
+        try
+        {
+            row.Status = $"[{entry.FacadeId}] 보고서 다운로드 중...";
+            var settings = BuildCrackVisionSettings();
+            var localPath = Path.Combine(settings.DownloadFolder, "analysis_results", Path.GetFileName(remotePath));
+            await SftpDownloadService.DownloadAsync(settings, remotePath, localPath);
+            row.Status = $"[{entry.FacadeId}] 보고서 다운로드 완료: {localPath}";
+        }
+        catch (Exception ex)
+        {
+            row.Status = $"[{entry.FacadeId}] 실패: {ex.Message}";
+        }
+        finally
+        {
+            row.IsBusy = false;
+        }
+    }
+
     private void AttachToRoot()
     {
         _tailer?.Dispose();
@@ -1167,6 +1222,16 @@ public partial class MainViewModel : ObservableObject
 
         facade.IsRunning = true;
         facade.LivePreviewImagePath = null;
+        // 2026-08-29: 이전 실행의 크랙 검사/보고서 결과가 새 실행 동안에도 그대로 남아있어서
+        // "크랙 검사 실행"/"보고서 생성"/"PDF 열기" 버튼이 (실제로는 아직 이번 실행에서 아무것도
+        // 안 나온) 마치 준비된 것처럼 계속 보이던 문제 -- FacadeItemViewModel.ResetForNewRun 참고.
+        facade.ResetForNewRun();
+        // 원격(자동) 경로로 실행되는 facade는 사람이 트리에서 직접 클릭하지 않으므로,
+        // 실행이 시작되는 시점에 직접 선택해서 트리 하이라이트(ReferenceEqualsToBrushConverter)와
+        // 오른쪽 상세 패널이 자동으로 그 facade를 가리키게 한다. 수동 "▶ 실행" 버튼 클릭도
+        // 같은 경로를 타므로(버튼 클릭이 Border의 SelectFacadeCommand까지 버블링하지 않아
+        // 지금까지는 선택이 안 됐음) 동일하게 혜택을 본다.
+        SelectFacade(facade);
 
         // Waits here (not before setting IsRunning above) if this workstation is already at
         // MaxConcurrent -- the facade still shows "진행 중" while queued, matching how a
@@ -1378,7 +1443,12 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task GenerateReport(FacadeItemViewModel facade)
     {
-        if (facade.IsGeneratingReport || !facade.HasCrackResults)
+        // 2026-08-29: DetectCracks는 원래부터 facade.IsRunning을 체크했는데(다른 실행 중인
+        // 스티칭과 겹치지 않게) GenerateReport는 빠져 있었음 -- HasCrackResults가 이전 실행의
+        // 잔여값으로 아직 true인 상태에서 새 스티칭이 진행 중일 때 보고서 생성이 그대로
+        // 진행되며 실제 에러로 이어진 것을 확인. ResetForNewRun으로 이제 HasCrackResults 자체가
+        // 새 실행 시작 시 false가 되지만, 방어적으로 IsRunning도 직접 체크.
+        if (facade.IsRunning || facade.IsGeneratingReport || !facade.HasCrackResults)
             return;
 
         facade.IsGeneratingReport = true;
@@ -1496,7 +1566,7 @@ public partial class MainViewModel : ObservableObject
                 reportRemotePath = SftpUploadService.RemotePathFor(remoteResultsDir, reportRemoteName);
             }
 
-            await CrackVisionArchiveQueryService.UpdateAnalysisResultAsync(settings, archiveId,
+            await CrackVisionArchiveQueryService.UpdateAnalysisResultAsync(settings, archiveId, facade.FacadeId,
                 stitchingRemotePath, reportRemotePath, "검사완료");
         }
         finally

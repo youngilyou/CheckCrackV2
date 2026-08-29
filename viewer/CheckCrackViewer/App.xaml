@@ -34,10 +34,12 @@
             <conv:PxValueConverter x:Key="PxValueConverter"/>
             <conv:TruthyToVisibilityConverter x:Key="TruthyToVisibilityConverter"/>
             <conv:TruthyToVisibilityConverter x:Key="FalsyToVisibilityConverter" Invert="True"/>
+            <conv:TruthyToBoolConverter x:Key="TruthyToBoolConverter"/>
             <conv:StringEqualsToVisibilityConverter x:Key="StringEqualsToVisibilityConverter"/>
             <conv:StringEqualsToVisibilityConverter x:Key="StringNotEqualsToVisibilityConverter" Invert="True"/>
             <conv:StringEqualsToBoolConverter x:Key="StringNotEqualsToBoolConverter" Invert="True"/>
             <conv:TwoStringsEqualToBrushConverter x:Key="TwoStringsEqualToBrushConverter"/>
+            <conv:RowAndFacadeToRequestConverter x:Key="RowAndFacadeToRequestConverter"/>
             <conv:ReferenceEqualsToBrushConverter x:Key="ReferenceEqualsToBrushConverter"/>
 
             <!-- ===== base styles ===== -->

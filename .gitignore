@@ -53,5 +53,10 @@ src/illumination/phasr_vendor/
 scratch_label_example.png
 tools/crack_annotator/output/
 
+# === CheckCrackViewer 원격 분석 연동: SFTP로 받은 zip/압축해제 결과 + 처리한 archive_id
+#     기록 (재시작 시 재처리 방지용, DDS durability와 무관하게 로컬 파일로 보존) -- 전부
+#     런타임에 생성되는 데이터, 소스 아님. ===
+remote_downloads/
+
 # === Claude Code local session config (not meant to be shared) ===
 .claude/

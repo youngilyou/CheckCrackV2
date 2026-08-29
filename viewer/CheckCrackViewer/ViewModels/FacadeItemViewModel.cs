@@ -90,6 +90,45 @@ public partial class FacadeItemViewModel : ObservableObject
 
     public ObservableCollection<PipelineLogEntry> RecentEvents { get; } = new();
 
+    /// <summary>2026-08-29: called right when a NEW run starts (RunFacade, before the pipeline
+    /// process itself launches) -- ApplySnapshot (MainViewModel) only ever SETS these fields when
+    /// its scan finds the corresponding stage's output file, it never clears one that's missing,
+    /// so without this a facade being re-run kept showing the PREVIOUS run's crack
+    /// count/CM Fallback stats/"보고서 생성"·"PDF 열기" buttons as if they were already
+    /// available -- confirmed as a real bug (not just a display nitpick): GenerateReport's own
+    /// guard only checks IsGeneratingReport/HasCrackResults, not IsRunning, so a still-stale-true
+    /// HasCrackResults let a report actually get (re)generated from an in-progress, not-yet-valid
+    /// mosaic. Resetting here makes "이 실행은 아직 이 단계에 도달하지 않았다" the honest default
+    /// again, and each field gets set back to real data as ApplySnapshot naturally re-populates it
+    /// stage by stage.</summary>
+    public void ResetForNewRun()
+    {
+        ImageCount = 0;
+        CoverageRatio = null;
+        MeanInlierRatio = null;
+        GlobalDriftScorePx = null;
+        NeedsColmapFallback = false;
+
+        HasColmapReport = false;
+        ColmapRequested = 0;
+        ColmapRegistered = 0;
+        ColmapMeanReprojectionErrorPx = null;
+
+        HasRectifiedMosaic = false;
+        CoverageRatioColmap = null;
+
+        HasCrackResults = false;
+        CrackCount = 0;
+
+        HasReport = false;
+        ReportPath = null;
+
+        AnalysisImagePath = null;
+        VisualImagePath = null;
+        AnalysisColmapImagePath = null;
+        VisualColmapImagePath = null;
+    }
+
     public void AddIssue(string text)
     {
         if (!Issues.Contains(text))
