@@ -78,7 +78,6 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="48*" MinWidth="500"/>
@@ -165,11 +164,18 @@
                                     <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding DbPassword, UpdateSourceTrigger=PropertyChanged}"
                                              Margin="0,0,12,10" Padding="8,5" Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
 
+                                    <!-- 2026-08-29: 체크박스 2개는 VerticalAlignment이 없어서 기본값(Stretch)으로
+                                         남아있었고, TextBox는 Padding="8,5" 때문에 체크박스보다 실제 렌더링
+                                         높이가 더 커서 StackPanel 전체 높이가 TextBox 기준으로 늘어남. 그
+                                         결과 체크박스 라벨과 TextBox/Timeout 텍스트의 실제 세로 중심이 서로
+                                         어긋나 보였음(사용자 스크린샷으로 확인). 이 행의 모든 요소에
+                                         VerticalAlignment="Center"를 명시해서 각 컨트롤 타입의 서로 다른
+                                         기본 정렬에 기대지 않고 항상 같은 가로선에 놓이게 함. -->
                                     <StackPanel Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal">
-                                        <CheckBox Content="SSL 사용" IsChecked="{Binding DbUseSsl}" Margin="0,0,18,0"/>
-                                        <CheckBox Content="비밀번호 저장" IsChecked="{Binding DbSavePassword}" Margin="0,0,18,0"/>
+                                        <CheckBox Content="SSL 사용" IsChecked="{Binding DbUseSsl}" Foreground="{StaticResource Text2}" VerticalAlignment="Center" Margin="0,0,18,0"/>
+                                        <CheckBox Content="비밀번호 저장" IsChecked="{Binding DbSavePassword}" Foreground="{StaticResource Text2}" VerticalAlignment="Center" Margin="0,0,18,0"/>
                                         <TextBlock Text="Timeout" Foreground="{StaticResource Text2}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                        <TextBox Text="{Binding DbTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" Width="50"
+                                        <TextBox Text="{Binding DbTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" Width="50" VerticalAlignment="Center"
                                                  Padding="8,5" Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
                                         <TextBlock Text="초" Foreground="{StaticResource Text2}" VerticalAlignment="Center" Margin="6,0,0,0"/>
                                     </StackPanel>
@@ -182,37 +188,31 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- 상태 -->
-                        <Border Grid.Row="2" Grid.Column="0" Style="{StaticResource CardBorder}" Margin="0,0,0,16">
-                            <StackPanel>
-                                <TextBlock Text="상태" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
-                                <TextBlock Text="{Binding DbSettingsStatus}" Foreground="{StaticResource Text}" TextWrapping="Wrap"/>
-                                <TextBlock Text="현재 테스트는 DB 서버 IP/Port 응답 확인 단계입니다. 고객정보, 의뢰 아파트 정보, 이미지 목록 조회는 DB 테이블 구조 확정 후 연결합니다."
-                                           Foreground="{StaticResource Text2}" TextWrapping="Wrap" Margin="0,10,0,0"/>
-                            </StackPanel>
-                        </Border>
-
-                        <!-- === NEW: AI 모델 경로 (읽기 전용, config/pipeline.yaml에서 읽음) === -->
-                        <Border Grid.Row="2" Grid.Column="2" Style="{StaticResource CardBorder}" Margin="0,0,0,16">
-                            <StackPanel>
-                                <TextBlock Text="AI 모델 경로" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
-                                <TextBlock Text="config/pipeline.yaml의 crack.model 값입니다 (읽기 전용 — 크랙 검사가 실제로 쓰는 모델은 항상 이 YAML 기본값)."
-                                           Foreground="{StaticResource Text2}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                                <TextBlock Text="{Binding AiModelPath}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap"/>
-                            </StackPanel>
-                        </Border>
-
-                        <!-- === NEW: 환경 설정 (읽기 전용) === -->
-                        <!-- 2026-08-28: "Python 실행 파일"(로컬 PC의 python.exe 절대경로, 사용자명
+                        <!-- === 환경 설정 (읽기 전용) — AI 모델 경로 + 파일 저장소 상태 통합 (2026-08-29) ===
+                             기존에 "상태"(DB 연결 테스트 결과, MySQL 연결 카드 바로 옆에 이미
+                             있어서 중복), "AI 모델 경로", "환경 설정" 3개 카드로 나뉘어 있던 것을
+                             하나로 합침. "상태" 카드는 삭제(운영자 요청, MySQL 연결 카드 자체에도
+                             결과가 안 보이는 게 아니라, 별도 카드로 반복 노출할 필요가 없다는 판단).
+                             "파일 저장소 상태"는 원래 "시스템 상태" 탭에 있었는데 여기로 이동함.
+                             셋 다 "운영자가 바꿀 수 없는, 현재 환경을 그대로 보여주는 읽기 전용
+                             정보"라는 점에서 성격이 같음.
+                             2026-08-28: "Python 실행 파일"(로컬 PC의 python.exe 절대경로, 사용자명
                              포함) 표시는 제거: 화면에 노출할 필요 없는 로컬 환경 정보. -->
-                        <Border Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" Style="{StaticResource CardBorder}">
-                            <Grid>
-                                <StackPanel>
-                                    <TextBlock Text="환경 설정" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
-                                    <TextBlock Text="RootPath" Foreground="{StaticResource Text2}" FontSize="11"/>
-                                    <TextBlock Text="{Binding RootPath}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap"/>
-                                </StackPanel>
-                            </Grid>
+                        <Border Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" Style="{StaticResource CardBorder}">
+                            <StackPanel>
+                                <TextBlock Text="환경 설정" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
+
+                                <TextBlock Text="RootPath" Foreground="{StaticResource Text2}" FontSize="11"/>
+                                <TextBlock Text="{Binding RootPath}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,0,0,14"/>
+
+                                <TextBlock Text="AI 모델 경로" Foreground="{StaticResource Text2}" FontSize="11"/>
+                                <TextBlock Text="config/pipeline.yaml의 crack.model 값입니다 (읽기 전용 — 크랙 검사가 실제로 쓰는 모델은 항상 이 YAML 기본값)."
+                                           Foreground="{StaticResource Text2}" FontSize="10.5" TextWrapping="Wrap" Margin="0,2,0,4"/>
+                                <TextBlock Text="{Binding AiModelPath}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,0,0,14"/>
+
+                                <TextBlock Text="파일 저장소 상태" Foreground="{StaticResource Text2}" FontSize="11"/>
+                                <TextBlock Text="{Binding StorageStatusText}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap"/>
+                            </StackPanel>
                         </Border>
                     </Grid>
                 </ScrollViewer>
@@ -222,7 +222,6 @@
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <Grid Margin="32,16,32,28" HorizontalAlignment="Stretch">
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
@@ -236,26 +235,13 @@
                                    Text="애플리케이션 내부에서 관측 가능한 실제 신호만 표시합니다 (촬영/드론 상태는 이 Viewer가 관측하지 않음)."
                                    Foreground="{StaticResource Text2}" TextWrapping="Wrap" Margin="0,0,0,20"/>
 
-                        <!-- DB 연결 상태 -->
-                        <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource CardBorder}" Margin="0,0,0,16">
-                            <StackPanel>
-                                <TextBlock Text="DB 연결 상태" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
-                                <TextBlock Text="최근 연결 테스트 결과 (계정/연결 탭의 '연결 테스트' 버튼으로 갱신)"
-                                           Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,8"/>
-                                <TextBlock Text="{Binding DbSettingsStatus}" Foreground="{StaticResource Text}" TextWrapping="Wrap"/>
-                            </StackPanel>
-                        </Border>
-
-                        <!-- 파일 저장소 상태 -->
-                        <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource CardBorder}" Margin="0,0,0,16">
-                            <StackPanel>
-                                <TextBlock Text="파일 저장소 상태" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
-                                <TextBlock Text="{Binding StorageStatusText}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap"/>
-                            </StackPanel>
-                        </Border>
+                        <!-- 2026-08-29: "DB 연결 상태"(계정/연결 탭 MySQL 연결 카드와 중복)와
+                             "파일 저장소 상태"(계정/연결 탭 "환경 설정" 카드로 통합됨)를 여기서
+                             삭제함(운영자 요청). 처리 Job/오류 로그가 원래 Row 2였던 것을 Row 1로
+                             당김. -->
 
                         <!-- 처리 Job -->
-                        <Border Grid.Row="2" Grid.Column="0" Style="{StaticResource CardBorder}">
+                        <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource CardBorder}">
                             <StackPanel>
                                 <TextBlock Text="처리 Job" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
                                 <TextBlock Text="현재 처리 중인 작업이 없습니다." Foreground="{StaticResource Text2}" FontSize="12"
@@ -281,7 +267,7 @@
                         </Border>
 
                         <!-- 오류/로그 -->
-                        <Border Grid.Row="2" Grid.Column="2" Style="{StaticResource CardBorder}">
+                        <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource CardBorder}">
                             <StackPanel>
                                 <TextBlock Text="오류/로그 (WARNING/ERROR만)" Style="{StaticResource Kicker}" Margin="0,0,0,8"/>
                                 <ListBox ItemsSource="{Binding ErrorLogView}" Background="Transparent" BorderThickness="0"
@@ -466,7 +452,18 @@
 
                         <!-- 수동 다운로드 -->
                         <Border Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" Style="{StaticResource CardBorder}">
-                            <StackPanel>
+                            <!-- 2026-08-29: 헤더 Grid와 각 행 Grid(ItemsControl 템플릿 안, 별개
+                                 인스턴스)가 항상 정확히 같은 컬럼 폭을 갖도록 IsSharedSizeScope
+                                 사용. 고정 픽셀 폭을 추측해서 넣었던 이전 시도(예: 원본=110)가
+                                 실제 "다운로드+등록" 버튼 크기보다 좁아서 여전히 어긋났음(사용자
+                                 스크린샷으로 재확인). 폭을 추측하는 대신, 원본/스티칭 결과/보고서
+                                 3개 컬럼만 Auto+SharedSizeGroup으로 바꿔서 WPF가 헤더와 모든 행을
+                                 통틀어 실제 렌더링된 내용 중 가장 넓은 것에 맞춰 자동으로 폭을
+                                 맞추게 함(폰트/DPI가 달라져도 항상 정확히 맞음). 나머지 컬럼(회사/
+                                 고객ID/동/이미지수/생성시각/진행상태)은 TextTrimming으로 긴 값을
+                                 잘라내야 해서 그대로 고정 폭 유지함. Auto로 바꾸면 트리밍이 아예
+                                 작동하지 않게 됨. -->
+                            <StackPanel Grid.IsSharedSizeScope="True">
                                 <Grid Margin="0,0,0,10">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -495,7 +492,9 @@
                                     <Button Grid.Column="2" Content="찾아보기..." Command="{Binding BrowseCrackVisionDownloadFolderCommand}"
                                             Padding="10,5" VerticalAlignment="Bottom"/>
                                 </Grid>
-                                <!-- 헤더 행: 아래 ItemsControl의 각 행과 정확히 같은 컬럼 폭. -->
+                                <!-- 헤더 행: 아래 ItemsControl의 각 행과 정확히 같은 컬럼 폭
+                                     (마지막 3개는 SharedSizeGroup으로 동기화, 위 StackPanel의
+                                     IsSharedSizeScope 주석 참고). -->
                                 <Grid Margin="10,0,10,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="60"/>
@@ -505,20 +504,20 @@
                                         <ColumnDefinition Width="60"/>
                                         <ColumnDefinition Width="130"/>
                                         <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="ColOriginal"/>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="ColStitching"/>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="ColReport"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="Archive ID" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold"/>
-                                    <TextBlock Grid.Column="1" Text="회사" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold"/>
-                                    <TextBlock Grid.Column="2" Text="고객 ID" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold"/>
-                                    <TextBlock Grid.Column="3" Text="동" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold"/>
-                                    <TextBlock Grid.Column="4" Text="이미지 수" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold"/>
-                                    <TextBlock Grid.Column="5" Text="생성 시각" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold"/>
-                                    <TextBlock Grid.Column="6" Text="진행 상태" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" Margin="10,0"/>
-                                    <TextBlock Grid.Column="7" Text="원본" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold"/>
-                                    <TextBlock Grid.Column="8" Text="스티칭 결과" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" Margin="6,0,0,0"/>
-                                    <TextBlock Grid.Column="9" Text="보고서" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" Margin="6,0,0,0"/>
+                                    <TextBlock Grid.Column="0" Text="Archive ID" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="1" Text="회사" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" Text="고객 ID" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="3" Text="동" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="4" Text="이미지 수" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="5" Text="생성 시각" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="6" Text="진행 상태" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="7" Text="원본" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="8" Text="스티칭 결과" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="9" Text="보고서" Foreground="{StaticResource Text2}" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center"/>
                                 </Grid>
                                 <ItemsControl ItemsSource="{Binding RemoteArchives}">
                                     <ItemsControl.ItemTemplate>
@@ -534,30 +533,37 @@
                                                             <ColumnDefinition Width="60"/>
                                                             <ColumnDefinition Width="130"/>
                                                             <ColumnDefinition Width="*"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto" SharedSizeGroup="ColOriginal"/>
+                                                            <ColumnDefinition Width="Auto" SharedSizeGroup="ColStitching"/>
+                                                            <ColumnDefinition Width="Auto" SharedSizeGroup="ColReport"/>
                                                         </Grid.ColumnDefinitions>
-                                                        <TextBlock Grid.Column="0" Text="{Binding ArchiveId}" FontFamily="Consolas" Foreground="{StaticResource Text}"/>
-                                                        <TextBlock Grid.Column="1" Text="{Binding Company}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis"/>
-                                                        <TextBlock Grid.Column="2" Text="{Binding ContractId}" Foreground="{StaticResource Text2}" FontFamily="Consolas" FontSize="11" TextTrimming="CharacterEllipsis"/>
-                                                        <TextBlock Grid.Column="3" Text="{Binding Building}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis"/>
-                                                        <TextBlock Grid.Column="4" Text="{Binding ImageCount}" Foreground="{StaticResource Text2}"/>
-                                                        <TextBlock Grid.Column="5" Text="{Binding CreatedAt}" Foreground="{StaticResource Text2}" FontSize="11"/>
+                                                        <TextBlock Grid.Column="0" Text="{Binding ArchiveId}" FontFamily="Consolas" Foreground="{StaticResource Text}" TextAlignment="Center"/>
+                                                        <TextBlock Grid.Column="1" Text="{Binding Company}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis" TextAlignment="Center"/>
+                                                        <TextBlock Grid.Column="2" Text="{Binding ContractId}" Foreground="{StaticResource Text2}" FontFamily="Consolas" FontSize="11" TextTrimming="CharacterEllipsis" TextAlignment="Center"/>
+                                                        <TextBlock Grid.Column="3" Text="{Binding Building}" Foreground="{StaticResource Text}" TextTrimming="CharacterEllipsis" TextAlignment="Center"/>
+                                                        <TextBlock Grid.Column="4" Text="{Binding ImageCount}" Foreground="{StaticResource Text2}" TextAlignment="Center"/>
+                                                        <TextBlock Grid.Column="5" Text="{Binding CreatedAt}" Foreground="{StaticResource Text2}" FontSize="11" TextAlignment="Center"/>
                                                         <TextBlock Grid.Column="6" Text="{Binding DisplayStatus}" Foreground="{StaticResource Accent}" FontSize="11"
-                                                                   TextWrapping="Wrap" VerticalAlignment="Center" Margin="10,0"/>
+                                                                   TextWrapping="Wrap" TextAlignment="Center" VerticalAlignment="Center"/>
                                                         <Button Grid.Column="7" Content="다운로드+등록" IsEnabled="{Binding IsNotBusy}"
                                                                 Command="{Binding DataContext.DownloadAndRegisterArchiveCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                                 CommandParameter="{Binding}" Padding="8,4"/>
                                                         <!-- 단일 방향(대다수 케이스)일 때만: archive의 "가장 최근" 결과를 바로 다운로드.
-                                                             방향이 여러 개면 아래 facade별 목록으로 대체(HasMultipleFacadeResults). -->
+                                                             방향이 여러 개면 아래 facade별 목록으로 대체(HasMultipleFacadeResults).
+                                                             2026-08-29: 실제로 겪은 버그. 기존엔 IsEnabled만 HasStitchingResult/
+                                                             HasReport로 걸려있어서, 검토가 아직 안 끝난(결과 파일 자체가 없는)
+                                                             archive에도 버튼이 계속 "보이기만" 하고 비활성화된 채로 남아있었음.
+                                                             운영자가 "검토 완료된 것만 버튼이 표시돼야 한다"고 명시적으로 요청함.
+                                                             이제 결과가 실제로 존재할 때만(HasStitchingResult/HasReport) 버튼
+                                                             자체가 나타나고, IsEnabled는 그중에서도 다운로드 진행 중(IsBusy)일 때만
+                                                             잠깐 비활성화하는 별개의 역할로 남겨둠. -->
                                                         <Button Grid.Column="8" Content="스티칭 결과" Margin="6,0,0,0" Padding="8,4"
-                                                                Visibility="{Binding HasMultipleFacadeResults, Converter={StaticResource FalsyToVisibilityConverter}}"
+                                                                Visibility="{Binding ShowSingleStitchingResult, Converter={StaticResource TruthyToVisibilityConverter}}"
                                                                 IsEnabled="{Binding CanDownloadStitchingResult}"
                                                                 Command="{Binding DataContext.DownloadStitchingResultCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                                 CommandParameter="{Binding}"/>
                                                         <Button Grid.Column="9" Content="보고서" Margin="6,0,0,0" Padding="8,4"
-                                                                Visibility="{Binding HasMultipleFacadeResults, Converter={StaticResource FalsyToVisibilityConverter}}"
+                                                                Visibility="{Binding ShowSingleReport, Converter={StaticResource TruthyToVisibilityConverter}}"
                                                                 IsEnabled="{Binding CanDownloadReport}"
                                                                 Command="{Binding DataContext.DownloadReportCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                                 CommandParameter="{Binding}"/>
@@ -577,6 +583,7 @@
                                                                     <TextBlock Text="{Binding Status}" Foreground="{StaticResource Text2}" FontSize="10.5"
                                                                                Width="80" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                                                                     <Button Content="스티칭 결과" Padding="7,3" FontSize="10.5" Margin="0,0,4,0"
+                                                                            Visibility="{Binding StitchingZipPath, Converter={StaticResource TruthyToVisibilityConverter}}"
                                                                             IsEnabled="{Binding StitchingZipPath, Converter={StaticResource TruthyToBoolConverter}}"
                                                                             Command="{Binding DataContext.DownloadFacadeStitchingResultCommand, RelativeSource={RelativeSource AncestorType=UserControl}}">
                                                                         <Button.CommandParameter>
@@ -587,6 +594,7 @@
                                                                         </Button.CommandParameter>
                                                                     </Button>
                                                                     <Button Content="보고서" Padding="7,3" FontSize="10.5"
+                                                                            Visibility="{Binding ReportPath, Converter={StaticResource TruthyToVisibilityConverter}}"
                                                                             IsEnabled="{Binding ReportPath, Converter={StaticResource TruthyToBoolConverter}}"
                                                                             Command="{Binding DataContext.DownloadFacadeReportCommand, RelativeSource={RelativeSource AncestorType=UserControl}}">
                                                                         <Button.CommandParameter>

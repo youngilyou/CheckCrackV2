@@ -39,6 +39,13 @@ public sealed partial class RemoteArchiveRowViewModel : ObservableObject
     public IReadOnlyList<FacadeAnalysisResultEntry> FacadeResults => Record.FacadeResults;
     public bool HasMultipleFacadeResults => Record.FacadeResults.Count > 1;
 
+    // 2026-08-29: 단일 방향 버튼("스티칭 결과"/"보고서")이 보여야 하는 두 조건 -- (1) 다중 방향이
+    // 아니어야 함(다중이면 위 FacadeResults 미니 목록으로 대체) AND (2) 결과가 실제로 존재해야 함
+    // (검토/분석이 아직 안 끝난 archive에 버튼만 비활성화된 채로 계속 보이던 버그 수정 -- 운영자
+    // 요청: "반드시 검토 완료된 것만 버튼이 표시되어야 함"). 둘 다 만족할 때만 버튼 자체가 보임.
+    public bool ShowSingleStitchingResult => HasStitchingResult && !HasMultipleFacadeResults;
+    public bool ShowSingleReport => HasReport && !HasMultipleFacadeResults;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsNotBusy))]
     [NotifyPropertyChangedFor(nameof(CanDownloadStitchingResult))]
@@ -57,7 +64,12 @@ public sealed partial class RemoteArchiveRowViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(DisplayStatus))]
     private string _status = "";
 
-    public string DisplayStatus => string.IsNullOrEmpty(Status) ? (Record.AnalysisStatus ?? "") : Status;
+    // 2026-08-29: 실제로 겪은 버그 -- 방금 저장만 되고 아직 분석이 안 된 archive는
+    // Record.AnalysisStatus가 DB에서 NULL로 와서 이 칸이 완전히 빈 문자열로 보였음(운영자
+    // 입장에선 "상태를 아예 안 보여주는 버그"처럼 보임). "아직 시작 안 됨"이라는 것 자체가
+    // 유의미한 상태이므로, 진행 중 메시지도 없고 DB에 저장된 분석 상태도 없으면 "미진행"으로
+    // 명시적으로 표시한다.
+    public string DisplayStatus => string.IsNullOrEmpty(Status) ? (Record.AnalysisStatus ?? "미진행") : Status;
 
     public RemoteArchiveRowViewModel(CrackVisionArchiveRecord record)
     {
