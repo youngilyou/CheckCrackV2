@@ -593,7 +593,14 @@
 
                                     <!-- images -->
                                     <TextBlock Text="모자이크 미리보기" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
-                                    <UniformGrid Columns="2" Margin="0,0,0,20">
+                                    <!-- 2026-08-29: UniformGrid는 Columns 값과 무관하게 Collapsed된 자식도
+                                         그리드 셀 하나를 차지함. Columns=2였을 땐 COLMAP 보정본이 없는(가장
+                                         흔한) 경우 유일하게 보이는 H체인 이미지 오른쪽에 빈 공백이 남았고,
+                                         Columns=1로 바꾸면 이번엔 둘 다 있을 때 나란히 안 놓이고 세로로(2행)
+                                         쌓임. 둘 다 UniformGrid가 "보이는 자식 수"가 아니라 "선언된 칸 수"
+                                         기준으로 셀을 나누기 때문. StackPanel(가로)은 Collapsed 자식에 아예
+                                         공간을 안 주므로, 1개면 그 하나가 자기 폭만큼만, 2개면 나란히 놓임. -->
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
                                         <Border Style="{StaticResource CardBorder}" Margin="0,0,8,8"
                                     Visibility="{Binding VisualColmapImagePath, Converter={StaticResource TruthyToVisibilityConverter}}">
                                             <StackPanel>
@@ -612,7 +619,7 @@
                                            Tag="{Binding VisualImagePath}" MouseLeftButtonDown="Image_MouseLeftButtonDown"/>
                                             </StackPanel>
                                         </Border>
-                                    </UniformGrid>
+                                    </StackPanel>
 
                                     <!-- issues -->
                                     <TextBlock Text="이슈 / 경고" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>

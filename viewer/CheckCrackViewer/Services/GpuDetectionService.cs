@@ -4,7 +4,17 @@ namespace CheckCrackViewer.Services;
 
 /// <summary>Determines this workstation's max_concurrent value for the remote analysis worker
 /// role (see https://github.com/youngilyou/AnalysisLoadBalancer README "max_concurrent 결정
-/// 규칙"): GPU detected -> 5, CPU-only -> 1. Deliberately asks the SAME python environment the
+/// 규칙"): always 1, regardless of GPU. 2026-08-29: previously GPU detected -> 5, CPU-only -> 1
+/// -- reverted to a flat 1 per an operator-confirmed real measurement ON THE CURRENT GPU (RTX
+/// 4080): a single GPU-accelerated facade run already uses 95%+ of the GPU on its own, so a
+/// second concurrent run on the same GPU isn't actually feasible (they'd contend for the same
+/// near-saturated resource, not run in true parallel). This is a hardware-specific number, not a
+/// permanent architectural limit -- the operator has confirmed a GPU swap is planned, and the
+/// concurrency this returns should be revisited (measured the same way: run 1 facade, check GPU
+/// utilization, see how much headroom is actually left for a 2nd) once the replacement GPU is in.
+/// DetectCudaAvailableAsync() below is kept (still useful to know/show whether GPU acceleration
+/// is available at all) even though its result no longer changes this value.
+/// Deliberately asks the SAME python environment the
 /// actual pipeline runs in (<see cref="PythonEnvironment.DiscoverPythonExe"/>, the conda env
 /// with torch+cuda already confirmed installed) via `torch.cuda.is_available()`, rather than
 /// probing hardware (WMI/nvidia-smi) independently -- a machine can have a GPU that this
@@ -50,5 +60,5 @@ public static class GpuDetectionService
         }
     }
 
-    public static uint ComputeMaxConcurrent(bool gpuAvailable) => gpuAvailable ? 5u : 1u;
+    public static uint ComputeMaxConcurrent(bool gpuAvailable) => 1u;
 }

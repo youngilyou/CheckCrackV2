@@ -105,14 +105,34 @@ public partial class ImageViewerWindow : Window
         }
     }
 
+    // 2026-08-29: 실제로 겪은 버그 -- "무제한 원본 해상도로 로드"라는 이 클래스 원래 취지가
+    // 페사드 모자이크 실제 크기(BACK_visual.tif 하나가 42165x36012 = 약 15억 픽셀, Bgr24
+    // 기준 원본 픽셀 데이터만 4.5GB)에서는 성립하지 않음을 확인 -- 이 이미지를 DecodePixelWidth
+    // 제한 없이 열면 창이 완전히 검게만 나옴(디코드 자체는 됨 -- PixelWidth/Height는 정상 읽힘,
+    // 이 앱의 SoftwareOnly 렌더링 모드가 이 정도 크기의 비트맵/엘리먼트를 그리지 못하는 것으로
+    // 추정). 헤더만 먼저 가볍게 읽어(DelayCreation, 픽셀 디코드 없음) 원본 폭이 안전 한도를
+    // 넘으면 그때만 캡을 걸음 -- 썸네일(700px)보다는 훨씬 세밀하면서도 렌더링이 실패하지 않는
+    // 값으로 8000을 선택(일반적인 모니터/줌 배율을 감안해도 넉넉함). 5635x4112처럼 작은
+    // 이미지는 그대로 원본 그대로 로드됨(이 클래스의 원래 "무제한 원본" 취지 유지).
+    private const int MaxSafeDecodePixelWidth = 8000;
+
     private void LoadImage(string imagePath, string? titleOverride = null)
     {
         Tag = titleOverride ?? System.IO.Path.GetFileName(imagePath);
         FileNameText.Text = System.IO.Path.GetFileName(imagePath);
 
+        int nativeWidth;
+        using (var probeStream = System.IO.File.OpenRead(imagePath))
+        {
+            var probeDecoder = BitmapDecoder.Create(probeStream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
+            nativeWidth = probeDecoder.Frames[0].PixelWidth;
+        }
+
         var bitmap = new BitmapImage();
         bitmap.BeginInit();
         bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        if (nativeWidth > MaxSafeDecodePixelWidth)
+            bitmap.DecodePixelWidth = MaxSafeDecodePixelWidth;
         bitmap.UriSource = new Uri(imagePath);
         bitmap.EndInit();
         bitmap.Freeze();
