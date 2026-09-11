@@ -45,6 +45,7 @@ stitch:
   analysis_feather_blend: false
   visual_multiband_blend: true
   multiband_num_bands: 5
+  max_chain_weight: 12.0  # cumulative 1/inlier_ratio cost (Dijkstra) beyond which a node is excluded rather than composed through untrustworthy matches -- needs real-world tuning, not yet measured against production data
 
 colmap:
   enabled: true

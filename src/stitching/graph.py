@@ -1,9 +1,19 @@
 """Global stitch graph (CLAUDE.local.md #10).
 
-Homographies are composed along a BFS shortest-path tree from a chosen
-reference image, not accumulated as a naive linear chain (#10: "단순 chain
-누적 ... 만 사용하지 않는다"). Images in a different connected component than
-the reference are reported as unreachable rather than force-merged.
+Homographies are composed along a *weighted* shortest-path tree from a chosen
+reference image (Dijkstra over each edge's 1/inlier_ratio cost), not
+accumulated as a naive linear chain (#10: "단순 chain 누적 ... 만 사용하지
+않는다") and not a plain hop-count BFS either (confirmed real, 2026-09-11: a
+hop-count BFS can route a node through several low-confidence edges just
+because that happens to be fewest hops, even when a slightly-longer,
+higher-confidence path to the same node already exists in the graph -- and
+since every edge's own small error compounds as more of them get chained,
+which edges get used matters as much as how many). Images in a different
+connected component than the reference, or reachable only through edges
+whose combined cost exceeds `max_cumulative_weight`, are reported as
+unreachable rather than force-merged or composed through untrustworthy
+matches -- the COLMAP fallback (#12) exists precisely to rectify facades
+this path can't confidently cover.
 """
 
 from __future__ import annotations
@@ -32,14 +42,39 @@ def pick_reference(g: nx.Graph) -> str | None:
     return max(degrees.items(), key=lambda kv: (kv[1], kv[0]))[0]
 
 
-def compute_global_homographies(g: nx.Graph, reference: str) -> tuple[dict[str, np.ndarray], list[str]]:
-    """Compose per-edge homographies along the BFS tree from `reference`.
+def compute_global_homographies(
+    g: nx.Graph, reference: str, max_cumulative_weight: float | None = None
+) -> tuple[dict[str, np.ndarray], list[str]]:
+    """Compose per-edge homographies along the highest-confidence path from
+    `reference` to each node (weighted shortest path / Dijkstra over the
+    per-edge `weight` build_stitch_graph already computes as 1/inlier_ratio —
+    previously computed but never actually read anywhere, confirmed by
+    searching the codebase 2026-09-11).
 
-    Returns (homographies mapping each reachable node -> reference frame,
-    list of node ids in other connected components).
+    `max_cumulative_weight`, if given, additionally excludes any node whose
+    *best available* path still costs more than this — every path to it runs
+    through enough low-confidence edges that composing through them isn't
+    trustworthy, so it's treated exactly like a different-connected-component
+    node rather than composed anyway just to fill coverage.
+
+    Returns (homographies mapping each reachable, trusted node -> reference
+    frame, list of node ids that are unreachable or excluded by the cutoff).
     """
+    distances, paths = nx.single_source_dijkstra(g, reference, weight="weight")
+
     homographies: dict[str, np.ndarray] = {reference: np.eye(3)}
-    for u, v in nx.bfs_edges(g, reference):
+    for node in sorted(distances, key=lambda n: distances[n]):
+        if node == reference:
+            continue
+        if max_cumulative_weight is not None and distances[node] > max_cumulative_weight:
+            continue
+        u, v = paths[node][-2], paths[node][-1]
+        if u not in homographies:
+            # u's own distance was smaller than v's (Dijkstra processes nodes
+            # in non-decreasing distance order), so this only happens if u
+            # itself was cut off above — every path through it is equally
+            # untrustworthy, so v is excluded too rather than composed anyway.
+            continue
         geom = g.edges[u, v]["geom"]
         if geom.image_a == u and geom.image_b == v:
             h_v_to_u = np.linalg.inv(geom.homography)

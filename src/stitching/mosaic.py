@@ -103,7 +103,9 @@ def stitch_facade(
     if reference is None:
         raise RuntimeError(f"facade {facade_id}: no geometry edge passed the quality gate")
 
-    homographies, unreachable = compute_global_homographies(graph, reference)
+    scfg = cfg.stitch
+    max_chain_weight = float(scfg.max_chain_weight) if "max_chain_weight" in scfg else 12.0
+    homographies, unreachable = compute_global_homographies(graph, reference, max_cumulative_weight=max_chain_weight)
     sizes = {iid: (img.shape[1], img.shape[0]) for iid, img in images.items()}
     mean_drift_px, max_drift_px, cycle_edge_count = compute_drift_score(graph, reference, homographies, sizes)
 
@@ -121,7 +123,6 @@ def stitch_facade(
     # blender outright. That must not swallow the drift/coverage numbers this
     # facade's COLMAP-fallback decision depends on, so blend failures are
     # caught per-output rather than aborting the whole facade.
-    scfg = cfg.stitch
     analysis_image = _safe_blend(blend_analysis, warped, seam_masks, canvas_size) if scfg.generate_analysis_mosaic else None
     visual_image = (
         _safe_blend(blend_visual, warped, seam_masks, canvas_size, num_bands=int(scfg.multiband_num_bands))

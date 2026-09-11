@@ -464,6 +464,91 @@ def rectify_images(
     return warped, (canvas_w, canvas_h), source_transforms
 
 
+def _crop_to_dense_coverage(
+    warped: dict[str, WarpedImage], canvas_size: tuple[int, int], min_coverage_count: int = 2, margin_px: int = 0
+) -> tuple[int, int, int, int] | None:
+    """Bounding box (x0, y0, x1, y1) of canvas pixels covered by at least
+    `min_coverage_count` overlapping source images -- often noticeably
+    smaller than the full canvas, because plenty of that canvas is real photo
+    content but not *facade* content: an oblique DJI shot also frames sky
+    above the roofline and ground/terrain below, and `_camera_to_facade_homography`
+    projects those off-plane pixels too (it has no way to know they aren't on
+    the wall). The facade surface itself is seen redundantly -- the whole
+    point of a drone orbit is heavy overlap between neighboring shots -- so it
+    typically has coverage_count well above 1 almost everywhere. Off-plane
+    background does not: the planar homography assumption is simply wrong for
+    it, so two different photos' sky/terrain pixels land at two different,
+    essentially unrelated canvas positions instead of stacking up the way real
+    facade pixels do. Thresholding on redundancy (not on any color/semantic
+    guess about "is this sky") separates the two using a signal this pipeline
+    already computes for free while pasting `warped` onto the canvas.
+
+    Returns None when the dense region already spans (approximately) the
+    whole canvas -- nothing worth cropping (also covers `warped` being empty).
+    """
+    canvas_w, canvas_h = canvas_size
+    count = np.zeros((canvas_h, canvas_w), dtype=np.int32)
+    for w in warped.values():
+        x, y = w.corner
+        ww, hh = w.size
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(canvas_w, x + ww), min(canvas_h, y + hh)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        count[y0:y1, x0:x1] += w.mask[y0 - y : y1 - y, x0 - x : x1 - x] > 0
+
+    dense = count >= min_coverage_count
+    if not dense.any():
+        return None
+    ys, xs = np.where(dense)
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    if margin_px > 0:
+        x0 = max(0, x0 - margin_px)
+        y0 = max(0, y0 - margin_px)
+        x1 = min(canvas_w, x1 + margin_px)
+        y1 = min(canvas_h, y1 + margin_px)
+    if x0 <= 0 and y0 <= 0 and x1 >= canvas_w and y1 >= canvas_h:
+        return None
+    return x0, y0, x1, y1
+
+
+def _apply_canvas_crop(
+    warped: dict[str, WarpedImage],
+    source_transforms: dict[str, SourceTransform],
+    bbox: tuple[int, int, int, int],
+) -> tuple[dict[str, WarpedImage], dict[str, SourceTransform], tuple[int, int]]:
+    """Re-expresses every warped image and source homography in the cropped
+    canvas's own coordinate frame -- the same local-shift trick `rectify_images`
+    already applies per image (see `local_shift`/`H_local` there), just applied
+    once more for the shared canvas crop itself. `source_transforms[...].H`
+    must move with the crop: crack/pipeline.py inverts it later to map a
+    mosaic-space crack location back to a source image's own pixel coordinates,
+    and that only stays correct if H still points into the *same* canvas frame
+    the crack was actually detected in."""
+    x0, y0, x1, y1 = bbox
+    shift = np.array([[1.0, 0.0, -x0], [0.0, 1.0, -y0], [0.0, 0.0, 1.0]])
+
+    new_warped: dict[str, WarpedImage] = {}
+    new_transforms: dict[str, SourceTransform] = {}
+    for image_id, w in warped.items():
+        cx, cy = w.corner
+        ww, hh = w.size
+        ix0, iy0 = max(cx, x0), max(cy, y0)
+        ix1, iy1 = min(cx + ww, x1), min(cy + hh, y1)
+        if ix1 <= ix0 or iy1 <= iy0:
+            continue  # this image's footprint falls entirely outside the dense-coverage crop
+        local_image = w.image[iy0 - cy : iy1 - cy, ix0 - cx : ix1 - cx]
+        local_mask = w.mask[iy0 - cy : iy1 - cy, ix0 - cx : ix1 - cx]
+        new_warped[image_id] = WarpedImage(
+            image=local_image, mask=local_mask, corner=(ix0 - x0, iy0 - y0), size=(ix1 - ix0, iy1 - iy0)
+        )
+        st = source_transforms[image_id]
+        new_transforms[image_id] = SourceTransform(H=shift @ st.H, width=st.width, height=st.height)
+
+    return new_warped, new_transforms, (x1 - x0, y1 - y0)
+
+
 def rectify_and_blend(
     facade_id: str,
     reconstruction: pycolmap.Reconstruction,
@@ -482,6 +567,16 @@ def rectify_and_blend(
     Phase 1) — this function doesn't care which.
     """
     warped, canvas_size, source_transforms = rectify_images(reconstruction, plane, images_dir)
+
+    # Confirmed real, 2026-09-11: even after facade_plane_from_reconstruction's
+    # own background-point filtering keeps the *canvas* sized to the real
+    # facade, individual oblique photos still frame sky/terrain past the
+    # roofline/ground within that canvas, and that off-plane content still
+    # gets projected onto it (see _crop_to_dense_coverage). Tightening to
+    # where multiple photos actually agree removes most of that margin.
+    bbox = _crop_to_dense_coverage(warped, canvas_size, min_coverage_count=2, margin_px=int(0.5 * plane.px_per_m))
+    if bbox is not None:
+        warped, source_transforms, canvas_size = _apply_canvas_crop(warped, source_transforms, bbox)
 
     seam_masks = compute_seam_masks(warped, canvas_size)
     seam_owner_map, seam_owner_index = build_owner_map(seam_masks, warped, canvas_size)

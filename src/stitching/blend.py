@@ -55,7 +55,18 @@ def compute_seam_masks(
         small_corners.append((int(round(w.corner[0] * scale)), int(round(w.corner[1] * scale))))
         small_sizes.append((small_w, small_h))
 
-    finder = cv2.detail.GraphCutSeamFinder("COST_COLOR")
+    # COST_COLOR (plain color-difference cost) has no notion of "this is a
+    # window/AC-unit edge, don't cut here" -- confirmed real, 2026-09-11: on
+    # a facade with heavy overlap (a canvas region covered by up to 5 source
+    # images), several seams landed squarely on window frames instead of the
+    # flat wall between them, and a few pixels of inter-image misalignment
+    # right at a window edge is far more visible (a sheared window pane, a
+    # dark ghosting blob) than the same misalignment on a texture-less wall.
+    # COST_COLOR_GRAD adds each pixel's local gradient magnitude to the seam
+    # cost, so a high-gradient/high-detail edge (window frame, AC unit
+    # silhouette) costs more to cut through than a flat wall region, steering
+    # the graph-cut toward seams that land on the wall instead.
+    finder = cv2.detail.GraphCutSeamFinder("COST_COLOR_GRAD")
     small_seam_masks = finder.find(small_images, small_corners, small_masks)
 
     small_canvas_w = max(1, int(round(canvas_w * scale)))
