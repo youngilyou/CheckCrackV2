@@ -1698,3 +1698,154 @@ PNG로 뽑아 실제 이미지가 정상 렌더링되는 것을 직접 확인함
 사용률이 이미 95% 이상이라 동시 2건 자체가 불가능함을 확인. **이 값은 RTX 4080 기준 실측치이지
 영구 상한이 아님** — 향후 GPU 교체 예정이며, 교체 후 같은 방식(1건 실행 중 사용률 확인)으로
 재측정 필요(관련 규칙 문서는 `AnalysisLoadBalancer` 저장소의 README "max_concurrent 결정 규칙").
+
+## 2026-09-10~12 세션 기록: COLMAP 랙티파이 안정화 + H체인 드리프트 완화 + mm 스케일 배선 + 다중 건물 facade 식별 버그 수정
+
+### COLMAP 랙티파이 캔버스 OOM/대각선 문제 (`src/geometry/rectification.py`)
+- **캔버스 폭발 크래시**: 150장 FRONT reconstruction에서 평면이 882m x 860m(물리적으로 불가능)로
+  계산돼 캔버스 할당이 ~63GB를 시도, OOM. `_robust_range`(IQR, k=3.0) 추가 — 원인 재확인 결과
+  일부는 배경(하늘/원경) 포인트가 실제 벽면에서 -150m~-1500m 떨어진 곳에 삼각측량돼 섞여 들어간
+  것(`_filter_points_near_plane`로 평면 거리 기준 별도 필터 추가, 210x107m → 56x37m로 정상화).
+- **u축(건물 폭 방향) 비로버스트 SVD**: 카메라 center PCA(`_principal_direction`)가 단일 SVD라
+  이상치 카메라 위치에 흔들려 u-extent가 실제(~60m)의 3.5배(~210m)로 부풀던 문제 — 반복 트림드
+  PCA(IQR 기반 inlier만 남기고 재피팅, `_robust_range`와 동일 철학)로 교체.
+- **벽/옥상 오판정**: 점군 SVD normal이 지붕 포인트에 압도돼 실제로는 벽을 찍은 비행을 옥상으로
+  오판정 → `_camera_forward`(카메라 실제 촬영 방향) 기반 override 추가.
+- **실행별 COLMAP 작업폴더 분리**(`268fb24`): 재실행 시 이전 reconstruction이 섞여 들어가는 문제
+  방지 — trial마다 독립 폴더.
+- 반복 시험(매번 `output/` 완전 삭제 후 진짜 CLI 절차로 재실행, 캐시/이전 산출물 재사용 금지)
+  결과 FRONT(150장) coverage_ratio가 4회 연속 **0.96 안팎**(목표 0.95 이상 충족) — 상세 결과는
+  세션 스크래치패드 `coverage_sweep_results.jsonl`.
+- COLMAP 배경 크롭(`_crop_to_dense_coverage`) + 이음선 COST_COLOR_GRAD(`9da9165`)도 같은 흐름에서
+  추가 — sky/mountain 배경이 최종 캔버스 여백에 남아 이음선 품질을 해치던 문제 완화.
+
+### H체인(비-COLMAP) 드리프트 완화 (`src/stitching/graph.py`, `a32ea4c`)
+같은 종류의 "이미지 수가 늘수록 결과가 나빠짐" 문제의 근본 원인 — H체인 경로(기준 이미지까지
+pairwise 호모그래피를 그래프 최단경로로 곱해서 합성)는 경로(hop)가 길어질수록 개별 매칭 오차가
+곱셈으로 누적됨. 두 가지 **서로 다른 실패 모드**를 각각 다른 방식으로 완화:
+1. **반복 패턴 오탐 매칭**(`detect_inconsistent_edges`): 특정 엣지 하나가 그럴듯하지만 완전히
+   틀린 경우(같은 모양 창문/층을 다른 층과 매칭) — inlier_ratio 자체는 정상이라 가중치 기반
+   컷오프로는 못 잡음. 공통 이웃과의 삼각형 호모그래피 합성 결과가 직접 측정값과 크게 어긋나면
+   그 엣지를 그래프에서 제거. 임계치 실측 튜닝: 40px는 너무 공격적(82% 제거, 그래프 36개
+   컴포넌트로 분절, 55장 unreachable) → 500px/2-witness로 재조정(669개 제거, unreachable 0,
+   mean drift 998→163px, max 1,000,219→4,761px).
+2. **점진적 다중 hop 누적**(`refine_homographies_globally`): 위 필터를 거친 뒤에도 개별로는
+   문제없어 보이는 엣지 2~3개가 누적되면 여전히 크게 벗어남 — motion averaging(scipy
+   least_squares, TRF + x_scale="jac"/tr_solver="lsmr", 기준 노드는 identity로 gauge 고정)으로
+   살아남은 모든 엣지를 동시에 만족시키는 방향으로 재보정. FRONT 실측: mean 163→129px, max
+   4761→3041px — **부분 개선이며 완전 해결 아님**(정직하게 문서화, 과장 금지).
+- `mosaic.py`에 실제 배선 완료(`stitch_facade`가 `build_stitch_graph` 직후 불일치 엣지 제거 →
+  `pick_reference` → `compute_global_homographies` → `refine_homographies_globally` 순서로 호출),
+  프로덕션 코드 경로에서 실제로 동작 확인.
+- BACK(121장, 고층 아파트라 반복 패턴이 FRONT보다 훨씬 많음)에서도 동일 증상(31→59→95장 진행될수록
+  하늘/지면 영역이 고스팅처럼 뿌예짐) 재현 확인 — 위 완화 장치가 이미 적용된 상태에서도 여전히
+  드리프트가 크면 `should_run_colmap` 게이트가 COLMAP 폴백으로 전환하므로, 최종 산출물은
+  `_visual_colmap.tif`/`_analysis_colmap.tif` 기준으로 판단해야 함(H체인 미리보기만으로 "실패"
+  단정 금지).
+
+### mm 스케일 배선 + 보고서 표시 (`d955b0f`)
+- 운영자 결정(2026-09-11): **정밀 RTK 없이 GPS 기반 COLMAP align_reconstruction_to_utm 스케일을
+  일단 채택**(9번/26번 원칙의 "calibrated 없이 mm 없다"는 그대로 유지하되, calibrated=True +
+  `reference_object_type="gps_colmap_alignment"`로 명시적으로 낮은 정밀도임을 표시) — 향후 RTK-GCP
+  등 실제 기준으로 교체 가능하도록 `{facade_id}_scale_colmap.json`에 출처를 남김.
+  `tools/detect_cracks_folder.py`가 이 파일이 있으면 읽어서 `ScaleInfo`에 반영, 없으면 기존대로
+  `calibrated=False`(px만).
+- `report.html`/`pdf_report.py`: 길이/최대폭/면적을 calibrated면 `mm (px)`, 아니면 px만 표시하도록
+  Jinja2 템플릿 + `_crack_metrics` 양쪽 다 수정.
+- `CrackReviewItem`/`OriginalCrackViewerWindow`: 원본 보기 창 툴바에 `길이 {mm} · 최대폭 {mm} · 면적 {mm}`
+  표시 추가(`7a9d7a6`).
+
+### 결과 비교 화면: 스티칭 클릭 → 원본 사진 이동 (`e5c3db8`, `25a94e3`)
+우측(Panel2) 스티칭 패널 클릭 시 좌측(Panel1)을 "원본" 모드로 전환하고 클릭 지점을 뷰포트
+중앙으로 스크롤(seam owner map 기반 역산, `ResultsCompareViewModel.JumpToOriginalImageAt`). H체인
+전용 미리보기 카드(COLMAP 폴백 시 의미 없어지는)는 그 상황에서 숨김 처리.
+
+### 레이아웃: Crack Segmentation/검사 보고서를 모자이크 미리보기 오른쪽 열로 (`7840328`)
+`MainWindow.xaml`을 단일 열 스택에서 `Grid`(왼쪽 `Auto`=모자이크, 오른쪽 `*`=Crack Segmentation+
+검사 보고서)로 재구성 — 모자이크 Border가 `MaxHeight=260`+`HorizontalAlignment=Left`라 균등 `*`
+분할로는 실제 렌더 폭이 줄어드는 레이아웃 버그를 겪은 뒤 `Auto`로 확정.
+
+### 다른 건물의 동일 이름 facade 식별 충돌 버그 수정 (`296d00e`, 사용자 실사용 중 발견)
+`D:\ClaudePr\UE_TemImg\TestApt\TestBuilding\BACK`을 한 번도 실행한 적 없는데 결과가 이미 채워져
+있는 걸 사용자가 발견 → 근본 원인(추측 아니라 코드 확인): `FacadeId`("BACK"/"FRONT" 같은 방위
+이름)는 단지/동이 다르면 얼마든지 재사용되는 이름인데, `MainViewModel.GetOrCreateFacade`와
+`FacadeOutputScanner.ScanAll`의 `seenFacadeIds`, `ResultsCompareViewModel.Rescan`의 매칭/dedup
+키로 전부 이 bare 문자열을 쓰고 있었음 — 서로 다른 건물의 "BACK"이 하나의 화면 객체를 공유하거나
+(값 덮어쓰기) 두 번째 건물의 facade가 스캔에서 통째로 누락됨. 전부 `FacadeHierarchyStore.KeyFor
+(sourceFolderPath, facadeId)` 합성 키(`FacadeItemViewModel.Key`/`FacadeSnapshot.Key`, 신규 추가)
+기준으로 통일해서 수정 — 6개 `GetOrCreateFacade` 호출부 전부 sourceFolderPath 배선, 로그 tailer만
+예외(라인에 폴더 경로 정보가 없어 `ResolveRunningFacade`로 IsRunning 기준 상관관계를 대신 사용).
+"수백/수천 단지 규모까지 완벽하게 구별돼야 함"이 명시적 요구사항 — 단순 표시 버그가 아니라
+데이터 무결성 버그였음.
+
+## 2026-09-12 세션 기록: 균열 개별 geometry를 MngData PostgreSQL에 적재 (crackvision_cracks)
+
+### 배경 (MngData 쪽에서 파악한 현황)
+`crackvision_archives.facade_analysis_results`(JSONB)는 facade별 zip/report 경로 + 상태만
+기록했지, `{facade_id}_cracks.json`이 이미 담고 있는 균열 개별 bbox/폭/좌표는 PostgreSQL 어디에도
+저장되지 않고 있었음(MngData 쪽 `crackvision_archive_manager`/`facade_archives.sql` 확인으로
+직접 확정). 이번 세션에서 그 저장 경로를 새로 만듦.
+
+### 구현 — zip을 다시 풀 필요 없음
+당초 "MngData가 받은 결과 zip을 파싱"하는 방식을 검토했으나, 실제 코드 확인 결과 더 간단한 지점이
+있었음: `MainViewModel.WriteBackAnalysisResultsAsync`가 `outputDir`(로컬 스티칭 결과 폴더)를 zip으로
+묶어 SFTP 업로드하면서 `CrackVisionArchiveQueryService.UpdateAnalysisResultAsync`로 경로만 직접
+Postgres에 write-back하는데, **그 zip으로 묶기 전 시점에 `{facade_id}_cracks.json`이 이미
+`outputDir`에 그대로 있음** — 압축 해제 없이 바로 읽으면 됨.
+
+- **`Services/CrackVisionArchiveQueryService.cs`**: `UpsertFacadeCracksAsync()` 신규.
+  `{facade_id}_cracks.json`(+ `{facade_id}_scale_colmap.json`, 있으면) 읽어서 `crackvision_facades`
+  upsert(`ON CONFLICT (archive_id, facade_id)`) → 그 facade_row_id의 `crackvision_cracks`/
+  `crackvision_crack_sources`를 delete+insert(한 트랜잭션, run-to-run 비교는 별도 기능이라 여기서
+  diff 안 함). `UpdateAnalysisResultAsync`와 동일한 direct-Npgsql 패턴 그대로 재사용.
+  `position.u_m/v_m`은 Python 쪽(`tools/detect_cracks_folder.py`)이 항상 null로 쓰는 값이라
+  여기서 `px_per_m`으로 직접 계산해서 채움. mosaic_width_px/height_px는 WPF `BitmapDecoder`
+  헤더만 읽어서(`DelayCreation`, 전체 디코드 안 함) 채움 — 실패 시 조용히 null.
+  `facade_id`의 선행 토큰("FRONT_0" → direction="FRONT", sub_index=0)으로 direction/sub_index 도출.
+- **`ViewModels/MainViewModel.cs`**: `WriteBackAnalysisResultsAsync`의 `UpdateAnalysisResultAsync`
+  호출 바로 다음에 `UpsertFacadeCracksAsync` 호출 추가.
+- **MngData 쪽 신규 스키마**: `backend_core/schemas/crackvision_cracks.sql` (이 저장소가 아니라
+  MngData 저장소, commit `3e2c6e7`) — `crackvision_facades`/`crackvision_cracks`/
+  `crackvision_crack_sources` 3개 테이블. `crack_links`(비교분석용)는 이번엔 제외, 다음 iteration.
+
+### 사용법
+1. **최초 1회, DB에 스키마 적용** (MngData 쪽, 자동 적용 안 됨 — `facade_images.sql`/
+   `facade_archives.sql`과 동일한 컨벤션):
+   ```
+   psql <conninfo> -f Z:\DDS_Platform\MngData\backend_core\schemas\crackvision_cracks.sql
+   ```
+2. **그 뒤로는 아무것도 더 할 필요 없음** — 원격(CrackVisionDB) 경로로 등록된 facade에서
+   "보고서 생성"(`GenerateReportCommand`)이 성공할 때마다 자동으로 적재됨. 조건:
+   - `facade.ArchiveId`가 있어야 함(순수 로컬 Browse로 추가한 폴더는 archive_id가 없어서 write-back
+     자체가 스킵됨 — 기존 `UpdateAnalysisResultAsync`와 동일한 게이트).
+   - `{facade_id}_cracks.json`이 존재해야 함(크랙검사를 아예 안 돌린 facade는 자동으로 no-op,
+     에러 아님).
+3. **확인 방법**: `SELECT * FROM crackvision_facades WHERE archive_id = <해당 archive_id>;` 로
+   facade_row_id 확인 후 `SELECT * FROM crackvision_cracks WHERE facade_row_id = <위 값>;`.
+   같은 facade를 재분석하면 이전 crack 행이 전부 지워지고 최신 결과로 통째로 교체됨(같은
+   crack_id는 `src/crack/merge_tiles.py`가 재부여하므로 값 자체는 안정적으로 유지).
+4. **스케일 미보정 facade**: `scale_calibrated=false`인 facade는 `length_mm`/`width_mm`/`area_mm2`/
+   `position_u_m`/`position_v_m`이 전부 NULL로 들어감 — px 값(`length_px` 등)은 항상 채워짐.
+
+### 빌드 확인
+`dotnet build` 컴파일 에러 0개 (같은 날 실행 중이던 `CheckCrackViewer.exe`가 파일을 잠그고 있어서
+최종 exe 복사만 실패 — 앱 재시작 후 재빌드하면 해결, 소스 자체는 확정).
+
+### 커밋/푸시 완료
+- **CheckCrackV2** `a63c98e` → origin/main (`CrackVisionArchiveQueryService.cs`, `MainViewModel.cs`
+  2개 파일만 — 같은 시점에 미커밋 상태였던 `OriginalCrackViewerWindow.xaml*` 변경분은 이 작업과
+  무관해서 건드리지 않음)
+- **MngData** `3e2c6e7` → origin/main (`backend_core/schemas/crackvision_cracks.sql` 신규)
+
+## 2026-09-12 세션 기록: 원본 보기 창 -- 크랙 선택 지점 타겟 마커 추가 (`3241494`)
+
+균열 검토 모드에서 스티칭 캔버스의 크랙(번호 배지/폴리곤 클릭) 또는 균열 목록 항목을 선택하면
+"원본 보기" 창(`OriginalCrackViewerWindow`)이 항상 그 크랙의 bbox를 화면 중앙에 프레이밍하고
+사각형(`CrackBboxOverlay`)으로 표시하는데, 사용자 피드백: "선택한 곳이 즉시 눈에 들어 오지 않음"
+— bbox 사각형만으로는 크랙 영역 전체를 짚어줄 뿐 정확히 어디를 봐야 하는지 한눈에 안 들어옴.
+bbox 중심(=`CenterOnCrack`이 뷰포트 중앙에 놓는 바로 그 지점)에 **줌/팬과 무관하게 항상 같은
+화면 크기**를 유지하는 타겟 마커(흰 테두리 바깥 원 + 밝은 노랑 안쪽 원, 건물 외벽의 흔한
+회색/베이지/빨강 계열과 안 부딪히는 배색)를 추가로 겹쳐 그림 — `ApplyTransform`(줌/전환 시)과
+`Canvas_MouseMove`(드래그 팬 중) 양쪽 모두에서 위치 갱신.
+
+**커밋/푸시**: CheckCrackV2 `3241494` → origin/main.
