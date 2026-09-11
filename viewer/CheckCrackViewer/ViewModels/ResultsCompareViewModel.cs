@@ -687,6 +687,7 @@ public partial class ResultsCompareViewModel : ObservableObject
                 sourceObservations = SourceObservationCalculator.Compute(crack.PolygonPx, _reviewSeamArtifacts);
             ReviewItems.Add(BuildReviewItem(
                 crack.CrackId, crack.LengthPx, crack.MaxWidthPx, crack.AreaPx,
+                crack.LengthMm, crack.MaxWidthMm, crack.AreaMm2,
                 crack.Confidence, crack.Severity, crack.PolygonPx, crack.BboxPx, status, sourceObservations));
         }
 
@@ -696,14 +697,15 @@ public partial class ResultsCompareViewModel : ObservableObject
             var sourceObservations = _reviewSeamArtifacts != null
                 ? SourceObservationCalculator.Compute(addition.PolygonPx, _reviewSeamArtifacts)
                 : null;
-            ReviewItems.Add(BuildReviewItem(label, null, null, null, 1.0, null, addition.PolygonPx, null, CrackReviewStatus.Manual, sourceObservations));
+            ReviewItems.Add(BuildReviewItem(label, null, null, null, null, null, null, 1.0, null, addition.PolygonPx, null, CrackReviewStatus.Manual, sourceObservations));
         }
 
         UpdateReviewStatusText();
     }
 
     private CrackReviewItem BuildReviewItem(
-        string crackId, double? lengthPx, double? maxWidthPx, double? areaPx, double confidence,
+        string crackId, double? lengthPx, double? maxWidthPx, double? areaPx,
+        double? lengthMm, double? maxWidthMm, double? areaMm2, double confidence,
         string? severity, double[][] polygonPx, double[]? bboxPx, CrackReviewStatus status,
         List<SourceObservationModel>? sourceObservations = null)
     {
@@ -714,6 +716,9 @@ public partial class ResultsCompareViewModel : ObservableObject
             LengthPx = lengthPx,
             MaxWidthPx = maxWidthPx,
             AreaPx = areaPx,
+            LengthMm = lengthMm,
+            MaxWidthMm = maxWidthMm,
+            AreaMm2 = areaMm2,
             Confidence = confidence,
             Severity = severity,
             PolygonPx = polygonPx,

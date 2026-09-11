@@ -26,6 +26,14 @@ public partial class CrackReviewItem : ObservableObject
     public double? LengthPx { get; init; }
     public double? MaxWidthPx { get; init; }
     public double? AreaPx { get; init; }
+    // null unless this facade actually had a scale basis when detected
+    // (CrackResultModel.LengthMm/MaxWidthMm/AreaMm2 -- see
+    // tools/detect_cracks_folder.py's scale_colmap.json wiring, 2026-09-11).
+    // Never computed client-side from px -- that would silently invent a
+    // scale for facades that never had one (CLAUDE.local.md #9/#26).
+    public double? LengthMm { get; init; }
+    public double? MaxWidthMm { get; init; }
+    public double? AreaMm2 { get; init; }
     public double Confidence { get; init; }
     public string? Severity { get; init; }
 
@@ -74,8 +82,9 @@ public partial class CrackReviewItem : ObservableObject
     public double CanvasLabelY => CanvasPoints.Count == 0 ? 0 : CanvasPoints.Min(p => p.Y);
 
     public string ConfidenceText => Status == CrackReviewStatus.Manual ? "관리자 확인" : $"{Confidence:P0}";
-    public string LengthText => LengthPx.HasValue ? $"{LengthPx:F1} px" : "저장 후 계산";
-    public string WidthText => MaxWidthPx.HasValue ? $"{MaxWidthPx:F2} px" : "저장 후 계산";
+    public string LengthText => LengthMm.HasValue ? $"{LengthMm:F1} mm ({LengthPx:F1} px)" : LengthPx.HasValue ? $"{LengthPx:F1} px" : "저장 후 계산";
+    public string WidthText => MaxWidthMm.HasValue ? $"{MaxWidthMm:F2} mm ({MaxWidthPx:F2} px)" : MaxWidthPx.HasValue ? $"{MaxWidthPx:F2} px" : "저장 후 계산";
+    public string AreaText => AreaMm2.HasValue ? $"{AreaMm2:F1} mm² ({AreaPx:F0} px²)" : AreaPx.HasValue ? $"{AreaPx:F0} px²" : "저장 후 계산";
 
     /// <summary>What the on-canvas tag shows -- always includes the crack id
     /// (never just a generic "제외됨" with no way to trace which crack it was)

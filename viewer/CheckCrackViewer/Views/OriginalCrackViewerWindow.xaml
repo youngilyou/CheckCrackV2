@@ -27,6 +27,10 @@
         <Border VerticalAlignment="Top" HorizontalAlignment="Left" Background="#CC1C2124" CornerRadius="0,0,10,0" Padding="14,10">
             <StackPanel Orientation="Horizontal">
                 <TextBlock x:Name="CrackIdText" Foreground="#E7E9E4" FontFamily="Consolas" FontSize="12" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                <!-- 사용자 요청(2026-09-11): 균열 번호 선택 시 폭/길이/면적을 여기 표시.
+                     CrackReviewItem.LengthText/WidthText/AreaText가 이미 mm(calibrated)와
+                     px(uncalibrated)를 알아서 골라주므로 그대로 바인딩. -->
+                <TextBlock x:Name="MeasurementText" Foreground="#C7CDC8" FontFamily="Consolas" FontSize="11.5" VerticalAlignment="Center" Margin="0,0,16,0"/>
                 <Button x:Name="PrevButton" Content="◀ 이전" Click="PrevButton_Click" Margin="0,0,6,0"/>
                 <TextBlock x:Name="PositionText" Foreground="#9AA39C" FontFamily="Consolas" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
                 <Button x:Name="NextButton" Content="다음 ▶" Click="NextButton_Click" Margin="0,0,16,0"/>

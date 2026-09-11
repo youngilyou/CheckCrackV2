@@ -91,6 +91,7 @@ public partial class OriginalCrackViewerWindow : Window
         _index = 0;
         _userHasZoomedOrPanned = false;
         CrackIdText.Text = _crackId;
+        MeasurementText.Text = $"길이 {item.LengthText} · 최대폭 {item.WidthText} · 면적 {item.AreaText}";
         LoadCurrentObservation(vm);
     }
 
