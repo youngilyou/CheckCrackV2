@@ -27,11 +27,14 @@ Writes:
                                      /_seam_owner_map*/_seam_owner_index* being
                                      written by the stitching stage).
 
-Calibration: this script has no COLMAP+UTM rectification scale to hand off, so
-ScaleInfo.calibrated is always False here -- every *_mm field in the output is
-null, never invented (CLAUDE.local.md #9/#26). Real mm output needs a wiring
-step that reads whatever scale rectification.py's COLMAP path actually
-produced, which isn't threaded through to this script yet.
+Calibration: reads {facade_id}_scale_colmap.json (written by pipeline/runner.py
+right after a successful COLMAP rectification) when present -- this facade's
+COLMAP+GPS-EXIF alignment (align_reconstruction_to_utm) is being used as the
+pixel-to-meter scale (operator decision, 2026-09-11: ordinary GPS accepted for
+now, not RTK/surveyed-marker grade -- see ScaleInfo.reference_object_type in
+the written JSON for provenance). Facades with no COLMAP rectification (no
+such file) still get ScaleInfo.calibrated=False, i.e. every *_mm field null,
+never invented (CLAUDE.local.md #9/#26).
 
 Crack ID stability: if {facade_id}_cracks.json already exists in output_dir,
 this script loads it and matches new detections against it by polygon IoU
@@ -150,10 +153,22 @@ def main() -> None:
         except (json.JSONDecodeError, OSError):
             previous_cracks = None  # corrupt/partial file -- fall back to fresh IDs
 
-    # No COLMAP-pose-derived px_per_m is threaded through to this script yet
-    # (see module docstring) -- pixel-only output, matching #9/#26's "no
-    # calibration, no mm" rule rather than guessing a scale.
-    scale = ScaleInfo(px_per_m=None, calibrated=False)
+    # scale_colmap.json only exists for a facade that actually went through
+    # COLMAP rectification (pipeline/runner.py writes it right after) -- a
+    # facade stitched only via the plain H-chain has no geometric scale basis
+    # at all, so it correctly falls through to the uncalibrated/px-only case
+    # (#9/#26: no calibration, no mm -- never guessed).
+    scale_path = output_dir / f"{facade_id}_scale_colmap.json"
+    if scale_path.exists():
+        scale_data = json.loads(scale_path.read_text(encoding="utf-8"))
+        scale = ScaleInfo(
+            px_per_m=scale_data.get("px_per_m"),
+            calibrated=bool(scale_data.get("calibrated", False)),
+            reference_object_type=scale_data.get("reference_object_type"),
+            reference_length_mm=scale_data.get("reference_length_mm"),
+        )
+    else:
+        scale = ScaleInfo(px_per_m=None, calibrated=False)
 
     t0 = time.time()
     log_event(

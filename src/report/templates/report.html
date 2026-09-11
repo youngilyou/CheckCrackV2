@@ -455,11 +455,11 @@
       <tr><td class="k">총 균열 수</td><td>{{ metrics.count }}건</td></tr>
       <tr><td class="k">평균 신뢰도</td><td>{{ "%.0f"|format(metrics.avg_confidence * 100) }}%</td></tr>
       {% if report_kind == "facade" %}
-      <tr><td class="k">평균 길이 (px)</td><td>{{ "%.1f"|format(metrics.avg_length_px) }}</td></tr>
+      <tr><td class="k">평균 길이</td><td>{% if metrics.avg_length_mm is not none %}{{ "%.1f"|format(metrics.avg_length_mm) }} mm ({{ "%.1f"|format(metrics.avg_length_px) }} px){% else %}{{ "%.1f"|format(metrics.avg_length_px) }} px{% endif %}</td></tr>
       {% endif %}
-      <tr><td class="k">최대 폭 (px)</td><td>{{ "%.2f"|format(metrics.max_width_px) }}</td></tr>
+      <tr><td class="k">최대 폭</td><td>{% if metrics.max_width_mm is not none %}{{ "%.2f"|format(metrics.max_width_mm) }} mm ({{ "%.2f"|format(metrics.max_width_px) }} px){% else %}{{ "%.2f"|format(metrics.max_width_px) }} px{% endif %}</td></tr>
       {% if report_kind == "facade" %}
-      <tr><td class="k">평균 면적 (px²)</td><td>{{ "%.0f"|format(metrics.avg_area_px) }}</td></tr>
+      <tr><td class="k">평균 면적</td><td>{% if metrics.avg_area_mm2 is not none %}{{ "%.1f"|format(metrics.avg_area_mm2) }} mm² ({{ "%.0f"|format(metrics.avg_area_px) }} px²){% else %}{{ "%.0f"|format(metrics.avg_area_px) }} px²{% endif %}</td></tr>
       {% endif %}
       <tr><td class="k">0.3mm 기준 심각도</td>
         <td>{% if metrics.has_calibration %}정밀점검대상 {{ metrics.precision_count }}건 / 경미 {{ metrics.minor_count }}건{% else %}작업중 (calibration 없어 등급 판정 불가){% endif %}</td></tr>
@@ -544,9 +544,12 @@
         </div>
         <div class="info">
           <div class="crack-id">No.{{ c._no }} — {{ c.crack_id }}{% if c.source == "manual" %} <span class="manual-tag">관리자 추가</span>{% endif %}</div>
-          <div class="stat-line"><span>길이</span><span class="v">{{ "%.1f"|format(c.length_px) }} px</span></div>
-          <div class="stat-line"><span>최대폭</span><span class="v">{{ "%.2f"|format(c.max_width_px) }} px</span></div>
-          <div class="stat-line"><span>면적</span><span class="v">{{ "%.0f"|format(c.area_px) }} px²</span></div>
+          <!-- mm은 이 facade가 실제 스케일 기준(현재는 COLMAP+GPS EXIF 정렬,
+               CLAUDE.local.md #9/#26)을 가졌을 때만 존재 -- null이면 절대 추정치를
+               만들지 않고 px만 보여준다. -->
+          <div class="stat-line"><span>길이</span><span class="v">{% if c.length_mm is not none %}{{ "%.1f"|format(c.length_mm) }} mm ({{ "%.1f"|format(c.length_px) }} px){% else %}{{ "%.1f"|format(c.length_px) }} px{% endif %}</span></div>
+          <div class="stat-line"><span>최대폭</span><span class="v">{% if c.max_width_mm is not none %}{{ "%.2f"|format(c.max_width_mm) }} mm ({{ "%.2f"|format(c.max_width_px) }} px){% else %}{{ "%.2f"|format(c.max_width_px) }} px{% endif %}</span></div>
+          <div class="stat-line"><span>면적</span><span class="v">{% if c.area_mm2 is not none %}{{ "%.1f"|format(c.area_mm2) }} mm² ({{ "%.0f"|format(c.area_px) }} px²){% else %}{{ "%.0f"|format(c.area_px) }} px²{% endif %}</span></div>
           <div class="stat-line"><span>신뢰도</span><span class="v">{{ "%.0f"|format(c.confidence * 100) }}%{% if c.source == "manual" %} (관리자 확인){% endif %}</span></div>
           <div class="stat-line"><span>소스</span><span class="v">{{ c._source_preview }}</span></div>
           {% if c.severity %}<span class="severity-tag severity-{{ c.severity }}">{{ c.severity }}</span>{% endif %}
@@ -557,11 +560,12 @@
   {% else %}
     {% if cracks_truncated %}<p class="caption">길이(px) 기준 상위 30건만 표시합니다. 전체 목록은 각 Facade별 보고서를 참고하세요.</p>{% endif %}
     <table class="data-table">
-      <tr><th>Facade</th><th>Crack ID</th><th>길이(px)</th><th>최대폭(px)</th><th>신뢰도</th><th>심각도</th></tr>
+      <tr><th>Facade</th><th>Crack ID</th><th>길이</th><th>최대폭</th><th>신뢰도</th><th>심각도</th></tr>
       {% for c in cracks %}
       <tr>
         <td>{{ c._facade_id }}</td><td>{{ c.crack_id }}</td>
-        <td>{{ "%.1f"|format(c.length_px) }}</td><td>{{ "%.2f"|format(c.max_width_px) }}</td>
+        <td>{% if c.length_mm is not none %}{{ "%.1f"|format(c.length_mm) }} mm{% else %}{{ "%.1f"|format(c.length_px) }} px{% endif %}</td>
+        <td>{% if c.max_width_mm is not none %}{{ "%.2f"|format(c.max_width_mm) }} mm{% else %}{{ "%.2f"|format(c.max_width_px) }} px{% endif %}</td>
         <td>{{ "%.0f"|format(c.confidence * 100) }}%</td><td>{{ c.severity or "-" }}</td>
       </tr>
       {% endfor %}

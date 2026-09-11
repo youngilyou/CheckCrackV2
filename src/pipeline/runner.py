@@ -267,6 +267,25 @@ def _run_facade_pipeline(
                                         imwrite_unicode(output_dir / f"{facade_id}_visual_colmap.tif", rect_result.visual_image)
                                     imwrite_unicode(output_dir / f"{facade_id}_observed_mask_colmap.tif", rect_result.observed_mask)
                                     atomic_write_json(output_dir / f"{facade_id}_quality_report_colmap.json", asdict(rect_result.quality))
+                                    # 2026-09-11, 사용자 결정: RTK/알려진 마커 등 진짜 측량급
+                                    # calibration이 아직 없어 우선 COLMAP+일반 GPS EXIF 정렬
+                                    # (align_reconstruction_to_utm) 스케일을 그대로 쓰기로 함
+                                    # -- CLAUDE.local.md #26의 승인된 소스 목록(Surveyed control
+                                    # point/Known marker/BIM-CAD/RTK-GCP)엔 없는, 정밀도가 더
+                                    # 낮은 소스라는 걸 알고 쓰는 것이므로 reference_object_type에
+                                    # 그 출처를 남겨 나중에 실측 정밀도 요구가 생기면 구분 가능하게
+                                    # 함. plane.px_per_m은 그 자체로 오차가 있는 게 아니라(캔버스
+                                    # 해상도를 정의하는 상수, 지금은 항상 100.0) "그 px가 실제 몇
+                                    # m인지"의 신뢰도가 GPS 정렬 품질에 달려있다는 뜻.
+                                    atomic_write_json(
+                                        output_dir / f"{facade_id}_scale_colmap.json",
+                                        {
+                                            "px_per_m": plane.px_per_m,
+                                            "calibrated": True,
+                                            "reference_object_type": "gps_colmap_alignment",
+                                            "reference_length_mm": None,
+                                        },
+                                    )
                                     _write_source_transform_artifacts(output_dir, facade_id, "_colmap", rect_result)
                                     log_event(
                                         logger, "info", "CM-rectified mosaic complete",

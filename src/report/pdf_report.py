@@ -277,6 +277,11 @@ def _crack_metrics(cracks: list[dict]) -> dict:
     widths = [c.get("max_width_px", 0.0) for c in cracks]
     areas = [c.get("area_px", 0.0) for c in cracks]
     confidences = [c.get("confidence", 0.0) for c in cracks]
+    # mm 집계는 실제로 calibration이 있는 크랙만으로 계산 -- 하나도 없으면 None
+    # (px 값을 대충 곱해서 만든 추정 mm가 아니라, 진짜 계산된 mm만 평균/최대를 냄).
+    lengths_mm = [v for c in cracks if (v := c.get("length_mm")) is not None]
+    widths_mm = [v for c in cracks if (v := c.get("max_width_mm")) is not None]
+    areas_mm2 = [v for c in cracks if (v := c.get("area_mm2")) is not None]
     has_calibration = any(c.get("max_width_mm") is not None for c in cracks)
     precision_count = sum(1 for c in cracks if c.get("severity") == "정밀점검대상")
     minor_count = sum(1 for c in cracks if c.get("severity") == "경미")
@@ -286,6 +291,9 @@ def _crack_metrics(cracks: list[dict]) -> dict:
         "avg_length_px": sum(lengths) / len(lengths),
         "max_width_px": max(widths),
         "avg_area_px": sum(areas) / len(areas),
+        "avg_length_mm": (sum(lengths_mm) / len(lengths_mm)) if lengths_mm else None,
+        "max_width_mm": max(widths_mm) if widths_mm else None,
+        "avg_area_mm2": (sum(areas_mm2) / len(areas_mm2)) if areas_mm2 else None,
         "has_calibration": has_calibration,
         "precision_count": precision_count,
         "minor_count": minor_count,
