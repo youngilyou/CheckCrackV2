@@ -1589,6 +1589,17 @@ public partial class MainViewModel : ObservableObject
 
             await CrackVisionArchiveQueryService.UpdateAnalysisResultAsync(settings, archiveId, facade.FacadeId,
                 stitchingRemotePath, reportRemotePath, "검사완료");
+
+            // 2026-09-12: crackvision_facades/crackvision_cracks/crackvision_crack_sources
+            // (schemas/crackvision_cracks.sql) 적재 -- 위 write-back은 zip/report 경로와 상태만
+            // 기록하고 균열 개별 geometry는 어디에도 저장하지 않던 갭을 닫음. outputDir은 방금
+            // 로컬 스티칭 결과가 쓰인 그 폴더 그대로(위에서 이미 zip으로 묶기 전) -- 압축을 다시
+            // 풀 필요 없이 {facade.FacadeId}_cracks.json을 바로 읽는다. HasCrackResults가
+            // false인 facade(스티칭만 하고 크랙검사 안 돌린 경우)는 이 파일이 없으므로
+            // UpsertFacadeCracksAsync 내부에서 조용히 no-op.
+            await CrackVisionArchiveQueryService.UpsertFacadeCracksAsync(settings, archiveId, facade.FacadeId,
+                outputDir, facade.AnalysisColmapImagePath ?? facade.AnalysisImagePath,
+                facade.CoverageRatioColmap ?? facade.CoverageRatio, facade.NeedsRetake, facade.HasRectifiedMosaic);
         }
         finally
         {

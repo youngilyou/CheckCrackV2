@@ -1,7 +1,59 @@
+using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Npgsql;
 
 namespace CheckCrackViewer.Services;
+
+/// <summary>Deserialization shape for one entry of {facade_id}_cracks.json -- fixed by
+/// CheckCrackV2's tools/detect_cracks_folder.py payload construction, NOT by this project.
+/// length_mm/max_width_mm/area_mm2/severity are all null in the source JSON exactly when the
+/// facade isn't scale-calibrated (never fabricated from px alone). position.u_m/v_m are always
+/// null in the JSON today -- the Python side never computes them -- UpsertFacadeCracksAsync
+/// fills those in itself from crackvision_facades.px_per_m at ingestion time.</summary>
+internal sealed class CrackJsonEntry
+{
+    [JsonPropertyName("crack_id")] public string CrackId { get; set; } = "";
+    [JsonPropertyName("length_px")] public double LengthPx { get; set; }
+    [JsonPropertyName("max_width_px")] public double MaxWidthPx { get; set; }
+    [JsonPropertyName("mean_width_px")] public double MeanWidthPx { get; set; }
+    [JsonPropertyName("area_px")] public double AreaPx { get; set; }
+    [JsonPropertyName("length_mm")] public double? LengthMm { get; set; }
+    [JsonPropertyName("max_width_mm")] public double? MaxWidthMm { get; set; }
+    [JsonPropertyName("area_mm2")] public double? AreaMm2 { get; set; }
+    [JsonPropertyName("confidence")] public double Confidence { get; set; }
+    [JsonPropertyName("observation_state")] public string? ObservationState { get; set; }
+    [JsonPropertyName("severity")] public string? Severity { get; set; }
+    [JsonPropertyName("position")] public CrackPositionJson? Position { get; set; }
+    [JsonPropertyName("bbox_px")] public double[] BboxPx { get; set; } = Array.Empty<double>();
+    [JsonPropertyName("polygon_px")] public double[][] PolygonPx { get; set; } = Array.Empty<double[]>();
+    [JsonPropertyName("source_observations")] public List<CrackSourceObservationJson> SourceObservations { get; set; } = new();
+}
+
+internal sealed class CrackPositionJson
+{
+    [JsonPropertyName("pixel_x")] public double PixelX { get; set; }
+    [JsonPropertyName("pixel_y")] public double PixelY { get; set; }
+}
+
+internal sealed class CrackSourceObservationJson
+{
+    [JsonPropertyName("image_id")] public string ImageId { get; set; } = "";
+    [JsonPropertyName("bbox_px_in_source")] public double[] BboxPxInSource { get; set; } = Array.Empty<double>();
+    [JsonPropertyName("owned_pixel_count")] public long OwnedPixelCount { get; set; }
+}
+
+/// <summary>Deserialization shape for {facade_id}_scale_colmap.json -- mirrors src/crack/
+/// measurement.py's ScaleInfo dataclass exactly (field-for-field), see
+/// pipeline/runner.py for where it's written. Absent entirely for a facade stitched only via
+/// the plain homography-chain mosaic (no metric scale basis at all).</summary>
+internal sealed class ScaleColmapJson
+{
+    [JsonPropertyName("px_per_m")] public double? PxPerM { get; set; }
+    [JsonPropertyName("calibrated")] public bool Calibrated { get; set; }
+    [JsonPropertyName("reference_object_type")] public string? ReferenceObjectType { get; set; }
+    [JsonPropertyName("reference_length_mm")] public double? ReferenceLengthMm { get; set; }
+}
 
 /// <summary>One entry of crackvision_archives.facade_analysis_results (2026-08-29) -- one archive
 /// can have multiple facades (directions) sharing the same archive_id, and each facade's
@@ -145,6 +197,194 @@ public static class CrackVisionArchiveQueryService
         cmd.Parameters.AddWithValue((object?)analysisStatus ?? DBNull.Value);
         cmd.Parameters.AddWithValue(archiveId);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>Reads {facadeId}_cracks.json (+ {facadeId}_scale_colmap.json, if present) off
+    /// outputDir -- the same local folder GenerateReport just finished writing to, before it
+    /// gets zipped/uploaded -- and upserts crackvision_facades/crackvision_cracks/
+    /// crackvision_crack_sources (schemas/crackvision_cracks.sql, MngData backend_core). Called
+    /// alongside UpdateAnalysisResultAsync from WriteBackAnalysisResultsAsync; same direct-Npgsql
+    /// pattern for the same reason (see this class's own header comment).
+    ///
+    /// No-op if {facadeId}_cracks.json doesn't exist -- matches FacadeItemViewModel.HasCrackResults's
+    /// own gate, not an error (a facade can be stitched without crack detection ever having run).
+    ///
+    /// Replaces this facade's crack rows wholesale (delete + re-insert in one transaction) on
+    /// every call rather than diffing against what's already there -- run-to-run comparison is a
+    /// separate, deferred feature (crackvision_crack_links), not this method's job. crack_id
+    /// itself stays stable across re-runs of the SAME mosaic version regardless
+    /// (src/crack/merge_tiles.py's own job, upstream of this method, in the CheckCrackV2 repo).</summary>
+    public static async Task UpsertFacadeCracksAsync(CrackVisionDbSettings settings, long archiveId, string facadeId,
+        string outputDir, string? mosaicPath, double? coverageRatio, bool needsRetake, bool usedColmap,
+        CancellationToken cancellationToken = default)
+    {
+        var cracksPath = Path.Combine(outputDir, $"{facadeId}_cracks.json");
+        if (!File.Exists(cracksPath))
+            return;
+
+        List<CrackJsonEntry>? entries;
+        try
+        {
+            entries = JsonSerializer.Deserialize<List<CrackJsonEntry>>(
+                await File.ReadAllTextAsync(cracksPath, cancellationToken));
+        }
+        catch (JsonException)
+        {
+            return; // corrupt/partial file -- same "never let a write-back hiccup fail the run" stance as the caller
+        }
+        if (entries == null)
+            return;
+
+        ScaleColmapJson? scale = null;
+        var scalePath = Path.Combine(outputDir, $"{facadeId}_scale_colmap.json");
+        if (File.Exists(scalePath))
+        {
+            try
+            {
+                scale = JsonSerializer.Deserialize<ScaleColmapJson>(await File.ReadAllTextAsync(scalePath, cancellationToken));
+            }
+            catch (JsonException)
+            {
+                scale = null;
+            }
+        }
+        var calibrated = scale?.Calibrated ?? false;
+        double? pxPerM = calibrated ? scale?.PxPerM : null;
+
+        // facade_id's own leading-direction-token convention (e.g. "FRONT_0" -> direction
+        // "FRONT", sub_index 0; "ROOF" alone -> "ROOF"/0) -- see crackvision_cracks.sql's own
+        // comment on why this is derived here rather than declared as a separate input.
+        var parts = facadeId.Split('_', 2);
+        var direction = parts[0].ToUpperInvariant();
+        var subIndex = 0;
+        if (parts.Length > 1 && int.TryParse(parts[1], out var parsedSub))
+            subIndex = parsedSub;
+
+        var mosaicSize = TryReadImageSize(mosaicPath);
+
+        await using var conn = new NpgsqlConnection(BuildConnString(settings));
+        await conn.OpenAsync(cancellationToken);
+        await using var tx = await conn.BeginTransactionAsync(cancellationToken);
+
+        long facadeRowId;
+        await using (var cmd = new NpgsqlCommand(
+            "INSERT INTO crackvision_facades " +
+            "(archive_id, facade_id, direction, sub_index, mosaic_path, mosaic_width_px, mosaic_height_px, " +
+            " coverage_ratio, needs_retake, used_colmap, scale_calibrated, scale_reference_type, " +
+            " scale_reference_length_mm, px_per_m, updated_at) " +
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now()) " +
+            "ON CONFLICT (archive_id, facade_id) DO UPDATE SET " +
+            "mosaic_path = EXCLUDED.mosaic_path, mosaic_width_px = EXCLUDED.mosaic_width_px, " +
+            "mosaic_height_px = EXCLUDED.mosaic_height_px, coverage_ratio = EXCLUDED.coverage_ratio, " +
+            "needs_retake = EXCLUDED.needs_retake, used_colmap = EXCLUDED.used_colmap, " +
+            "scale_calibrated = EXCLUDED.scale_calibrated, scale_reference_type = EXCLUDED.scale_reference_type, " +
+            "scale_reference_length_mm = EXCLUDED.scale_reference_length_mm, px_per_m = EXCLUDED.px_per_m, " +
+            "updated_at = now() " +
+            "RETURNING facade_row_id", conn, tx))
+        {
+            cmd.Parameters.AddWithValue(archiveId);
+            cmd.Parameters.AddWithValue(facadeId);
+            cmd.Parameters.AddWithValue(direction);
+            cmd.Parameters.AddWithValue(subIndex);
+            cmd.Parameters.AddWithValue((object?)mosaicPath ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)mosaicSize?.Width ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)mosaicSize?.Height ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)coverageRatio ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(needsRetake);
+            cmd.Parameters.AddWithValue(usedColmap);
+            cmd.Parameters.AddWithValue(calibrated);
+            cmd.Parameters.AddWithValue((object?)scale?.ReferenceObjectType ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)scale?.ReferenceLengthMm ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)pxPerM ?? DBNull.Value);
+            facadeRowId = (long)(await cmd.ExecuteScalarAsync(cancellationToken))!;
+        }
+
+        // crackvision_crack_sources rows for this facade cascade-delete via their FK to
+        // crackvision_cracks -- no separate DELETE needed for that table.
+        await using (var cmd = new NpgsqlCommand(
+            "DELETE FROM crackvision_cracks WHERE facade_row_id = $1", conn, tx))
+        {
+            cmd.Parameters.AddWithValue(facadeRowId);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var c in entries)
+        {
+            double? uM = null, vM = null;
+            if (pxPerM is > 0 && c.Position != null)
+            {
+                uM = c.Position.PixelX / pxPerM.Value;
+                vM = c.Position.PixelY / pxPerM.Value;
+            }
+
+            await using (var cmd = new NpgsqlCommand(
+                "INSERT INTO crackvision_cracks " +
+                "(facade_row_id, crack_id, bbox_px, polygon_px, length_px, width_px, mean_width_px, area_px, " +
+                " length_mm, width_mm, area_mm2, confidence, observation_state, severity, " +
+                " position_pixel_x, position_pixel_y, position_u_m, position_v_m) " +
+                "VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)", conn, tx))
+            {
+                cmd.Parameters.AddWithValue(facadeRowId);
+                cmd.Parameters.AddWithValue(c.CrackId);
+                cmd.Parameters.AddWithValue(JsonSerializer.Serialize(c.BboxPx));
+                cmd.Parameters.AddWithValue(JsonSerializer.Serialize(c.PolygonPx));
+                cmd.Parameters.AddWithValue(c.LengthPx);
+                cmd.Parameters.AddWithValue(c.MaxWidthPx);
+                cmd.Parameters.AddWithValue(c.MeanWidthPx);
+                cmd.Parameters.AddWithValue(c.AreaPx);
+                cmd.Parameters.AddWithValue((object?)c.LengthMm ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)c.MaxWidthMm ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)c.AreaMm2 ?? DBNull.Value);
+                cmd.Parameters.AddWithValue(c.Confidence);
+                cmd.Parameters.AddWithValue((object?)c.ObservationState ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)c.Severity ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)c.Position?.PixelX ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)c.Position?.PixelY ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)uM ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)vM ?? DBNull.Value);
+                await cmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            foreach (var src in c.SourceObservations)
+            {
+                await using var cmd = new NpgsqlCommand(
+                    "INSERT INTO crackvision_crack_sources " +
+                    "(facade_row_id, crack_id, image_id, bbox_px_in_source, owned_pixel_count) " +
+                    "VALUES ($1,$2,$3,$4::jsonb,$5)", conn, tx);
+                cmd.Parameters.AddWithValue(facadeRowId);
+                cmd.Parameters.AddWithValue(c.CrackId);
+                cmd.Parameters.AddWithValue(src.ImageId);
+                cmd.Parameters.AddWithValue(JsonSerializer.Serialize(src.BboxPxInSource));
+                cmd.Parameters.AddWithValue(src.OwnedPixelCount);
+                await cmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
+
+        await tx.CommitAsync(cancellationToken);
+    }
+
+    /// <summary>Best-effort mosaic pixel size via a WPF BitmapDecoder header read
+    /// (BitmapCreateOptions.DelayCreation -- reads just the header, never decodes the full
+    /// raster, safe for a large stitched mosaic). Returns null on any failure (missing file,
+    /// unsupported format, locked file) -- mosaic_width_px/height_px are nullable in the schema
+    /// specifically for this.</summary>
+    private static (int Width, int Height)? TryReadImageSize(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return null;
+        try
+        {
+            using var stream = File.OpenRead(path);
+            var decoder = System.Windows.Media.Imaging.BitmapDecoder.Create(
+                stream, System.Windows.Media.Imaging.BitmapCreateOptions.DelayCreation,
+                System.Windows.Media.Imaging.BitmapCacheOption.None);
+            var frame = decoder.Frames[0];
+            return (frame.PixelWidth, frame.PixelHeight);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static string BuildConnString(CrackVisionDbSettings settings) =>
