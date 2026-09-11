@@ -534,54 +534,6 @@
                                         </UniformGrid>
                                     </StackPanel>
 
-                                    <!-- crack section -->
-                                    <TextBlock Text="Crack Segmentation" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
-                                    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,20">
-                                        <StackPanel>
-                                            <TextBlock Text="스티칭을 먼저 완료해야 크랙 검사를 실행할 수 있습니다." Foreground="{StaticResource Text2}" FontSize="12"
-                                           Visibility="{Binding HasMosaic, Converter={StaticResource FalsyToVisibilityConverter}}"/>
-
-                                            <StackPanel Visibility="{Binding HasMosaic, Converter={StaticResource TruthyToVisibilityConverter}}">
-                                                <StackPanel Orientation="Horizontal" Visibility="{Binding HasCrackResults, Converter={StaticResource TruthyToVisibilityConverter}}">
-                                                    <TextBlock Text="탐지된 crack: " Foreground="{StaticResource Text2}"/>
-                                                    <TextBlock Text="{Binding CrackCount}" FontWeight="Bold" FontFamily="Consolas" Foreground="{StaticResource Text}"/>
-                                                    <TextBlock Text="  (현재 모델은 도메인 갭으로 오탐 가능 — 육안 확인 필요)" Foreground="{StaticResource Text2}" FontSize="11"/>
-                                                </StackPanel>
-
-                                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                                    <Button Content="크랙 검사 실행 (같은 버전 내 재실행 시 ID 유지)" Padding="8,2" FontSize="10.5"
-                                                Command="{Binding DataContext.DetectCracksCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                CommandParameter="{Binding}"
-                                                Visibility="{Binding IsDetectingCracks, Converter={StaticResource FalsyToVisibilityConverter}}"/>
-                                                    <TextBlock Text="검사 중…" FontSize="10.5" Foreground="{StaticResource Accent}" VerticalAlignment="Center"
-                                                   Visibility="{Binding IsDetectingCracks, Converter={StaticResource TruthyToVisibilityConverter}}"/>
-                                                </StackPanel>
-                                            </StackPanel>
-                                        </StackPanel>
-                                    </Border>
-
-                                    <!-- report section -->
-                                    <TextBlock Text="검사 보고서" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
-                                    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,20">
-                                        <StackPanel>
-                                            <TextBlock Text="크랙 검사를 먼저 실행해야 보고서를 생성할 수 있습니다." Foreground="{StaticResource Text2}" FontSize="12"
-                                           Visibility="{Binding HasCrackResults, Converter={StaticResource FalsyToVisibilityConverter}}"/>
-
-                                            <StackPanel Orientation="Horizontal" Visibility="{Binding HasCrackResults, Converter={StaticResource TruthyToVisibilityConverter}}">
-                                                <Button Content="보고서 생성" Padding="8,2" FontSize="10.5"
-                                            Command="{Binding DataContext.GenerateReportCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            CommandParameter="{Binding}"
-                                            Visibility="{Binding IsGeneratingReport, Converter={StaticResource FalsyToVisibilityConverter}}"/>
-                                                <TextBlock Text="생성 중…" FontSize="10.5" Foreground="{StaticResource Accent}" VerticalAlignment="Center"
-                                               Visibility="{Binding IsGeneratingReport, Converter={StaticResource TruthyToVisibilityConverter}}"/>
-                                                <Button Content="PDF 열기" Padding="8,2" FontSize="10.5" Margin="8,0,0,0"
-                                            Command="{Binding DataContext.OpenReportCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            CommandParameter="{Binding}"
-                                            Visibility="{Binding HasReport, Converter={StaticResource TruthyToVisibilityConverter}}"/>
-                                            </StackPanel>
-                                        </StackPanel>
-                                    </Border>
-
                                     <!-- live stitching preview: only while this facade is actively
                              running via the "+ 폴더" / "▶ 실행" flow. Each update writes a
                              freshly-numbered file (see PREVIEW_UPDATED handling), so binding
@@ -601,39 +553,105 @@
                                         </Border>
                                     </StackPanel>
 
-                                    <!-- images -->
-                                    <TextBlock Text="모자이크 미리보기" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
-                                    <!-- 2026-08-29: UniformGrid는 Columns 값과 무관하게 Collapsed된 자식도
-                                         그리드 셀 하나를 차지함. Columns=2였을 땐 COLMAP 보정본이 없는(가장
-                                         흔한) 경우 유일하게 보이는 H체인 이미지 오른쪽에 빈 공백이 남았고,
-                                         Columns=1로 바꾸면 이번엔 둘 다 있을 때 나란히 안 놓이고 세로로(2행)
-                                         쌓임. 둘 다 UniformGrid가 "보이는 자식 수"가 아니라 "선언된 칸 수"
-                                         기준으로 셀을 나누기 때문. StackPanel(가로)은 Collapsed 자식에 아예
-                                         공간을 안 주므로, 1개면 그 하나가 자기 폭만큼만, 2개면 나란히 놓임. -->
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
-                                        <Border Style="{StaticResource CardBorder}" Margin="0,0,8,8"
-                                    Visibility="{Binding VisualColmapImagePath, Converter={StaticResource TruthyToVisibilityConverter}}">
-                                            <StackPanel>
-                                                <TextBlock Text="보정본 (visual_CM) — 더블클릭하면 확대" FontSize="10.5" Foreground="{StaticResource Text2}" Margin="0,0,0,6"/>
-                                                <Image Source="{Binding VisualColmapImagePath, Converter={StaticResource PathToBitmapConverter}}"
-                                           MaxHeight="260" Stretch="Uniform" HorizontalAlignment="Left" Cursor="Hand"
-                                           Tag="{Binding VisualColmapImagePath}" MouseLeftButtonDown="Image_MouseLeftButtonDown"/>
+                                    <!-- images + crack/report: 사용자 요청(2026-09-11)으로 Crack
+                                         Segmentation/검사 보고서를 모자이크 미리보기 오른쪽 열로 이동함.
+                                         모자이크(좌) / 크랙+보고서(우) 2열 Grid. -->
+                                    <Grid Margin="0,0,0,20">
+                                        <Grid.ColumnDefinitions>
+                                            <!-- 2026-09-11: 모자이크 카드는 MaxHeight=260 + Stretch=Uniform +
+                                                 왼쪽 정렬이라 실제 폭이 이미지 종횡비에 좌우되는데, Width="*"로
+                                                 균등 분할하면 그 실제 폭보다 열이 훨씬 넓어서 카드와 오른쪽 열
+                                                 사이에 빈 공간이 남았다(사용자 스크린샷으로 확인). Auto로
+                                                 카드 실제 크기에 맞추고 오른쪽 열이 남는 폭을 전부 가져가게 함. -->
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                            <TextBlock Text="모자이크 미리보기" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
+                                            <!-- 2026-08-29: UniformGrid는 Columns 값과 무관하게 Collapsed된 자식도
+                                                 그리드 셀 하나를 차지함. Columns=2였을 땐 COLMAP 보정본이 없는(가장
+                                                 흔한) 경우 유일하게 보이는 H체인 이미지 오른쪽에 빈 공백이 남았고,
+                                                 Columns=1로 바꾸면 이번엔 둘 다 있을 때 나란히 안 놓이고 세로로(2행)
+                                                 쌓임. 둘 다 UniformGrid가 "보이는 자식 수"가 아니라 "선언된 칸 수"
+                                                 기준으로 셀을 나누기 때문. StackPanel(가로)은 Collapsed 자식에 아예
+                                                 공간을 안 주므로, 1개면 그 하나가 자기 폭만큼만, 2개면 나란히 놓임. -->
+                                            <StackPanel Orientation="Horizontal">
+                                                <Border Style="{StaticResource CardBorder}" Margin="0,0,8,8"
+                                            Visibility="{Binding VisualColmapImagePath, Converter={StaticResource TruthyToVisibilityConverter}}">
+                                                    <StackPanel>
+                                                        <TextBlock Text="보정본 (visual_CM) — 더블클릭하면 확대" FontSize="10.5" Foreground="{StaticResource Text2}" Margin="0,0,0,6"/>
+                                                        <Image Source="{Binding VisualColmapImagePath, Converter={StaticResource PathToBitmapConverter}}"
+                                                   MaxHeight="260" Stretch="Uniform" HorizontalAlignment="Left" Cursor="Hand"
+                                                   Tag="{Binding VisualColmapImagePath}" MouseLeftButtonDown="Image_MouseLeftButtonDown"/>
+                                                    </StackPanel>
+                                                </Border>
+                                                <!-- 2026-09-10: 사용자 요청으로 visual(H체인) 항목은 당분간 숨김.
+                                                     실사진 시험에서 COLMAP도 정합이 밀리는 게 확인되면 그때 다시
+                                                     결정. 파이프라인(visual.tif 생성 자체)은 그대로 두고 화면
+                                                     표시만 강제로 Collapsed. -->
+                                                <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8"
+                                            Visibility="Collapsed">
+                                                    <StackPanel>
+                                                        <TextBlock Text="visual (H 체인) — 더블클릭하면 확대" FontSize="10.5" Foreground="{StaticResource Text2}" Margin="0,0,0,6"/>
+                                                        <Image Source="{Binding VisualImagePath, Converter={StaticResource PathToBitmapConverter}}"
+                                                   MaxHeight="260" Stretch="Uniform" HorizontalAlignment="Left" Cursor="Hand"
+                                                   Tag="{Binding VisualImagePath}" MouseLeftButtonDown="Image_MouseLeftButtonDown"/>
+                                                    </StackPanel>
+                                                </Border>
                                             </StackPanel>
-                                        </Border>
-                                        <!-- 2026-09-10: 사용자 요청으로 visual(H체인) 항목은 당분간 숨김.
-                                             실사진 시험에서 COLMAP도 정합이 밀리는 게 확인되면 그때 다시
-                                             결정. 파이프라인(visual.tif 생성 자체)은 그대로 두고 화면
-                                             표시만 강제로 Collapsed. -->
-                                        <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8"
-                                    Visibility="Collapsed">
-                                            <StackPanel>
-                                                <TextBlock Text="visual (H 체인) — 더블클릭하면 확대" FontSize="10.5" Foreground="{StaticResource Text2}" Margin="0,0,0,6"/>
-                                                <Image Source="{Binding VisualImagePath, Converter={StaticResource PathToBitmapConverter}}"
-                                           MaxHeight="260" Stretch="Uniform" HorizontalAlignment="Left" Cursor="Hand"
-                                           Tag="{Binding VisualImagePath}" MouseLeftButtonDown="Image_MouseLeftButtonDown"/>
-                                            </StackPanel>
-                                        </Border>
-                                    </StackPanel>
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                                            <!-- crack section -->
+                                            <TextBlock Text="Crack Segmentation" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
+                                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,20">
+                                                <StackPanel>
+                                                    <TextBlock Text="스티칭을 먼저 완료해야 크랙 검사를 실행할 수 있습니다." Foreground="{StaticResource Text2}" FontSize="12"
+                                                   Visibility="{Binding HasMosaic, Converter={StaticResource FalsyToVisibilityConverter}}"/>
+
+                                                    <StackPanel Visibility="{Binding HasMosaic, Converter={StaticResource TruthyToVisibilityConverter}}">
+                                                        <StackPanel Orientation="Horizontal" Visibility="{Binding HasCrackResults, Converter={StaticResource TruthyToVisibilityConverter}}">
+                                                            <TextBlock Text="탐지된 crack: " Foreground="{StaticResource Text2}"/>
+                                                            <TextBlock Text="{Binding CrackCount}" FontWeight="Bold" FontFamily="Consolas" Foreground="{StaticResource Text}"/>
+                                                            <TextBlock Text="  (현재 모델은 도메인 갭으로 오탐 가능 — 육안 확인 필요)" Foreground="{StaticResource Text2}" FontSize="11"/>
+                                                        </StackPanel>
+
+                                                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                                            <Button Content="크랙 검사 실행 (같은 버전 내 재실행 시 ID 유지)" Padding="8,2" FontSize="10.5"
+                                                        Command="{Binding DataContext.DetectCracksCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"
+                                                        Visibility="{Binding IsDetectingCracks, Converter={StaticResource FalsyToVisibilityConverter}}"/>
+                                                            <TextBlock Text="검사 중…" FontSize="10.5" Foreground="{StaticResource Accent}" VerticalAlignment="Center"
+                                                           Visibility="{Binding IsDetectingCracks, Converter={StaticResource TruthyToVisibilityConverter}}"/>
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <!-- report section -->
+                                            <TextBlock Text="검사 보고서" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
+                                            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,20">
+                                                <StackPanel>
+                                                    <TextBlock Text="크랙 검사를 먼저 실행해야 보고서를 생성할 수 있습니다." Foreground="{StaticResource Text2}" FontSize="12"
+                                                   Visibility="{Binding HasCrackResults, Converter={StaticResource FalsyToVisibilityConverter}}"/>
+
+                                                    <StackPanel Orientation="Horizontal" Visibility="{Binding HasCrackResults, Converter={StaticResource TruthyToVisibilityConverter}}">
+                                                        <Button Content="보고서 생성" Padding="8,2" FontSize="10.5"
+                                                    Command="{Binding DataContext.GenerateReportCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}"
+                                                    Visibility="{Binding IsGeneratingReport, Converter={StaticResource FalsyToVisibilityConverter}}"/>
+                                                        <TextBlock Text="생성 중…" FontSize="10.5" Foreground="{StaticResource Accent}" VerticalAlignment="Center"
+                                                       Visibility="{Binding IsGeneratingReport, Converter={StaticResource TruthyToVisibilityConverter}}"/>
+                                                        <Button Content="PDF 열기" Padding="8,2" FontSize="10.5" Margin="8,0,0,0"
+                                                    Command="{Binding DataContext.OpenReportCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}"
+                                                    Visibility="{Binding HasReport, Converter={StaticResource TruthyToVisibilityConverter}}"/>
+                                                    </StackPanel>
+                                                </StackPanel>
+                                            </Border>
+                                        </StackPanel>
+                                    </Grid>
 
                                     <!-- issues -->
                                     <TextBlock Text="이슈 / 경고" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
