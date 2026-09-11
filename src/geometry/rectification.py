@@ -100,13 +100,113 @@ def _camera_center(img: "pycolmap.Image") -> np.ndarray:
     return R.T @ (-t)
 
 
-def _principal_direction(points_3d: np.ndarray) -> np.ndarray:
+def _camera_forward(img: "pycolmap.Image") -> np.ndarray:
+    """World-frame camera VIEWING direction (unit vector) -- COLMAP's camera
+    convention looks down its own +Z axis, so (mirroring _camera_center's own
+    R.T-based inverse) the world-frame forward direction is R.T @ [0,0,1]."""
+    pose = img.cam_from_world()
+    R = pose.rotation.matrix()
+    forward = R.T @ np.array([0.0, 0.0, 1.0])
+    return forward / np.linalg.norm(forward)
+
+
+def _principal_direction(points_3d: np.ndarray, k: float = 3.0, max_iters: int = 5) -> np.ndarray:
     """Largest-variance direction through a point set (e.g. a flight's
-    camera centers) via SVD -- the "track" facade_plane_from_reconstruction
-    aligns its u-axis to."""
-    centered = points_3d - points_3d.mean(axis=0)
-    _, _, vt = np.linalg.svd(centered)
-    return vt[0]
+    camera centers) via iterative trimmed SVD -- the "track"
+    facade_plane_from_reconstruction aligns its u-axis to.
+
+    A plain single-shot SVD is not robust to outlier centers: a handful of
+    cameras with badly-estimated poses (COLMAP's registration/bundle
+    adjustment is known non-deterministic run-to-run, #10-ish real failures
+    seen 2026-09-10/11) can skew the axis itself, not just the extent along
+    it -- and `_robust_range` downstream only cleans up the *projection*
+    onto whatever axis it's given, so a skewed axis still produces a skewed
+    (and much too large) projected extent. Confirmed real, 2026-09-11: on
+    one actual 150-image FRONT reconstruction, the single-shot axis gave a
+    robust-range u-extent of ~210m against a physically-plausible ~60m --
+    same reconstruction, same `_robust_range`, only the axis differed.
+
+    Mirrors `_robust_range`'s own IQR philosophy (k=3.0, "extreme outlier"
+    boxplot threshold) instead of introducing a different robust-fit method:
+    fit an axis, project every original point onto it, drop the ones outside
+    the IQR range, refit on the survivors, and repeat until the inlier set
+    stops shrinking (or `max_iters` is reached)."""
+    subset = points_3d
+    axis = None
+    for _ in range(max_iters):
+        mean = subset.mean(axis=0)
+        _, _, vt = np.linalg.svd(subset - mean)
+        axis = vt[0]
+        proj = (points_3d - mean) @ axis
+        lo, hi = _robust_range(proj, k=k)
+        inliers = points_3d[(proj >= lo) & (proj <= hi)]
+        if inliers.shape[0] == subset.shape[0] or inliers.shape[0] < 2:
+            break
+        subset = inliers
+    return axis
+
+
+def _robust_range(values: np.ndarray, k: float = 3.0) -> tuple[float, float]:
+    """IQR-based (min, max) -- excludes points more than `k` interquartile-ranges
+    past the nearest quartile before taking the extreme values, so a handful of
+    badly-triangulated COLMAP points (a mismatched feature triangulated far in
+    front of/behind the real surface) can't blow up the fitted canvas size the
+    way raw .min()/.max() would (confirmed real failure, 2026-09-10: a 150-image
+    facade's plane came out 882m x 860m -- physically impossible for one
+    building -- and the resulting canvas OOM'd trying to allocate ~63GB;
+    re-confirmed 2026-09-10/11 with a fresh COLMAP run of the same 150 images
+    under the exact CheckCrackViewer procedure, no shortcuts -- the crash
+    reproduces cleanly on the *original* (pre-fix) code every time).
+    k=3.0 is the standard "extreme outlier" boxplot threshold (vs 1.5 for a
+    plain "outlier") -- deliberately conservative, since clipping real facade
+    content is worse than leaving a few meters of genuine outlier margin."""
+    q1, q3 = np.percentile(values, [25, 75])
+    iqr = q3 - q1
+    if iqr <= 1e-9:
+        return float(values.min()), float(values.max())
+    lo, hi = q1 - k * iqr, q3 + k * iqr
+    inliers = values[(values >= lo) & (values <= hi)]
+    if inliers.size == 0:
+        return float(values.min()), float(values.max())
+    return float(inliers.min()), float(inliers.max())
+
+
+def _filter_points_near_plane(
+    points: np.ndarray, centroid: np.ndarray, normal: np.ndarray, k: float = 3.0, max_iters: int = 3
+) -> tuple[np.ndarray, np.ndarray]:
+    """Drop points whose distance from the (u,v)-plane along `normal` puts
+    them nowhere near the actual photographed surface, refitting the centroid
+    from the survivors each pass -- the dominant, previously-undiagnosed
+    contamination source behind the 2026-09-10/11 "canvas way too big"
+    failures on this exact facade, confirmed real 2026-09-11 by direct
+    inspection of one actual 150-image FRONT reconstruction: an outdoor UE
+    capture also has sky/distant terrain in the background of most oblique
+    shots, and COLMAP incidentally triangulates some of *that* too. Since
+    it's optically at a wildly different depth than the ~30-40m facade
+    standoff, those points land from -150m to over -1500m off the true
+    facade plane (signed distance from the raw whole-cloud centroid) --
+    while 88% of all points sat within a ~1.5m-wide band around one constant
+    offset (the real surface). The raw centroid (a straight mean over both
+    clusters) sits nowhere near that real cluster, and every extent computed
+    from it inherits the corruption: on that reconstruction this filter took
+    the canvas from 210m x 107m down to 56m x 37m, matching the known-good
+    (different, 140-image) run's ~60m facade width. `_robust_range` alone
+    (applied only to the final u/v projections) does not fix this -- the
+    background points are numerous and spread widely enough that a k=3.0 IQR
+    on u/v still keeps a large fraction of them; filtering by plane distance
+    directly is what actually separates the two clusters, because that's the
+    dimension they differ in by orders of magnitude."""
+    subset = points
+    centroid_est = centroid
+    for _ in range(max_iters):
+        dist = (points - centroid_est) @ normal
+        lo, hi = _robust_range(dist, k=k)
+        inliers = points[(dist >= lo) & (dist <= hi)]
+        if inliers.shape[0] == subset.shape[0] or inliers.shape[0] < 10:
+            break
+        subset = inliers
+        centroid_est = subset.mean(axis=0)
+    return subset, centroid_est
 
 
 def facade_plane_from_reconstruction(
@@ -148,9 +248,17 @@ def facade_plane_from_reconstruction(
     boundary. Placing each image independently against a real 3D-fitted
     plane instead has no chain to drift.
 
-    PoC-level: no outlier rejection on the point cloud yet (a few badly
-    triangulated points could skew the fit) -- revisit if real captures show
-    a bad plane despite a clean COLMAP reconstruction.
+    Two robustness fixes on top of the original point-cloud-SVD design
+    (neither changes it for the common case), both from real 2026-09-10/11
+    failures on this exact facade, re-confirmed via the unmodified CheckCrackViewer
+    procedure with no shortcuts before being reapplied here: the canvas EXTENT
+    (width_m/height_m/origin, previously raw min()/max() over u/v) is now
+    outlier-rejected via `_robust_range` (a canvas-allocation OOM crash); and
+    the wall-vs-roof orientation decision now prefers a camera-viewing-direction
+    estimate over the point cloud's own SVD normal when enough oblique shots
+    exist to compute one (the point cloud can be numerically dominated by a
+    densely-triangulated roof even when most photos actually face the wall --
+    see the normal-override comment below).
     """
     points = np.array([p.xyz for p in reconstruction.points3D.values()])
     if points.shape[0] < 10:
@@ -159,6 +267,36 @@ def facade_plane_from_reconstruction(
     centroid = points.mean(axis=0)
     _, _, vt = np.linalg.svd(points - centroid)
     normal = vt[2]
+
+    # Camera-viewing-direction override for the wall-vs-roof decision below
+    # (confirmed real failure, 2026-09-10, FRONT facade): the point cloud's
+    # own SVD normal can come out near-vertical -- misclassifying an actual
+    # wall capture as "rooftop" -- whenever nadir/rooftop images happen to
+    # triangulate far more points than the oblique wall-facing shots (a large
+    # flat roof triangulates densely; a few oblique facade shots triangulate
+    # comparatively sparsely). That point-COUNT imbalance has nothing to do
+    # with what the operator actually pointed the camera at. Each registered
+    # image's own pose, by contrast, is independently and precisely recovered
+    # by COLMAP with no such count bias, so classifying cameras by how
+    # steeply they look down and averaging the oblique ones' viewing
+    # direction is a far more faithful read of intent than the point cloud's
+    # own (population-skewed) shape. Only overrides when there's an actual
+    # mix (>=4 oblique shots) to detect -- an all-nadir or all-oblique set
+    # already gets the right answer from the point-cloud SVD alone.
+    forwards = np.array([_camera_forward(img) for img in reconstruction.images.values()])
+    is_oblique = forwards[:, 2] > -np.cos(np.deg2rad(45))  # >45 deg off straight-down
+    oblique_count = int(is_oblique.sum())
+    if oblique_count >= 4:
+        camera_normal = -forwards[is_oblique].mean(axis=0)
+        norm_len = np.linalg.norm(camera_normal)
+        if norm_len > 1e-6:
+            normal = camera_normal / norm_len
+
+    # Drop background/terrain points that got incidentally triangulated along
+    # with the real facade surface (see _filter_points_near_plane) -- must
+    # happen before centroid/extent are computed from `points`, since those
+    # background points are exactly what corrupts both.
+    points, centroid = _filter_points_near_plane(points, centroid, normal)
 
     centers = np.array([_camera_center(img) for img in reconstruction.images.values()])
     track = _principal_direction(centers) if centers.shape[0] >= 2 else vt[0]
@@ -181,9 +319,11 @@ def facade_plane_from_reconstruction(
 
     u = (points - centroid) @ e_u
     v = (points - centroid) @ e_v
-    width_m = float(u.max() - u.min()) + 2 * padding_m
-    height_m = float(v.max() - v.min()) + 2 * padding_m
-    origin = centroid + e_u * (float(u.min()) - padding_m) + e_v * (float(v.min()) - padding_m)
+    u_min, u_max = _robust_range(u)
+    v_min, v_max = _robust_range(v)
+    width_m = (u_max - u_min) + 2 * padding_m
+    height_m = (v_max - v_min) + 2 * padding_m
+    origin = centroid + e_u * (u_min - padding_m) + e_v * (v_min - padding_m)
 
     return FacadePlane(origin=origin, e_u=e_u, e_v=e_v, px_per_m=px_per_m, width_m=width_m, height_m=height_m)
 
@@ -248,20 +388,34 @@ def rectify_images(
     images_dir: str | Path,
 ) -> tuple[dict[str, WarpedImage], tuple[int, int], dict[str, SourceTransform]]:
     """Undistort + plane-project every registered image onto one fixed,
-    plane-sized canvas (every image lands at corner (0,0), full canvas size
-    — unlike warp.py's per-image local-ROI trick, which exists specifically
-    to bound a canvas that a drifting homography *chain* could blow up
-    arbitrarily; that risk doesn't apply here since the canvas is fixed by
-    the known facade span, not derived from where images project to).
+    plane-sized canvas, cropped to each image's own local ROI (its projected
+    footprint intersected with the canvas bounds) -- the same trick warp.py's
+    H-chain path already uses. This function used to warp every image to the
+    FULL canvas size (corner always (0,0)) on the reasoning that warp.py's
+    ROI trick exists only to bound a canvas a *drifting chain* could blow up
+    arbitrarily, which doesn't apply here since the canvas is fixed by the
+    known facade span. True, but irrelevant to a different cost that same
+    choice was paying: a facade with many registered images and a large
+    canvas means holding all of them as full-canvas-sized buffers
+    simultaneously in `warped` is itself a huge amount of memory, regardless
+    of how correctly the canvas size was computed (confirmed real failure,
+    2026-09-10: 150 images on a correctly-sized canvas still OOM'd, this time
+    on a much smaller single allocation -- a sign of memory pressure/
+    fragmentation from holding every image at full-canvas size, not a
+    miscomputed size). Each image only ever actually covers a small fraction
+    of a facade this size, so cropping to its own footprint (like warp.py
+    does) fixes that without changing anything about how the canvas itself
+    is sized or bounded.
 
     Third return value: per-image SourceTransform (facade-canvas homography +
-    this source image's own (width, height)) -- since every image already
-    lands at corner (0, 0) here (unlike warp.py's local-ROI shift), `H` IS
-    already the full-canvas transform, no extra shift needed. Its inverse
-    maps a mosaic crack location back to this source image's own pixel
-    coordinates (see crack/pipeline.py's source_observations) -- note that
-    lands in *undistorted*-image pixel space when SIMPLE_RADIAL undistortion
-    was applied above, not exactly the raw on-disk JPEG's pixel space (same
+    this source image's own (width, height)) -- `H` is always stored in
+    full-canvas coordinates (never the local-ROI-shifted version used for the
+    actual warp below), so nothing downstream that reads source_transforms
+    (e.g. crack/pipeline.py's source_observations, which inverts H to map a
+    mosaic crack location back to this source image's own pixel coordinates)
+    needs to know about the local crop at all. Note H lands in
+    *undistorted*-image pixel space when SIMPLE_RADIAL undistortion was
+    applied above, not exactly the raw on-disk JPEG's pixel space (same
     (width, height) either way -- cv2.undistort preserves image dimensions)."""
     canvas_w = max(1, int(round(plane.width_m * plane.px_per_m)))
     canvas_h = max(1, int(round(plane.height_m * plane.px_per_m)))
@@ -285,12 +439,26 @@ def rectify_images(
         t = np.asarray(pose.translation)
         H = _camera_to_facade_homography(K, R, t, plane)
 
-        warped_img = cv2.warpPerspective(raw, H, (canvas_w, canvas_h), flags=cv2.INTER_LINEAR)
         src_h, src_w = raw.shape[:2]
-        src_mask = np.full((src_h, src_w), 255, dtype=np.uint8)
-        warped_mask = cv2.warpPerspective(src_mask, H, (canvas_w, canvas_h), flags=cv2.INTER_NEAREST)
+        corners_img = np.array(
+            [[0, 0], [src_w, 0], [src_w, src_h], [0, src_h]], dtype=np.float64
+        ).reshape(-1, 1, 2)
+        corners_canvas = cv2.perspectiveTransform(corners_img, H).reshape(-1, 2)
+        x0 = max(0, int(np.floor(corners_canvas[:, 0].min())))
+        y0 = max(0, int(np.floor(corners_canvas[:, 1].min())))
+        x1 = min(canvas_w, int(np.ceil(corners_canvas[:, 0].max())))
+        y1 = min(canvas_h, int(np.ceil(corners_canvas[:, 1].max())))
+        if x1 <= x0 or y1 <= y0:
+            continue  # this image's footprint doesn't actually land on the canvas
+        local_w, local_h = x1 - x0, y1 - y0
+        local_shift = np.array([[1, 0, -x0], [0, 1, -y0], [0, 0, 1]], dtype=np.float64)
+        H_local = local_shift @ H
 
-        warped[image_id] = WarpedImage(image=warped_img, mask=warped_mask, corner=(0, 0), size=(canvas_w, canvas_h))
+        warped_img = cv2.warpPerspective(raw, H_local, (local_w, local_h), flags=cv2.INTER_LINEAR)
+        src_mask = np.full((src_h, src_w), 255, dtype=np.uint8)
+        warped_mask = cv2.warpPerspective(src_mask, H_local, (local_w, local_h), flags=cv2.INTER_NEAREST)
+
+        warped[image_id] = WarpedImage(image=warped_img, mask=warped_mask, corner=(x0, y0), size=(local_w, local_h))
         source_transforms[image_id] = SourceTransform(H=H, width=src_w, height=src_h)
 
     return warped, (canvas_w, canvas_h), source_transforms

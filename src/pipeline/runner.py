@@ -187,7 +187,15 @@ def _run_facade_pipeline(
                 try:
                     colmap_result = run_colmap(
                         facade_id, colmap_images_dir, colmap_filenames,
-                        workspace_dir=output_dir.parent / "colmap", logger=logger,
+                        # workspace_dir lives *inside* this run's own output_dir (not
+                        # output_dir.parent) so two different --output-dir runs of the
+                        # same facade (different versions, or repeated test trials)
+                        # never share one COLMAP workspace -- run_colmap() always wipes
+                        # database.db at start (colmap_runner.py), so a shared location
+                        # was never actually reused for anything, only a collision risk
+                        # if two runs' lifetimes ever overlapped or a debugging script
+                        # reused a stale one from a different run.
+                        workspace_dir=output_dir / "colmap", logger=logger,
                     )
                     log_event(
                         logger, "info", "CM fallback complete",
