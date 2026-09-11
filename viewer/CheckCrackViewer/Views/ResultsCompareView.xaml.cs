@@ -83,16 +83,57 @@ public partial class ResultsCompareView : UserControl
 
     private void StitchImage_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ClickCount != 2)
-            return;
-        if (sender is not FrameworkElement { DataContext: ComparePanelState panel } || string.IsNullOrEmpty(panel.StitchImagePath))
+        if (sender is not FrameworkElement { DataContext: ComparePanelState panel } stitchImage)
             return;
 
-        _currentViewer?.Close();
-        _currentViewer = new ImageViewerWindow(panel.StitchImagePath) { Owner = Window.GetWindow(this) };
-        _currentViewer.Closed += (_, _) => _currentViewer = null;
-        _currentViewer.Show();
+        if (e.ClickCount == 2)
+        {
+            if (string.IsNullOrEmpty(panel.StitchImagePath))
+                return;
+            _currentViewer?.Close();
+            _currentViewer = new ImageViewerWindow(panel.StitchImagePath) { Owner = Window.GetWindow(this) };
+            _currentViewer.Closed += (_, _) => _currentViewer = null;
+            _currentViewer.Show();
+            return;
+        }
+
+        // 사용자 요청(2026-09-10): "오로지 우측" -- 우측(Panel2) 스티칭 패널을 클릭했을 때만
+        // 좌측(Panel1) 원본 패널로 점프한다. Panel1을 수동으로 "스티칭"으로 바꿔서 보는 중이면
+        // (좌우가 뒤바뀐 상태) 이 기능은 트리거되지 않는다 -- 기존 이전/다음 넘기기 등 Panel1
+        // "원본" 모드 자체의 기능은 이 changes와 무관하게 그대로 동작한다.
+        if (e.ClickCount != 1 || DataContext is not ResultsCompareViewModel vm || !ReferenceEquals(panel, vm.Panel2))
+            return;
+        if (panel.StitchOrigWidth <= 0 || panel.StitchOrigHeight <= 0 ||
+            panel.StitchDisplayWidth <= 0 || panel.StitchDisplayHeight <= 0)
+            return;
+
+        // e.GetPosition(stitchImage)는 이 Image 엘리먼트 자신의 로컬 좌표(=StitchDisplayWidth/Height
+        // 픽셀 범위)를 돌려주므로, 부모 Grid의 LayoutTransform(줌 ScaleTransform)과 무관하게 항상
+        // 표시 해상도 기준 좌표다 -- 이걸 실제 모자이크 원본 해상도(StitchOrigWidth/Height)로
+        // 환산해야 seam owner map과 맞는다.
+        var pos = e.GetPosition(stitchImage);
+        var mosaicX = (int)System.Math.Round(pos.X * (panel.StitchOrigWidth / panel.StitchDisplayWidth));
+        var mosaicY = (int)System.Math.Round(pos.Y * (panel.StitchOrigHeight / panel.StitchDisplayHeight));
+
+        var result = vm.JumpToOriginalImageAt(vm.Panel1, mosaicX, mosaicY);
+        if (result != ResultsCompareViewModel.StitchClickResult.Success)
+            MessageBox.Show(DescribeClickFailure(result), "원본 사진으로 이동 불가", MessageBoxButton.OK, MessageBoxImage.Information);
     }
+
+    /// <summary>클릭이 원본 사진으로 이어지지 못한 이유를 사람이 읽을 수 있는 문장으로 -- 전엔
+    /// 이 실패들이 전부 조용히 아무 일도 안 일어나는 것처럼 보여서 "동작 안 함"으로만 보고됐었다.</summary>
+    private static string DescribeClickFailure(ResultsCompareViewModel.StitchClickResult result) => result switch
+    {
+        ResultsCompareViewModel.StitchClickResult.NoSeamArtifacts =>
+            "이 결과물에는 원본 매핑 정보(_seam_owner_map/_homographies)가 없습니다.\n분석·스티칭 화면에서 이 facade를 다시 분석하면 생성됩니다.",
+        ResultsCompareViewModel.StitchClickResult.OutOfBounds =>
+            "계산된 좌표가 모자이크 범위를 벗어났습니다 (이미지 경계 근처를 클릭했을 수 있습니다).",
+        ResultsCompareViewModel.StitchClickResult.Unowned =>
+            "클릭한 위치는 어떤 원본 사진에도 속하지 않는 영역입니다 (미관측/캔버스 여백).",
+        ResultsCompareViewModel.StitchClickResult.SourceFileMissing =>
+            "해당 원본 사진 정보를 찾을 수 없습니다 (원본 파일이 이동/삭제되었을 수 있습니다).",
+        _ => "알 수 없는 이유로 원본 사진을 표시할 수 없습니다.",
+    };
 
     private void PanZoomScrollViewer_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {

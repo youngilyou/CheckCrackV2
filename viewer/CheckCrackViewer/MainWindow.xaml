@@ -620,8 +620,12 @@
                                            Tag="{Binding VisualColmapImagePath}" MouseLeftButtonDown="Image_MouseLeftButtonDown"/>
                                             </StackPanel>
                                         </Border>
+                                        <!-- 2026-09-10: 사용자 요청으로 visual(H체인) 항목은 당분간 숨김.
+                                             실사진 시험에서 COLMAP도 정합이 밀리는 게 확인되면 그때 다시
+                                             결정. 파이프라인(visual.tif 생성 자체)은 그대로 두고 화면
+                                             표시만 강제로 Collapsed. -->
                                         <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8"
-                                    Visibility="{Binding VisualImagePath, Converter={StaticResource TruthyToVisibilityConverter}}">
+                                    Visibility="Collapsed">
                                             <StackPanel>
                                                 <TextBlock Text="visual (H 체인) — 더블클릭하면 확대" FontSize="10.5" Foreground="{StaticResource Text2}" Margin="0,0,0,6"/>
                                                 <Image Source="{Binding VisualImagePath, Converter={StaticResource PathToBitmapConverter}}"

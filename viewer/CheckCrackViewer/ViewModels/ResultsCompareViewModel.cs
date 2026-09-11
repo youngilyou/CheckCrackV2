@@ -235,6 +235,8 @@ public partial class ResultsCompareViewModel : ObservableObject
         panel.OriginalDisplayBitmap = null;
         panel.StitchDisplayBitmap = null;
         panel.StitchImagePath = "";
+        panel.StitchOrigWidth = 0;
+        panel.StitchOrigHeight = 0;
         panel.ZoomFactor = 1.0;
         panel.ReportPageBitmap = null;
         panel.ReportPageIndex = 0;
@@ -324,6 +326,90 @@ public partial class ResultsCompareViewModel : ObservableObject
         panel.StitchDisplayBitmap = bitmap;
         panel.StitchDisplayWidth = bitmap?.PixelWidth ?? 0;
         panel.StitchDisplayHeight = bitmap?.PixelHeight ?? 0;
+
+        // 클릭 좌표 -> 실제 모자이크 픽셀 환산에 필요한 원본 크기 (header-only, LoadReviewCanvas와
+        // 동일한 DelayCreation 패턴 -- 픽셀 디코드 없이 크기만 읽음).
+        try
+        {
+            using var stream = File.OpenRead(path);
+            var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
+            var frame = decoder.Frames[0];
+            panel.StitchOrigWidth = frame.PixelWidth;
+            panel.StitchOrigHeight = frame.PixelHeight;
+        }
+        catch
+        {
+            panel.StitchOrigWidth = 0;
+            panel.StitchOrigHeight = 0;
+        }
+
+        if (facade != null)
+            EnsureStitchSeamArtifacts(facade);
+    }
+
+    /// <summary>스티칭 이미지를 마우스로 클릭했을 때(ResultsCompareView.
+    /// StitchImage_MouseLeftButtonDown) "이 픽셀이 어느 원본 사진에서 왔는가"를 answer하는 데
+    /// 쓰는 seam-owner 아티팩트 -- 균열 검토 모드의 _reviewSeamArtifacts와 데이터는 동일하지만
+    /// 그쪽은 LoadReviewCanvas가 검토 모드 진입 시에만 로드하므로, 일반 비교 화면(스티칭 패널)
+    /// 용으로 별도 캐시를 둔다. facade가 바뀔 때만 다시 읽음(파일 I/O 절약).</summary>
+    private SourceObservationCalculator.SeamArtifacts? _stitchSeamArtifacts;
+    private string? _stitchSeamArtifactsFacadeId;
+
+    private void EnsureStitchSeamArtifacts(FacadeSnapshot facade)
+    {
+        if (_stitchSeamArtifactsFacadeId == facade.FacadeId)
+            return;
+        _stitchSeamArtifactsFacadeId = facade.FacadeId;
+        _stitchSeamArtifacts = facade.OutputDir != null
+            ? SourceObservationCalculator.LoadSeamArtifacts(facade.OutputDir, facade.FacadeId)
+            : null;
+    }
+
+    /// <summary>사용자 요청(2026-09-10, "오로지 우측"): 우측(스티칭) 패널을 클릭하면 좌측(원본)
+    /// 패널의 기존 이전/다음 넘기기 기능은 그대로 둔 채, 클릭한 지점을 실제로 찍은 원본 사진으로
+    /// 바로 넘겨준다. 실패할 수 있는 이유가 여러 가지라(아티팩트 없음/미관측 영역/원본 파일 삭제됨)
+    /// 매번 다른 이유를 반환해서 코드비하인드가 사용자에게 "왜 안 됐는지"를 보여줄 수 있게 한다 --
+    /// 이전엔 셋 다 조용히 아무 일도 안 일어나는 것처럼 보여서 "동작 안 함"으로만 보고됐었다.</summary>
+    public enum StitchClickResult
+    {
+        Success,
+        NoSeamArtifacts,   // 이 facade는 _seam_owner_map/_homographies가 없음 (구버전 결과물 -- 분석을 다시 돌리면 생성됨)
+        OutOfBounds,       // 계산된 모자이크 좌표가 이미지 범위를 벗어남 (좌표 환산 문제 의심)
+        Unowned,           // 유효 범위 안이지만 owner_map=0 (관측 안 된 영역)
+        SourceFileMissing, // owner는 찾았지만 원본 이미지 목록(_source_images.json)에 없거나 파일이 사라짐
+    }
+
+    /// <summary>targetPanel의 Mode가 이미 "원본"이면 CommunityToolkit의 [ObservableProperty]가
+    /// 값이 안 바뀌었다고 보고 PropertyChanged(따라서 ReloadPanel)를 안 태우므로, 리스트가 비어
+    /// 있을 때만 별도로 LoadOriginalImages를 호출해 채운다.</summary>
+    public StitchClickResult JumpToOriginalImageAt(ComparePanelState targetPanel, int mosaicX, int mosaicY)
+    {
+        var artifacts = _stitchSeamArtifacts;
+        if (artifacts == null)
+            return StitchClickResult.NoSeamArtifacts;
+        if (mosaicX < 0 || mosaicY < 0 || mosaicX >= artifacts.OwnerMapWidth || mosaicY >= artifacts.OwnerMapHeight)
+            return StitchClickResult.OutOfBounds;
+
+        var owner = artifacts.OwnerMap[(mosaicY * artifacts.OwnerMapWidth) + mosaicX];
+        if (owner == 0)
+            return StitchClickResult.Unowned;
+        var imageIndex = owner - 1;
+        if (imageIndex < 0 || imageIndex >= artifacts.OwnerIndex.Count)
+            return StitchClickResult.SourceFileMissing;
+        var imageId = artifacts.OwnerIndex[imageIndex];
+
+        targetPanel.Mode = "원본";
+        if (targetPanel.OriginalImageList.Count == 0)
+            LoadOriginalImages(targetPanel);
+
+        var idx = targetPanel.OriginalImageList.FindIndex(
+            p => string.Equals(Path.GetFileNameWithoutExtension(p), imageId, StringComparison.Ordinal));
+        if (idx < 0)
+            return StitchClickResult.SourceFileMissing;
+
+        targetPanel.OriginalImageIndex = idx;
+        LoadOriginalImageAt(targetPanel);
+        return StitchClickResult.Success;
     }
 
     [RelayCommand]

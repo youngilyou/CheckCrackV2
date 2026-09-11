@@ -29,6 +29,11 @@ public partial class ComparePanelState : ObservableObject
     [ObservableProperty] private double _stitchDisplayWidth;
     [ObservableProperty] private double _stitchDisplayHeight;
     [ObservableProperty] private string _stitchImagePath = "";
+    // 스티칭 이미지의 실제(원본) 픽셀 크기 -- StitchDisplayWidth/Height는 MaxDisplayDim로
+    // 축소된 화면 표시용 크기라, 클릭 좌표를 실제 모자이크 픽셀(=seam owner map 좌표계)로
+    // 환산하려면 둘 다 필요하다 (ResultsCompareView.StitchImage_MouseLeftButtonDown 참고).
+    [ObservableProperty] private int _stitchOrigWidth;
+    [ObservableProperty] private int _stitchOrigHeight;
     // 원본/스티칭 서브뷰는 한 패널 안에서 배타적으로만 보이므로(Mode가 둘 중 하나),
     // 줌 배율 하나를 공유해도 안전 -- 모드 전환/파사드 전환마다 ReloadPanel에서 1.0으로 리셋.
     [ObservableProperty] private double _zoomFactor = 1.0;

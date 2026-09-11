@@ -88,7 +88,7 @@
                                 Command="{Binding DataContext.ResetZoomPanelCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                 CommandParameter="{Binding}" Click="ResetZoomButton_Click"/>
                     </StackPanel>
-                    <TextBlock DockPanel.Dock="Bottom" Text="더블클릭하면 전체화면 · 우클릭 드래그로 이동 · 휠로 줌" FontSize="10" Foreground="{StaticResource Text2}"
+                    <TextBlock DockPanel.Dock="Bottom" Text="클릭하면 반대쪽 패널에 해당 원본 사진 표시 · 더블클릭하면 전체화면 · 우클릭 드래그로 이동 · 휠로 줌" FontSize="10" Foreground="{StaticResource Text2}"
                                HorizontalAlignment="Center" Margin="0,4,0,0"/>
                     <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
                                   PreviewMouseRightButtonDown="PanZoomScrollViewer_PreviewMouseRightButtonDown"
