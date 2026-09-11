@@ -16,7 +16,9 @@ from src.stitching.graph import (
     compute_drift_score,
     compute_global_homographies,
     count_connected_components,
+    detect_inconsistent_edges,
     pick_reference,
+    refine_homographies_globally,
 )
 from src.stitching.warp import SourceTransform, warp_images
 from src.sfm.colmap_runner import should_run_colmap
@@ -99,6 +101,20 @@ def stitch_facade(
     on_preview: Callable[[np.ndarray, int, int], None] | None = None,
 ) -> MosaicResult:
     graph = build_stitch_graph(geometry_results)
+    sizes = {iid: (img.shape[1], img.shape[0]) for iid, img in images.items()}
+
+    # Repeated-pattern false matches (or any other geometrically-wrong-but-
+    # inlier-passing pair) get dropped from the graph entirely before
+    # path-finding even starts -- confirmed real, 2026-09-11: the weighted
+    # shortest-path + cutoff below only looks at each edge's *own* confidence
+    # (inlier_ratio), which an edge like this can pass easily (LoFTR really
+    # did find plenty of matches, just against the wrong-but-identical-
+    # looking window/floor), so it needs a different signal entirely (see
+    # graph.py's detect_inconsistent_edges docstring).
+    inconsistent_edges = detect_inconsistent_edges(graph, sizes)
+    if inconsistent_edges:
+        graph.remove_edges_from(tuple(e) for e in inconsistent_edges)
+
     reference = pick_reference(graph)
     if reference is None:
         raise RuntimeError(f"facade {facade_id}: no geometry edge passed the quality gate")
@@ -106,7 +122,20 @@ def stitch_facade(
     scfg = cfg.stitch
     max_chain_weight = float(scfg.max_chain_weight) if "max_chain_weight" in scfg else 12.0
     homographies, unreachable = compute_global_homographies(graph, reference, max_cumulative_weight=max_chain_weight)
-    sizes = {iid: (img.shape[1], img.shape[0]) for iid, img in images.items()}
+
+    # Confirmed real, 2026-09-11 (FRONT facade): even after inconsistent-edge
+    # removal above, a handful of images can still land far off-position
+    # because every individual edge on their own shortest path looks fine in
+    # isolation -- 2-3 small, individually-passable errors still compound.
+    # Squeezing that out by tightening max_cumulative_weight instead costs
+    # coverage at a terrible rate (confirmed: dropping enough to fix it made
+    # 57% of this facade's images unreachable), so this jointly refines every
+    # surviving image's homography using ALL surviving edges (not just the
+    # single tree compute_global_homographies picked) -- see
+    # refine_homographies_globally's own docstring for the full reasoning
+    # and the real numbers this improved on this exact facade (partial, not
+    # complete, improvement -- documented honestly there).
+    homographies = refine_homographies_globally(graph, reference, homographies, sizes)
     mean_drift_px, max_drift_px, cycle_edge_count = compute_drift_score(graph, reference, homographies, sizes)
 
     warped, canvas_size, source_transforms = warp_images(images, homographies)
@@ -155,6 +184,7 @@ def stitch_facade(
         global_drift_score_px=mean_drift_px,
         max_drift_score_px=max_drift_px,
         cycle_edge_count=cycle_edge_count,
+        inconsistent_edge_count=len(inconsistent_edges),
     )
     needs_colmap, reasons = should_run_colmap(quality, cfg)
     quality.needs_colmap_fallback = needs_colmap

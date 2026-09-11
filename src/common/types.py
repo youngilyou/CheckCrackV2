@@ -157,6 +157,12 @@ class StitchQualityReport:
     global_drift_score_px: Optional[float] = None  # mean cycle-closure disagreement, see graph.py
     max_drift_score_px: Optional[float] = None
     cycle_edge_count: int = 0
+    # How many edges graph.py's detect_inconsistent_edges dropped before
+    # path-finding -- likely repeated-pattern false matches (or any other
+    # geometrically-wrong-but-inlier-passing pair), see graph.py's own
+    # docstring for the full reasoning. 0 is not evidence none existed if
+    # this facade's graph was too sparse for the triangle check to run.
+    inconsistent_edge_count: int = 0
     needs_colmap_fallback: bool = False
     colmap_fallback_reasons: list = field(default_factory=list)
 
