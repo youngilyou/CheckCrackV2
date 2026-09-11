@@ -26,11 +26,17 @@ public sealed class FacadeHierarchyIndex
 /// <summary>Owns RootPath/facade_hierarchy.json: display-only 단지(Complex)/동(Building,
 /// optional)/방위(Side) classification for facades in the 분석·스티칭 FACADES tree.
 ///
-/// Deliberately does NOT touch FacadeId itself, which stays the app-wide unique
-/// key it already is (see MainViewModel.GetOrCreateFacade) — this store only
-/// layers grouping metadata on top for display, keyed by KeyFor(...), never by
-/// bare FacadeId (two different complexes could legitimately reuse the same
-/// leaf folder name like "TOP").
+/// Deliberately does NOT touch FacadeId itself. FacadeId ("BACK"/"TOP"/etc.) is
+/// only a per-facade orientation label, NOT an app-wide unique key -- two
+/// different complexes/buildings routinely reuse the same leaf folder name.
+/// This store's own KeyFor(sourceFolderPath, facadeId) is the actual unique
+/// identity (a real, rooted SourceFolderPath when known, else the synthetic
+/// "facades/{facadeId}" fallback), and it is the same rule FacadeItemViewModel.Key
+/// / FacadeSnapshot.Key / MainViewModel.GetOrCreateFacade / FacadeOutputScanner
+/// all use -- every one of those must go through KeyFor (or Key), never compare
+/// bare FacadeId across different facades, or same-named facades from different
+/// buildings collide/overwrite or drop out of scans entirely (confirmed real bug,
+/// fixed 2026-09-11).
 ///
 /// Lives at the project root (like facades/, logs/), not %APPDATA%, because
 /// classification is per-project data tied to RootPath, unlike DbSettingsStore's

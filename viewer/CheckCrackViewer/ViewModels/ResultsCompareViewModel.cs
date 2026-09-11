@@ -84,7 +84,7 @@ public partial class ResultsCompareViewModel : ObservableObject
         {
             snapshots = FacadeOutputScanner.ScanAll(RootPath)
                 .Where(s => s.AnalysisImagePath != null || s.AnalysisColmapImagePath != null)
-                .OrderBy(s => s.FacadeId, StringComparer.Ordinal)
+                .OrderBy(s => s.Key, StringComparer.Ordinal)
                 .ToList();
         }
         catch (IOException)
@@ -92,29 +92,34 @@ public partial class ResultsCompareViewModel : ObservableObject
             return; // transient; retried next tick
         }
 
-        // Facades를 매번 통째로 비우고 다시 채우면, 선택된 facade의 FacadeId가 그대로여도
+        // Facades를 매번 통째로 비우고 다시 채우면, 선택된 facade의 Key가 그대로여도
         // 매 폴링마다 새 FacadeSnapshot 오브젝트로 바뀌면서 SelectedFacade의 참조가 달라져
         // OnSelectedFacadeChanged가 불필요하게 다시 튄다 -- 그때마다 ReloadPanel이 줌/이동
-        // 상태를 리셋해버렸다 (줌 도중 자동으로 원복되던 원인). FacadeId가 그대로인 항목은
+        // 상태를 리셋해버렸다 (줌 도중 자동으로 원복되던 원인). Key가 그대로인 항목은
         // 기존 오브젝트를 그 자리에서 갱신하고, 사라진/새로 생긴 것만 컬렉션에서 add/remove.
-        var byId = snapshots.ToDictionary(s => s.FacadeId);
+        // 확인된 실제 버그 수정(2026-09-11): 여기서 매칭 키로 bare FacadeId를 쓰면
+        // (a) 서로 다른 건물의 같은 이름 facade가 여기 함께 있을 때 ToDictionary가 중복
+        // 키로 즉시 예외를 던지고, (b) 예외 없이 넘어가더라도 둘 중 하나의 행이 다른 쪽의
+        // 결과로 계속 덮어써진다 -- FacadeSnapshot.Key(FacadeHierarchyStore.KeyFor 규칙,
+        // FacadeItemViewModel.Key와 동일)로 바꿔서 이름만 같은 다른 건물은 별개로 취급한다.
+        var byKey = snapshots.ToDictionary(s => s.Key);
 
         for (var i = Facades.Count - 1; i >= 0; i--)
         {
-            if (!byId.ContainsKey(Facades[i].FacadeId))
+            if (!byKey.ContainsKey(Facades[i].Key))
                 Facades.RemoveAt(i);
         }
 
-        var existingIds = new HashSet<string>(Facades.Select(f => f.FacadeId));
+        var existingKeys = new HashSet<string>(Facades.Select(f => f.Key));
         foreach (var snap in snapshots)
         {
-            if (existingIds.Contains(snap.FacadeId))
+            if (existingKeys.Contains(snap.Key))
             {
-                CopySnapshot(snap, Facades.First(f => f.FacadeId == snap.FacadeId));
+                CopySnapshot(snap, Facades.First(f => f.Key == snap.Key));
             }
             else
             {
-                var insertAt = Facades.TakeWhile(f => string.Compare(f.FacadeId, snap.FacadeId, StringComparison.Ordinal) < 0).Count();
+                var insertAt = Facades.TakeWhile(f => string.Compare(f.Key, snap.Key, StringComparison.Ordinal) < 0).Count();
                 Facades.Insert(insertAt, snap);
             }
         }
@@ -353,13 +358,18 @@ public partial class ResultsCompareViewModel : ObservableObject
     /// 그쪽은 LoadReviewCanvas가 검토 모드 진입 시에만 로드하므로, 일반 비교 화면(스티칭 패널)
     /// 용으로 별도 캐시를 둔다. facade가 바뀔 때만 다시 읽음(파일 I/O 절약).</summary>
     private SourceObservationCalculator.SeamArtifacts? _stitchSeamArtifacts;
-    private string? _stitchSeamArtifactsFacadeId;
+    // 확인된 실제 버그 수정(2026-09-11): 예전엔 bare FacadeId("BACK" 등)로 캐시 키를 잡아서,
+    // 서로 다른 건물의 같은 이름 facade 사이를 오갈 때 실제로는 다른 폴더(OutputDir)인데도
+    // "같은 facade"로 오판해 이전 건물의 seam artifacts를 그대로 재사용할 뻔했다(로드 자체는
+    // OutputDir로 하므로 첫 로드는 맞지만, 두 번째부터는 캐시가 막아서 새로 안 읽음) --
+    // 실제로 로드에 쓰는 값(OutputDir)을 캐시 키로도 써서 이 클래스 전체를 관통하는 문제를 없앤다.
+    private string? _stitchSeamArtifactsOutputDir;
 
     private void EnsureStitchSeamArtifacts(FacadeSnapshot facade)
     {
-        if (_stitchSeamArtifactsFacadeId == facade.FacadeId)
+        if (_stitchSeamArtifactsOutputDir == facade.OutputDir)
             return;
-        _stitchSeamArtifactsFacadeId = facade.FacadeId;
+        _stitchSeamArtifactsOutputDir = facade.OutputDir;
         _stitchSeamArtifacts = facade.OutputDir != null
             ? SourceObservationCalculator.LoadSeamArtifacts(facade.OutputDir, facade.FacadeId)
             : null;

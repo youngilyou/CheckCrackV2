@@ -862,7 +862,7 @@ public partial class MainViewModel : ObservableObject
             // DB에 반영)이 지금부터는 로컬 폴더를 가리키는 이 facade에 대해 절대 실행되지
             // 않도록 여기서 명시적으로 지움. ReclassifyFacade는 이 경로를 안 타므로(같은 폴더의
             // 분류만 바꿈) 영향 없음.
-            var facade = GetOrCreateFacade(result.FacadeId);
+            var facade = GetOrCreateFacade(result.FacadeId, result.FolderPath);
             facade.ArchiveId = null;
             facade.RemoteZipPath = null;
         }
@@ -915,7 +915,7 @@ public partial class MainViewModel : ObservableObject
         foreach (var candidate in candidates)
         {
             AddRunnableCandidate(candidate);
-            var facade = GetOrCreateFacade(candidate.FacadeId);
+            var facade = GetOrCreateFacade(candidate.FacadeId, candidate.FolderPath);
             if (archiveId is not null)
                 facade.ArchiveId = archiveId;
             if (remoteZipPath is not null)
@@ -983,7 +983,7 @@ public partial class MainViewModel : ObservableObject
 
     private void AddRunnableCandidate(FacadeClassifyResult r)
     {
-        var facade = GetOrCreateFacade(r.FacadeId);
+        var facade = GetOrCreateFacade(r.FacadeId, r.FolderPath);
         facade.SourceFolderPath = r.FolderPath;
         ApplyClassification(facade, r.ComplexId, r.ComplexName, r.BuildingId, r.BuildingName, r.Side);
 
@@ -1160,7 +1160,7 @@ public partial class MainViewModel : ObservableObject
         {
             if (!Path.IsPathRooted(entry.Key) || !Directory.Exists(entry.Key))
                 continue; // 합성 키("facades/{id}")이거나 폴더가 사라짐 -- 지어내지 않음
-            var facade = GetOrCreateFacade(entry.FacadeId);
+            var facade = GetOrCreateFacade(entry.FacadeId, entry.Key);
             facade.SourceFolderPath = entry.Key;
             ApplyClassification(facade, entry.ComplexId, entry.ComplexName, entry.BuildingId, entry.BuildingName, entry.Side);
         }
@@ -1755,16 +1755,59 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    private FacadeItemViewModel GetOrCreateFacade(string facadeId)
+    /// <summary>확인된 실제 버그 수정(2026-09-11): FacadeId("BACK"/"FRONT" 같은 방위
+    /// 이름)는 여러 단지/동이 똑같이 재사용하는 게 정상이라 전역 유일 키가 될 수
+    /// 없다(단지/동이 수백~수천 개로 늘어날 걸 감안하면 특히). 예전엔 이 함수가
+    /// facadeId 단독으로 찾아서, 서로 다른 건물의 "BACK" facade가 하나의
+    /// FacadeItemViewModel을 공유해 서로의 결과(coverage/drift/이미지 등)를
+    /// 덮어쓰는 버그가 실제로 재현됨(사용자 보고 + 코드 확인). sourceFolderPath까지
+    /// 포함한 FacadeHierarchyStore.KeyFor(...)(=FacadeItemViewModel.Key와 동일 규칙)로
+    /// 찾도록 변경 -- sourceFolderPath가 알려지지 않은 시점(예: 라이브 로그 이벤트가
+    /// 먼저 도착하고 SourceFolderPath는 나중에 채워지는 경우)에는 일단 null로
+    /// 찾고/만들되, 이후 SourceFolderPath가 실제로 채워지면 Key가 자동으로
+    /// 바뀌므로 그 다음 조회부터는 새 값으로 정확히 매칭된다.</summary>
+    private FacadeItemViewModel GetOrCreateFacade(string facadeId, string? sourceFolderPath = null)
     {
-        var existing = Facades.FirstOrDefault(f => f.FacadeId == facadeId);
+        var key = FacadeHierarchyStore.KeyFor(sourceFolderPath, facadeId);
+        var existing = Facades.FirstOrDefault(f => f.Key == key);
         if (existing != null)
             return existing;
-        var created = new FacadeItemViewModel { FacadeId = facadeId };
-        // keep the list sorted by id so it doesn't reshuffle as events arrive
-        var insertAt = Facades.TakeWhile(f => string.Compare(f.FacadeId, facadeId, StringComparison.Ordinal) < 0).Count();
+        var created = new FacadeItemViewModel { FacadeId = facadeId, SourceFolderPath = sourceFolderPath };
+        // keep the list sorted by key so it doesn't reshuffle as events arrive
+        var insertAt = Facades.TakeWhile(f => string.Compare(f.Key, key, StringComparison.Ordinal) < 0).Count();
         Facades.Insert(insertAt, created);
         return created;
+    }
+
+    /// <summary>OnLogEntry's own lookup, separate from GetOrCreateFacade -- logs/pipeline.log
+    /// (src/common/logging.py's JsonFormatter) only ever carries a bare facade_id per line, no
+    /// folder-path context, so unlike every other call site this one has no sourceFolderPath to
+    /// build a real Key from. Falling back to GetOrCreateFacade(facadeId) alone (synthetic
+    /// "facades/{facadeId}" key) would be a regression re-introducing the exact same-name
+    /// collision the 2026-09-11 fix above removes elsewhere -- worse, it would usually fail to
+    /// even find the real, already-running facade (its Key is its real SourceFolderPath) and
+    /// silently spawn a phantom duplicate with no SourceFolderPath that the live progress fields
+    /// below would update instead of the one actually on screen. The one thing this call site DOES
+    /// know reliably is "this app itself just started exactly this facade's pipeline process and
+    /// is watching it run" (facade.IsRunning, set by RunFacade before the process starts), so
+    /// correlate on that. If that doesn't resolve to exactly one facade (none running under this
+    /// id, or -- should never legitimately happen, since MaxConcurrent runs still each get their
+    /// own process/facade object -- more than one matches, e.g. two different buildings' "BACK"
+    /// running at once), the entry is dropped rather than guessing: RescanFacadeOutputs' 2s
+    /// file-based poll re-derives every facade's real state from its own output JSON regardless
+    /// of whether this live log wiring attributed a given line, so nothing is lost.</summary>
+    private FacadeItemViewModel? ResolveRunningFacade(string facadeId)
+    {
+        FacadeItemViewModel? match = null;
+        foreach (var f in Facades)
+        {
+            if (f.FacadeId != facadeId || !f.IsRunning)
+                continue;
+            if (match != null)
+                return null;
+            match = f;
+        }
+        return match;
     }
 
     /// <summary>RemoteAnalysisJobsViewModel's onProgress callback (2026-08-27) -- already on the
@@ -1791,7 +1834,10 @@ public partial class MainViewModel : ObservableObject
         if (string.IsNullOrEmpty(entry.FacadeId))
             return; // building-level event (e.g. FACADE_ASSIGNED) — shown in global log only
 
-        var facade = GetOrCreateFacade(entry.FacadeId);
+        var facade = ResolveRunningFacade(entry.FacadeId);
+        if (facade == null)
+            return; // can't safely attribute — see ResolveRunningFacade; RescanFacadeOutputs's
+                     // 2s file-based poll independently re-derives this facade's state regardless
         facade.AddEvent(entry);
 
         if (entry.ImageCount is int ic)
@@ -1857,7 +1903,7 @@ public partial class MainViewModel : ObservableObject
 
         foreach (var snap in snapshots)
         {
-            var facade = GetOrCreateFacade(snap.FacadeId);
+            var facade = GetOrCreateFacade(snap.FacadeId, snap.SourceFolderPath);
 
             // A facade currently running (RunFacadeCommand) reports its own live
             // status from the log tailer (OnLogEntry) — that takes priority over

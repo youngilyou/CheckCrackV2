@@ -18,6 +18,11 @@ namespace CheckCrackViewer.Services;
 public partial class FacadeSnapshot : ObservableObject
 {
     public string FacadeId { get; set; } = "";
+    /// <summary>FacadeItemViewModel.Key와 동일한 규칙(FacadeHierarchyStore.KeyFor) --
+    /// 결과보기 화면(ResultsCompareViewModel)이 이 스냅샷들을 식별/매칭할 때 bare
+    /// FacadeId 대신 반드시 이걸 써야 한다(2026-09-11에 확인된 실제 버그: 다른 건물의
+    /// 같은 이름 facade가 서로 충돌/누락되던 문제의 결과보기 쪽 절반).</summary>
+    public string Key => FacadeHierarchyStore.KeyFor(SourceFolderPath, FacadeId);
     /// <summary>The resolved output dir this snapshot was actually read from --
     /// lets consumers (e.g. the crack review feature) write a sibling file
     /// next to {facade_id}_cracks.json without re-deriving the path from
@@ -64,7 +69,17 @@ public static class FacadeOutputScanner
     public static List<FacadeSnapshot> ScanAll(string rootDir)
     {
         var results = new List<FacadeSnapshot>();
-        var seenFacadeIds = new HashSet<string>();
+        // 확인된 실제 버그 수정(2026-09-11): 이 집합은 예전에 "본 facadeId"를 순수 문자열
+        // (예: "BACK")로 추적했는데, facadeId는 방위 이름일 뿐 전역 유일하지 않다 -- 서로
+        // 다른 단지/동이 전부 같은 방위 이름을 쓰는 게 정상. 그 결과 아래 두 번째 루프의
+        // `seenFacadeIds.Contains(entry.FacadeId)` 가드가, 이미 스캔된 어떤 건물의 "BACK"과
+        // 이름만 같은 완전히 다른 건물의 "BACK"(+ 폴더로 등록된, 실제 폴더가 있는 facade)을
+        // "이미 봤다"고 오판해서 통째로 스캔에서 누락시켰다(실제 재현된 버그 -- 다른 곳의
+        // 결과가 뜨는 게 아니라, 두 번째 facade 자체가 결과 목록/트리에서 아예 사라짐).
+        // FacadeItemViewModel.Key/GetOrCreateFacade와 동일한 규칙(FacadeHierarchyStore.KeyFor)
+        // 으로 만든 합성 키를 쓰면, 같은 실제 폴더(또는 SourceFolderPath 없는 동일 in-place
+        // facades/{id} 폴더)만 진짜 중복으로 잡고 이름만 같은 다른 건물은 별개로 취급한다.
+        var seenKeys = new HashSet<string>();
         var index = FacadeHierarchyStore.Load(rootDir);
 
         var facadesDir = Path.Combine(rootDir, "facades");
@@ -78,9 +93,12 @@ public static class FacadeOutputScanner
                 var snap = ScanOne(facadeId, resolvedDir);
                 if (snap != null)
                 {
+                    // 이 루프의 snap.SourceFolderPath는 항상 null(위 dir는 facades/{id} 자체이지
+                    // "+ 폴더"로 등록된 실제 소스 폴더가 아님) -- KeyFor(null, facadeId)는 바로 이
+                    // dir 경로와 같은 뜻의 합성 키("facades/{facadeId}")를 만든다.
                     ApplyClassification(snap, index);
                     results.Add(snap);
-                    seenFacadeIds.Add(facadeId);
+                    seenKeys.Add(FacadeHierarchyStore.KeyFor(snap.SourceFolderPath, facadeId));
                 }
             }
         }
@@ -93,7 +111,7 @@ public static class FacadeOutputScanner
         // 결과보기 화면 둘 다)에 적용한 것.
         foreach (var entry in index.Facades)
         {
-            if (seenFacadeIds.Contains(entry.FacadeId))
+            if (seenKeys.Contains(entry.Key))
                 continue;
             if (!Path.IsPathRooted(entry.Key) || !Directory.Exists(entry.Key))
                 continue;
@@ -106,7 +124,7 @@ public static class FacadeOutputScanner
                 snap.SourceFolderPath = entry.Key;
                 ApplyClassification(snap, index);
                 results.Add(snap);
-                seenFacadeIds.Add(entry.FacadeId);
+                seenKeys.Add(entry.Key);
             }
         }
 

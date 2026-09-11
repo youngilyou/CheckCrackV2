@@ -10,6 +10,18 @@ namespace CheckCrackViewer.ViewModels;
 public partial class FacadeItemViewModel : ObservableObject
 {
     [ObservableProperty] private string _facadeId = "";
+    /// <summary>바로 위 FacadeId("BACK"/"FRONT" 같은 방위 이름)는 절대 앱 전체에서
+    /// 유일하지 않다 -- 여러 단지/동이 전부 같은 방위 이름을 쓰는 게 당연한 상황
+    /// (확인된 실제 버그, 2026-09-11: 서로 다른 건물의 "BACK" facade가 이 사실을
+    /// 무시한 GetOrCreateFacade(facadeId 단독 키)/FacadeOutputScanner의 seenFacadeIds
+    /// 때문에 서로의 결과를 덮어쓰거나 통째로 스캔에서 누락됨). 진짜 유일 식별자는
+    /// FacadeHierarchyStore.KeyFor(SourceFolderPath, FacadeId)와 동일한 규칙 --
+    /// SourceFolderPath(실제 폴더 경로, "+ 폴더"로 추가된 facade는 항상 있음)가
+    /// 있으면 그 자체가 이미 전역 유일하므로 그대로 쓰고, 없으면(구버전 CLI 산출물
+    /// 등) "facades/{facadeId}" 합성 키로 대체 -- 이 경우에도 최소한 이름이 다르면
+    /// 구분됨. 이 Key를 MainViewModel.GetOrCreateFacade/FacadeOutputScanner.ScanAll
+    /// 양쪽이 반드시 같이 써야 두 화면(분석·스티칭/결과보기)의 식별 기준이 일치한다.</summary>
+    public string Key => FacadeHierarchyStore.KeyFor(SourceFolderPath, FacadeId);
     [ObservableProperty] private FacadeOverallStatus _overallStatus = FacadeOverallStatus.Unknown;
     [ObservableProperty] private string _currentStageLabel = "대기 중";
 
@@ -91,6 +103,9 @@ public partial class FacadeItemViewModel : ObservableObject
 
     partial void OnAnalysisImagePathChanged(string? value) => OnPropertyChanged(nameof(HasMosaic));
     partial void OnAnalysisColmapImagePathChanged(string? value) => OnPropertyChanged(nameof(HasMosaic));
+
+    partial void OnFacadeIdChanged(string value) => OnPropertyChanged(nameof(Key));
+    partial void OnSourceFolderPathChanged(string? value) => OnPropertyChanged(nameof(Key));
 
     /// <summary>실행 이력 — output/version_index.json이 있는 facade만 채워짐
     /// (레거시 flat-output facade는 항상 비어있음). 최신 버전이 맨 앞.
