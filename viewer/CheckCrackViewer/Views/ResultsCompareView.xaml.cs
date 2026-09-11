@@ -117,7 +117,68 @@ public partial class ResultsCompareView : UserControl
 
         var result = vm.JumpToOriginalImageAt(vm.Panel1, mosaicX, mosaicY);
         if (result != ResultsCompareViewModel.StitchClickResult.Success)
+        {
             MessageBox.Show(DescribeClickFailure(result), "원본 사진으로 이동 불가", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        CenterPanel1OnPendingPoint();
+    }
+
+    /// <summary>사용자 요청(2026-09-11): 클릭한 지점으로 원본 사진을 띄우기만 하는 게 아니라
+    /// 그 지점을 뷰포트 중앙에 스크롤해야, 20MP 원본 사진 안에서 위치를 다시 손으로 찾는
+    /// 수고가 없어진다. Mode="원본" 전환 + LoadOriginalImageAt으로 새 DataTemplate
+    /// (OriginalSubView)이 만들어진 직후라 ScrollViewer의 레이아웃(ScrollableWidth/Height,
+    /// 뷰포트 크기)이 아직 최신이 아닐 수 있어(ResetZoomButton_Click과 동일한 사정),
+    /// Loaded 우선순위로 한 프레임 미룬다. Panel1은 x:Name="Panel1Border"로 고정 -- 원본/
+    /// 스티칭 두 서브뷰가 DataTemplate을 공유해 x:Name을 뷰 안쪽에는 못 붙이므로, 항상
+    /// Panel1Border의 시각 트리를 그때그때 훑어 지금 활성화된 ScrollViewer를 찾는다.</summary>
+    private void CenterPanel1OnPendingPoint()
+    {
+        if (DataContext is not ResultsCompareViewModel vm)
+            return;
+        var panel = vm.Panel1;
+
+        Dispatcher.BeginInvoke(new System.Action(() =>
+        {
+            var cx = panel.PendingCenterDisplayX;
+            var cy = panel.PendingCenterDisplayY;
+            panel.PendingCenterDisplayX = null;
+            panel.PendingCenterDisplayY = null;
+            if (cx == null || cy == null)
+                return;
+
+            var scrollViewer = FindDescendant<ScrollViewer>(Panel1Border);
+            if (scrollViewer == null)
+                return;
+
+            scrollViewer.UpdateLayout();
+            var targetH = (cx.Value * panel.ZoomFactor) - (scrollViewer.ViewportWidth / 2);
+            var targetV = (cy.Value * panel.ZoomFactor) - (scrollViewer.ViewportHeight / 2);
+            scrollViewer.ScrollToHorizontalOffset(targetH);
+            scrollViewer.ScrollToVerticalOffset(targetV);
+        }), DispatcherPriority.Loaded);
+    }
+
+    /// <summary>First matching descendant in the visual tree (unlike
+    /// LogicalTreeHelper.GetChildren, which the older button-based handlers use --
+    /// those start from a DockPanel that's a direct logical parent of its
+    /// ScrollViewer; this one has to reach through a DataTemplate-generated
+    /// visual tree several levels deep).</summary>
+    private static T? FindDescendant<T>(DependencyObject? root) where T : DependencyObject
+    {
+        if (root == null)
+            return null;
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match)
+                return match;
+            var found = FindDescendant<T>(child);
+            if (found != null)
+                return found;
+        }
+        return null;
     }
 
     /// <summary>클릭이 원본 사진으로 이어지지 못한 이유를 사람이 읽을 수 있는 문장으로 -- 전엔

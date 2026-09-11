@@ -210,7 +210,10 @@ public static class SourceObservationCalculator
         return inside;
     }
 
-    private static (double X, double Y) TransformPoint(double[][] h, double x, double y)
+    /// <summary>internal (not private) so ResultsCompareViewModel.JumpToOriginalImageAt
+    /// can reuse the exact same homography-inversion math to find where a mosaic
+    /// click lands in the source image's own pixel space, instead of duplicating it.</summary>
+    internal static (double X, double Y) TransformPoint(double[][] h, double x, double y)
     {
         double wx = h[0][0] * x + h[0][1] * y + h[0][2];
         double wy = h[1][0] * x + h[1][1] * y + h[1][2];
@@ -224,7 +227,7 @@ public static class SourceObservationCalculator
     /// null (never throws) for a near-singular matrix, same "just skip this
     /// candidate" treatment src/crack/pipeline.py's
     /// np.linalg.inv/LinAlgError catch uses.</summary>
-    private static double[][]? Invert3x3(double[][] m)
+    internal static double[][]? Invert3x3(double[][] m)
     {
         double a = m[0][0], b = m[0][1], c = m[0][2];
         double d = m[1][0], e = m[1][1], f = m[1][2];

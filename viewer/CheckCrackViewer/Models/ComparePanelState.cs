@@ -20,6 +20,14 @@ public partial class ComparePanelState : ObservableObject
     [ObservableProperty] private BitmapImage? _originalDisplayBitmap;
     [ObservableProperty] private double _originalDisplayWidth;
     [ObservableProperty] private double _originalDisplayHeight;
+    // 스티칭 패널 클릭 -> 원본 사진 점프(JumpToOriginalImageAt) 시, 클릭한 지점이 이 원본
+    // 사진의 어디에 해당하는지(OriginalDisplayWidth/Height 기준 표시-픽셀 좌표, ZoomFactor=1.0
+    // 기준 -- 뷰가 실제 스크롤할 땐 여기에 ZoomFactor를 곱한다). null이면 "센터링할 지점 없음"
+    // (예: prev/next로 넘긴 경우) -- View(ResultsCompareView.xaml.cs)가 이 값을 소비해
+    // ScrollViewer를 그 지점이 뷰포트 중앙에 오도록 스크롤한 뒤 반드시 null로 되돌려서, 다음
+    // prev/next 넘김에서 엉뚱하게 재사용되지 않게 한다.
+    [ObservableProperty] private double? _pendingCenterDisplayX;
+    [ObservableProperty] private double? _pendingCenterDisplayY;
 
     public bool HasOriginalImageList => OriginalImageList.Count > 0;
     public string OriginalImageLabel => HasOriginalImageList ? $"{OriginalImageIndex + 1} / {OriginalImageList.Count}" : "";

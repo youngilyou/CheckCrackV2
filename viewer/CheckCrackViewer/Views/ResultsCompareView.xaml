@@ -271,7 +271,7 @@
                        Visibility="{Binding SelectedFacade, Converter={StaticResource FalsyToVisibilityConverter}}"/>
 
             <!-- panel 1: 원본 | 스티칭 -->
-            <Border Grid.Column="0" Style="{StaticResource CardBorder}" Margin="0,0,6,0" DataContext="{Binding Panel1}"
+            <Border x:Name="Panel1Border" Grid.Column="0" Style="{StaticResource CardBorder}" Margin="0,0,6,0" DataContext="{Binding Panel1}"
                     Visibility="{Binding DataContext.SelectedFacade, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource TruthyToVisibilityConverter}}">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">

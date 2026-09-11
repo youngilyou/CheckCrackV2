@@ -409,6 +409,26 @@ public partial class ResultsCompareViewModel : ObservableObject
 
         targetPanel.OriginalImageIndex = idx;
         LoadOriginalImageAt(targetPanel);
+
+        // 사용자 요청(2026-09-11): 원본 사진을 그냥 띄우기만 하는 게 아니라, 클릭한 지점을
+        // 실제로 뷰포트 중앙에 놓아야 한다 -- 안 그러면 20MP짜리 원본 사진 안에서 그 위치를
+        // 다시 손으로 찾아야 하는 수고가 그대로 남는다. seam owner map과 같은 이 이미지의
+        // 호모그래피(mosaic-pixel -> source-pixel)를 역변환해서 원본 사진 안의 실제 좌표를
+        // 구하고, OriginalDisplayWidth/Height 기준(=ZoomFactor 곱하기 전) 표시-픽셀 좌표로
+        // 스케일링해 PendingCenterDisplayX/Y에 저장 -- 실제 스크롤은 View
+        // (ResultsCompareView.StitchImage_MouseLeftButtonDown)가 수행한다(ViewModel은 UI
+        // 요소를 직접 건드리지 않는다는 기존 원칙 유지).
+        if (artifacts.Homographies.TryGetValue(imageId, out var entry) && entry.Width > 0 && entry.Height > 0)
+        {
+            var hInv = SourceObservationCalculator.Invert3x3(entry.H);
+            if (hInv != null)
+            {
+                var (srcX, srcY) = SourceObservationCalculator.TransformPoint(hInv, mosaicX, mosaicY);
+                var scale = targetPanel.OriginalDisplayWidth / entry.Width;
+                targetPanel.PendingCenterDisplayX = Math.Clamp(srcX, 0, entry.Width) * scale;
+                targetPanel.PendingCenterDisplayY = Math.Clamp(srcY, 0, entry.Height) * scale;
+            }
+        }
         return StitchClickResult.Success;
     }
 
