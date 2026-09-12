@@ -39,6 +39,7 @@ from src.geometry.rectification import (
     facade_plane_from_reconstruction,
     facade_plane_from_segment,
     rectify_and_blend,
+    rectify_images,
 )
 from src.matching.loftr_matcher import MatchTimeoutError, TimeoutLoFTRMatcher
 from src.matching.pair_selector import select_pairs
@@ -118,7 +119,7 @@ def _detect_off_wall_images(
     return {image_id for image_id, _ in sorted_items[:best_cut_idx]}
 
 
-def _run_colmap_and_rectify_once(
+def _run_colmap_mapping_only(
     facade_id: str,
     colmap_images_dir: str,
     colmap_filenames: list[str],
@@ -130,13 +131,20 @@ def _run_colmap_and_rectify_once(
     utm_epsg: int | None,
     segment: FacadeSegment | None,
 ):
-    """One COLMAP-mapping + plane-rectification attempt for the given image
-    list. Returns (colmap_result, reconstruction, plane, rect_result) -- any
-    field past colmap_result can be None if that stage wasn't reached/didn't
-    succeed (not enough images registered, no GPS to align to UTM, etc.),
-    mirroring the single-attempt code this replaces so a retry attempt fails
-    exactly as gracefully as the original one did. Raises ImportError if
-    pycolmap itself isn't installed (caller's concern, same as before)."""
+    """COLMAP mapping + UTM alignment + facade-plane fit, WITHOUT
+    rectify_and_blend (no seam-finding/blending -- the expensive part). Used
+    for stage 1 (2026-09-12, 사용자 확정: "1단계는 mapping만") where the only
+    thing needed is a real, metric reconstruction+plane to feed
+    _detect_off_wall_images and _estimate_coverage_ratio -- this result is
+    never itself a final deliverable, so paying for a full render would be
+    pure waste. `_run_colmap_and_rectify_once` (stage 2, the actual final
+    COLMAP output) builds on top of this same function rather than
+    duplicating it.
+
+    Returns (colmap_result, reconstruction, plane) -- reconstruction/plane
+    are None if that stage wasn't reached/didn't succeed (not enough images
+    registered, no GPS to align to UTM, etc.). Raises ImportError if
+    pycolmap itself isn't installed (caller's concern)."""
     import pycolmap
 
     colmap_result = run_colmap(
@@ -145,7 +153,6 @@ def _run_colmap_and_rectify_once(
     )
     reconstruction = None
     plane = None
-    rect_result = None
     if colmap_result.sparse_dir and colmap_result.num_images_registered >= 4:
         try:
             effective_utm_epsg = utm_epsg if utm_epsg is not None else estimate_utm_epsg(catalog)
@@ -173,11 +180,63 @@ def _run_colmap_and_rectify_once(
                         plane = facade_plane_from_segment(segment, reference_altitudes)
                     else:
                         plane = facade_plane_from_reconstruction(reconstruction)
+        except Exception as exc:
+            log_event(logger, "warning", "CM 정렬/평면 계산 실패", facade_id=facade_id, error=str(exc))
+            reconstruction = None
+            plane = None
+    return colmap_result, reconstruction, plane
 
-                    rect_result = rectify_and_blend(
-                        facade_id, reconstruction, plane, colmap_images_dir, cfg,
-                        colmap_mean_reprojection_error_px=colmap_result.mean_reprojection_error_px,
-                    )
+
+def _estimate_coverage_ratio(reconstruction, plane, images_dir: str) -> float | None:
+    """Cheap coverage_ratio estimate: warps just each image's binary mask onto
+    the facade plane (rectify_images) and unions them via paste_max -- skips
+    rectify_and_blend's expensive seam-finding/blending entirely, since this
+    exists only as a baseline for the stage-1-vs-stage-2 coverage safety net
+    (2026-09-12, 사용자 승인): "이번엔(BACK) coverage가 줄지 않아 안전했다"는
+    사실이 "항상 안전하다"를 보장하지 않으므로, 필터링 후 coverage_ratio가
+    필터링 전보다 떨어지면 명시적으로 경고한다 -- 제외된 이미지가 실은 어떤
+    벽면을 고유하게 커버하고 있었을 가능성 신호."""
+    from src.stitching.mosaic import paste_max
+
+    warped, canvas_size, _ = rectify_images(reconstruction, plane, images_dir)
+    canvas_w, canvas_h = canvas_size
+    if canvas_w <= 0 or canvas_h <= 0:
+        return None
+    observed = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
+    for w in warped.values():
+        paste_max(observed, w.mask, w.corner)
+    return float(np.count_nonzero(observed)) / float(observed.size)
+
+
+def _run_colmap_and_rectify_once(
+    facade_id: str,
+    colmap_images_dir: str,
+    colmap_filenames: list[str],
+    workspace_dir: Path,
+    cfg: Config,
+    logger,
+    by_id: dict[str, ImageMetadata],
+    catalog: list[ImageMetadata],
+    utm_epsg: int | None,
+    segment: FacadeSegment | None,
+):
+    """One COLMAP-mapping + plane-rectification attempt for the given image
+    list. Returns (colmap_result, reconstruction, plane, rect_result) -- any
+    field past colmap_result can be None if that stage wasn't reached/didn't
+    succeed (not enough images registered, no GPS to align to UTM, etc.),
+    mirroring the single-attempt code this replaces so a retry attempt fails
+    exactly as gracefully as the original one did. Raises ImportError if
+    pycolmap itself isn't installed (caller's concern, same as before)."""
+    colmap_result, reconstruction, plane = _run_colmap_mapping_only(
+        facade_id, colmap_images_dir, colmap_filenames, workspace_dir, cfg, logger, by_id, catalog, utm_epsg, segment,
+    )
+    rect_result = None
+    if reconstruction is not None and plane is not None:
+        try:
+            rect_result = rectify_and_blend(
+                facade_id, reconstruction, plane, colmap_images_dir, cfg,
+                colmap_mean_reprojection_error_px=colmap_result.mean_reprojection_error_px,
+            )
         except Exception as exc:
             log_event(logger, "warning", "CM-pose rectification failed", facade_id=facade_id, error=str(exc))
     return colmap_result, reconstruction, plane, rect_result
@@ -196,10 +255,82 @@ def _run_facade_pipeline(
     output_dir_override: Path | None = None,
 ) -> Path | None:
     """MATCHED -> GEOMETRY_SOLVED -> STITCHED for one facade's image set. Returns the
-    output dir, or None if there weren't enough passing pairs to stitch anything."""
+    output dir, or None if there weren't enough passing pairs to stitch anything.
+
+    2026-09-12 재구조화 (사용자 확정, CLAUDE.local.md 원칙 #10 명시적 오버라이드): COLMAP은
+    더 이상 "H체인 품질 게이트 실패시에만 도는 폴백"이 아니다. `run_colmap_fallback=True`인
+    한(이름은 과거 의미의 잔재로 그대로 둠) 모든 facade에서:
+      1단계 -- 전체 원본 이미지로 COLMAP mapping만(rectify 생략) 먼저 무조건 실행해
+      "이 이미지가 실제로 벽을 찍었는가"(`_detect_off_wall_images`)를 판정하고 필터링.
+      2단계 -- 필터링된 이미지로, H체인의 `needs_colmap_fallback` 판정과 무관하게 COLMAP을
+      처음부터 완전히 다시 실행(mapping+rectify)해 최종 COLMAP 산출물을 만든다.
+    시간 비용(모든 facade가 COLMAP을 최소 두 번 거침)은 사용자가 "정확성이 중요하다,
+    시간은 상관없다"며 명시적으로 감수하기로 확정한 것. 1단계/2단계 각각의 coverage를
+    비교하는 안전장치도 여기 포함(아래 참고) -- "이번엔 우연히 안전했다"를 "항상
+    안전하다"로 착각하지 않기 위함."""
     output_dir = output_dir_override if output_dir_override is not None else output_root / facade_id / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     by_id = {m.image_id: m for m in catalog}
+
+    # === 1단계 COLMAP: 전체 이미지, mapping만, 벽면 미노출 이미지 자동 감지/필터링 ===
+    stage1_coverage_estimate: float | None = None
+    if run_colmap_fallback:
+        source_dirs = {str(Path(m.file_path).parent) for m in catalog}
+        if len(source_dirs) != 1:
+            log_event(
+                logger, "warning", "facade images span multiple source dirs, skipping CM entirely",
+                facade_id=facade_id, source_dirs=list(source_dirs),
+            )
+            run_colmap_fallback = False
+        else:
+            colmap_images_dir = next(iter(source_dirs))
+            colmap_filenames = [Path(m.file_path).name for m in catalog]
+            try:
+                t_stage1 = time.time()
+                stage1_colmap_result, stage1_reconstruction, stage1_plane = _run_colmap_mapping_only(
+                    facade_id, colmap_images_dir, colmap_filenames,
+                    output_dir / "colmap_stage1", cfg, logger, by_id, catalog, utm_epsg, segment,
+                )
+                log_event(
+                    logger, "info", "1단계 COLMAP(필터용) 완료",
+                    stage="COLMAP_STAGE1", facade_id=facade_id,
+                    elapsed_s=round(time.time() - t_stage1, 2),
+                    num_images_requested=stage1_colmap_result.num_images_requested,
+                    num_images_registered=stage1_colmap_result.num_images_registered,
+                    num_points3d=stage1_colmap_result.num_points3d,
+                    mean_reprojection_error_px=stage1_colmap_result.mean_reprojection_error_px,
+                )
+                if stage1_reconstruction is not None and stage1_plane is not None:
+                    try:
+                        stage1_coverage_estimate = _estimate_coverage_ratio(
+                            stage1_reconstruction, stage1_plane, colmap_images_dir,
+                        )
+                    except Exception as exc:
+                        log_event(logger, "warning", "1단계 coverage 추정 실패", facade_id=facade_id, error=str(exc))
+
+                    off_wall_ids = _detect_off_wall_images(stage1_reconstruction, stage1_plane)
+                    if off_wall_ids:
+                        log_event(
+                            logger, "info", "벽면이 거의 안 보이는 이미지 자동 감지 -- 제외",
+                            stage="OFF_WALL_DETECTED", facade_id=facade_id,
+                            excluded_count=len(off_wall_ids), excluded_image_ids=sorted(off_wall_ids),
+                        )
+                        catalog = [m for m in catalog if m.image_id not in off_wall_ids]
+                        by_id = {m.image_id: m for m in catalog}
+            except ImportError:
+                log_event(logger, "warning", "pycolmap not installed, skipping CM entirely", facade_id=facade_id)
+                run_colmap_fallback = False
+            except Exception as exc:
+                # run_colmap()/COLMAP 내부가 여기서 그대로 예외를 던질 수 있음(자체
+                # try/except 없음, colmap_runner.py 확인) -- 예전엔 COLMAP이 조건부
+                # 폴백이라 실패해도 H체인 결과는 그대로 살아남았는데, 지금은 COLMAP이
+                # H체인보다 먼저 도는 필수 단계가 됐으므로, 여기서 안 잡으면 1단계
+                # COLMAP 실패가 H체인까지 통째로 크래시시킨다 -- 필터링 없이 전체
+                # catalog로 H체인은 계속 진행하도록 방어.
+                log_event(
+                    logger, "warning", "1단계 COLMAP 실패 -- 필터링 없이 전체 이미지로 계속 진행",
+                    stage="COLMAP_STAGE1_FAILED", facade_id=facade_id, error=str(exc),
+                )
 
     t0 = time.time()
     pairs = select_pairs(catalog, cfg)
@@ -306,133 +437,116 @@ def _run_facade_pipeline(
         elapsed_s=round(time.time() - t0, 2), **asdict(result.quality),
     )
     if result.quality.needs_colmap_fallback:
+        # 2026-09-12부터 이 값은 더 이상 COLMAP 실행 여부의 게이트가 아니다(2단계
+        # COLMAP은 run_colmap_fallback인 한 항상 실행됨) -- H체인 자체 품질이
+        # 부족했다는 진단 정보로만 남겨둔다.
         log_event(
-            logger, "warning", "facade needs CM fallback, stitch is NEEDS_MANUAL_REVIEW",
+            logger, "warning", "H체인 자체로는 품질 기준 미달 (COLMAP 2단계는 별도로 항상 실행됨)",
             stage="NEEDS_MANUAL_REVIEW", facade_id=facade_id,
             reasons=result.quality.colmap_fallback_reasons,
         )
-        if run_colmap_fallback:
-            t_colmap = time.time()
-            source_dirs = {str(Path(by_id[iid].file_path).parent) for iid in images.keys()}
-            if len(source_dirs) != 1:
-                log_event(
-                    logger, "warning", "facade images span multiple source dirs, skipping CM",
-                    facade_id=facade_id, source_dirs=list(source_dirs),
+
+    # === 2단계 COLMAP: 필터링된 이미지로 완전히 새로 실행(mapping+rectify), H체인
+    # 품질 판정과 무관하게 항상 실행, 결과는 H체인 결과와 함께 항상 저장 ===
+    if run_colmap_fallback:
+        t_colmap = time.time()
+        source_dirs = {str(Path(by_id[iid].file_path).parent) for iid in images.keys()}
+        if len(source_dirs) != 1:
+            log_event(
+                logger, "warning", "facade images span multiple source dirs, skipping CM",
+                facade_id=facade_id, source_dirs=list(source_dirs),
+            )
+        else:
+            colmap_images_dir = next(iter(source_dirs))
+            colmap_filenames = [Path(by_id[iid].file_path).name for iid in images.keys()]
+            try:
+                # workspace_dir lives *inside* this run's own output_dir (not
+                # output_dir.parent) so two different --output-dir runs of the
+                # same facade (different versions, or repeated test trials)
+                # never share one COLMAP workspace -- run_colmap() always wipes
+                # database.db at start (colmap_runner.py), so a shared location
+                # was never actually reused for anything, only a collision risk
+                # if two runs' lifetimes ever overlapped or a debugging script
+                # reused a stale one from a different run.
+                colmap_result, reconstruction, plane, rect_result = _run_colmap_and_rectify_once(
+                    facade_id, colmap_images_dir, colmap_filenames,
+                    output_dir / "colmap", cfg, logger, by_id, catalog, utm_epsg, segment,
                 )
-            else:
-                colmap_images_dir = next(iter(source_dirs))
-                colmap_filenames = [Path(by_id[iid].file_path).name for iid in images.keys()]
-                try:
-                    # Stage 1: COLMAP + rectify on every image the H-chain quality
-                    # gate already accepted.
-                    colmap_result, reconstruction, plane, rect_result = _run_colmap_and_rectify_once(
-                        facade_id, colmap_images_dir, colmap_filenames,
-                        # workspace_dir lives *inside* this run's own output_dir (not
-                        # output_dir.parent) so two different --output-dir runs of the
-                        # same facade (different versions, or repeated test trials)
-                        # never share one COLMAP workspace -- run_colmap() always wipes
-                        # database.db at start (colmap_runner.py), so a shared location
-                        # was never actually reused for anything, only a collision risk
-                        # if two runs' lifetimes ever overlapped or a debugging script
-                        # reused a stale one from a different run.
-                        output_dir / "colmap", cfg, logger, by_id, catalog, utm_epsg, segment,
-                    )
-                    log_event(
-                        logger, "info", "CM fallback complete",
-                        stage="COLMAP_FALLBACK", facade_id=facade_id,
-                        elapsed_s=round(time.time() - t_colmap, 2),
-                        num_images_requested=colmap_result.num_images_requested,
-                        num_images_registered=colmap_result.num_images_registered,
-                        num_points3d=colmap_result.num_points3d,
-                        mean_reprojection_error_px=colmap_result.mean_reprojection_error_px,
-                    )
+                log_event(
+                    logger, "info", "2단계 COLMAP(최종) 완료",
+                    stage="COLMAP_STAGE2", facade_id=facade_id,
+                    elapsed_s=round(time.time() - t_colmap, 2),
+                    num_images_requested=colmap_result.num_images_requested,
+                    num_images_registered=colmap_result.num_images_registered,
+                    num_points3d=colmap_result.num_points3d,
+                    mean_reprojection_error_px=colmap_result.mean_reprojection_error_px,
+                )
+                atomic_write_json(output_dir / f"{facade_id}_colmap_report.json", asdict(colmap_result))
 
-                    # Stage 2 (2026-09-12, 사용자 요청: "자동 2단계 재실행", 시간이 더
-                    # 걸려도 됨): stage 1's own reconstruction is the only thing that can
-                    # tell us which input images barely saw the wall at all (a shot aimed
-                    # mostly at sky/rooftop equipment still matches/triangulates fine, just
-                    # against unrelated background -- see _detect_off_wall_images's own
-                    # docstring, confirmed real on BACK: ~40/121 images, 0 driving the
-                    # roofline artifacts and a misaligned corner). So this can only ever be
-                    # a retry *after* stage 1, never a pre-filter -- accepted cost, per
-                    # 사용자 confirmation. If nothing qualifies (no clear low-outlier
-                    # cluster) stage 1's result is simply kept, at no extra COLMAP cost.
-                    if reconstruction is not None and plane is not None:
-                        off_wall_ids = _detect_off_wall_images(reconstruction, plane)
-                        if off_wall_ids:
-                            retry_filenames = [f for f in colmap_filenames if Path(f).stem not in off_wall_ids]
-                            log_event(
-                                logger, "info", "벽면이 거의 안 보이는 이미지 감지 -- 제외 후 2단계 재실행",
-                                stage="OFF_WALL_RETRY", facade_id=facade_id,
-                                excluded_count=len(off_wall_ids),
-                                excluded_image_ids=sorted(off_wall_ids),
-                                retry_image_count=len(retry_filenames),
-                            )
-                            t_retry = time.time()
-                            retry_colmap_result, retry_reconstruction, retry_plane, retry_rect_result = (
-                                _run_colmap_and_rectify_once(
-                                    facade_id, colmap_images_dir, retry_filenames,
-                                    output_dir / "colmap_retry", cfg, logger, by_id, catalog, utm_epsg, segment,
-                                )
-                            )
-                            if retry_rect_result is not None:
-                                colmap_result, reconstruction, plane, rect_result = (
-                                    retry_colmap_result, retry_reconstruction, retry_plane, retry_rect_result
-                                )
-                                log_event(
-                                    logger, "info", "2단계 재실행 결과 채택",
-                                    stage="OFF_WALL_RETRY_ADOPTED", facade_id=facade_id,
-                                    elapsed_s=round(time.time() - t_retry, 2),
-                                    num_images_registered=colmap_result.num_images_registered,
-                                    coverage_ratio=rect_result.quality.coverage_ratio,
-                                )
-                            else:
-                                log_event(
-                                    logger, "warning", "2단계 재실행이 결과를 못 만들어 1단계 결과 유지",
-                                    stage="OFF_WALL_RETRY_FAILED", facade_id=facade_id,
-                                )
-
-                    atomic_write_json(output_dir / f"{facade_id}_colmap_report.json", asdict(colmap_result))
-
-                    if rect_result is not None:
-                        if rect_result.analysis_image is not None:
-                            imwrite_unicode(output_dir / f"{facade_id}_analysis_colmap.tif", rect_result.analysis_image)
-                        if rect_result.visual_image is not None:
-                            imwrite_unicode(output_dir / f"{facade_id}_visual_colmap.tif", rect_result.visual_image)
-                        imwrite_unicode(output_dir / f"{facade_id}_observed_mask_colmap.tif", rect_result.observed_mask)
-                        atomic_write_json(output_dir / f"{facade_id}_quality_report_colmap.json", asdict(rect_result.quality))
-                        # 2026-09-11, 사용자 결정: RTK/알려진 마커 등 진짜 측량급
-                        # calibration이 아직 없어 우선 COLMAP+일반 GPS EXIF 정렬
-                        # (align_reconstruction_to_utm) 스케일을 그대로 쓰기로 함
-                        # -- CLAUDE.local.md #26의 승인된 소스 목록(Surveyed control
-                        # point/Known marker/BIM-CAD/RTK-GCP)엔 없는, 정밀도가 더
-                        # 낮은 소스라는 걸 알고 쓰는 것이므로 reference_object_type에
-                        # 그 출처를 남겨 나중에 실측 정밀도 요구가 생기면 구분 가능하게
-                        # 함. plane.px_per_m은 그 자체로 오차가 있는 게 아니라(캔버스
-                        # 해상도를 정의하는 상수, 지금은 항상 100.0) "그 px가 실제 몇
-                        # m인지"의 신뢰도가 GPS 정렬 품질에 달려있다는 뜻.
-                        atomic_write_json(
-                            output_dir / f"{facade_id}_scale_colmap.json",
-                            {
-                                "px_per_m": plane.px_per_m,
-                                "calibrated": True,
-                                "reference_object_type": "gps_colmap_alignment",
-                                "reference_length_mm": None,
-                            },
-                        )
-                        _write_source_transform_artifacts(output_dir, facade_id, "_colmap", rect_result)
+                if rect_result is not None:
+                    # 안전장치 (2026-09-12, 사용자 승인): 1단계(필터 전 전체) coverage 추정치보다
+                    # 2단계(필터 후) 실제 coverage_ratio가 낮으면, 제외된 이미지가 실은 다른
+                    # 이미지가 못 찍은 벽면을 고유하게 커버하고 있었을 가능성 신호 -- "이번엔
+                    # 우연히 안전했다"(BACK: coverage가 줄지 않고 오히려 늘어남)를 "항상
+                    # 안전하다"로 착각하지 않기 위함. 두 값이 서로 다른(필터 전/후로 이미지
+                    # 구성이 다른) 캔버스 크기/bbox 기준이라 완벽히 동일한 척도는 아니지만,
+                    # 실질적인 경고 신호로는 충분하다.
+                    if stage1_coverage_estimate is not None and rect_result.quality.coverage_ratio < stage1_coverage_estimate:
                         log_event(
-                            logger, "info", "CM-rectified mosaic complete",
-                            stage="RECTIFIED_COLMAP", facade_id=facade_id,
-                            elapsed_s=round(time.time() - t_colmap, 2),
-                            coverage_ratio=rect_result.quality.coverage_ratio,
-                            image_count=rect_result.quality.image_count,
+                            logger, "warning",
+                            "필터링 후 coverage가 필터 전보다 낮음 -- 제외된 이미지가 "
+                            "고유하게 커버하던 벽면이 있었을 수 있음, 수동 확인 권장",
+                            stage="OFF_WALL_COVERAGE_REGRESSION", facade_id=facade_id,
+                            stage1_coverage_estimate=round(stage1_coverage_estimate, 4),
+                            stage2_coverage_ratio=round(rect_result.quality.coverage_ratio, 4),
                         )
-                except ImportError:
-                    log_event(
-                        logger, "warning", "pycolmap not installed, cannot run CM fallback",
-                        facade_id=facade_id,
+
+                    if rect_result.analysis_image is not None:
+                        imwrite_unicode(output_dir / f"{facade_id}_analysis_colmap.tif", rect_result.analysis_image)
+                    if rect_result.visual_image is not None:
+                        imwrite_unicode(output_dir / f"{facade_id}_visual_colmap.tif", rect_result.visual_image)
+                    imwrite_unicode(output_dir / f"{facade_id}_observed_mask_colmap.tif", rect_result.observed_mask)
+                    atomic_write_json(output_dir / f"{facade_id}_quality_report_colmap.json", asdict(rect_result.quality))
+                    # 2026-09-11, 사용자 결정: RTK/알려진 마커 등 진짜 측량급
+                    # calibration이 아직 없어 우선 COLMAP+일반 GPS EXIF 정렬
+                    # (align_reconstruction_to_utm) 스케일을 그대로 쓰기로 함
+                    # -- CLAUDE.local.md #26의 승인된 소스 목록(Surveyed control
+                    # point/Known marker/BIM-CAD/RTK-GCP)엔 없는, 정밀도가 더
+                    # 낮은 소스라는 걸 알고 쓰는 것이므로 reference_object_type에
+                    # 그 출처를 남겨 나중에 실측 정밀도 요구가 생기면 구분 가능하게
+                    # 함. plane.px_per_m은 그 자체로 오차가 있는 게 아니라(캔버스
+                    # 해상도를 정의하는 상수, 지금은 항상 100.0) "그 px가 실제 몇
+                    # m인지"의 신뢰도가 GPS 정렬 품질에 달려있다는 뜻.
+                    atomic_write_json(
+                        output_dir / f"{facade_id}_scale_colmap.json",
+                        {
+                            "px_per_m": plane.px_per_m,
+                            "calibrated": True,
+                            "reference_object_type": "gps_colmap_alignment",
+                            "reference_length_mm": None,
+                        },
                     )
+                    _write_source_transform_artifacts(output_dir, facade_id, "_colmap", rect_result)
+                    log_event(
+                        logger, "info", "CM-rectified mosaic complete",
+                        stage="RECTIFIED_COLMAP", facade_id=facade_id,
+                        elapsed_s=round(time.time() - t_colmap, 2),
+                        coverage_ratio=rect_result.quality.coverage_ratio,
+                        image_count=rect_result.quality.image_count,
+                    )
+            except ImportError:
+                log_event(
+                    logger, "warning", "pycolmap not installed, cannot run CM",
+                    facade_id=facade_id,
+                )
+            except Exception as exc:
+                # H체인 결과(_analysis.tif 등)는 이 시점에 이미 저장 대상이 확정돼
+                # 있으므로(아래 코드가 계속 실행됨), 2단계 COLMAP이 예기치 않게
+                # 실패해도 H체인 산출물까지 잃지 않도록 여기서 잡는다.
+                log_event(
+                    logger, "warning", "2단계 COLMAP 실패 -- H체인 결과만 저장됨",
+                    stage="COLMAP_STAGE2_FAILED", facade_id=facade_id, error=str(exc),
+                )
 
     if result.analysis_image is not None:
         imwrite_unicode(output_dir / f"{facade_id}_analysis.tif", result.analysis_image)
