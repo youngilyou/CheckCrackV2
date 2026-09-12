@@ -305,6 +305,34 @@ def facade_plane_from_reconstruction(
         e_u = vt[0] - np.dot(vt[0], normal) * normal
     e_u = e_u / np.linalg.norm(e_u)
 
+    # Fix e_u's sign to a deterministic, run-independent convention -- SVD
+    # (both `_principal_direction`'s and the vt[0] fallback) fits a LINE, not
+    # a directed vector, so its sign is essentially arbitrary numerical noise
+    # that can flip between two runs of the *same* images (COLMAP's own
+    # registration is already known non-deterministic run-to-run). Confirmed
+    # real, 2026-09-12 (BACK facade): two runs a few minutes apart rendered
+    # the identical wall mirrored left-right with no code change at all.
+    # DJI filenames increment sequentially in real capture order regardless
+    # of which images later get registered/excluded (by COLMAP itself or
+    # _detect_off_wall_images), so orienting e_u to agree with "capture order
+    # increases toward +u" is a stable, deterministic tiebreak that doesn't
+    # depend on COLMAP's internal SVD numerics -- covariance sign between
+    # capture order and each camera's own projection onto the (unsigned)
+    # track, not just first-vs-last (robust to a couple of out-of-sequence
+    # registrations). Best-effort: a flight path that reverses direction
+    # mid-facade isn't monotonic in the first place, but that's already an
+    # unusual capture pattern this convention has no worse an answer for than
+    # the previous (literally random) one did.
+    image_ids = [Path(img.name).stem for img in reconstruction.images.values()]
+    if len(image_ids) >= 2:
+        order = np.argsort(image_ids)  # capture order, stable across runs/exclusions
+        capture_index = np.empty(len(image_ids))
+        capture_index[order] = np.arange(len(image_ids))
+        projection = centers @ e_u
+        covariance = float(np.dot(capture_index - capture_index.mean(), projection - projection.mean()))
+        if covariance < 0:
+            e_u = -e_u
+
     world_up = np.array([0.0, 0.0, 1.0])
     if abs(float(np.dot(normal, world_up))) < 0.5:
         # vertical wall -- v is true world-up (matches facade_plane_from_segment's

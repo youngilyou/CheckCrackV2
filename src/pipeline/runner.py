@@ -20,6 +20,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from src.building.facade_classifier import classify_images
 from src.building.facade_segmenter import FacadeSegment, build_segments
@@ -43,6 +44,143 @@ from src.matching.loftr_matcher import MatchTimeoutError, TimeoutLoFTRMatcher
 from src.matching.pair_selector import select_pairs
 from src.sfm.colmap_runner import run_colmap
 from src.stitching.mosaic import stitch_facade
+
+
+def _detect_off_wall_images(
+    reconstruction: "pycolmap.Reconstruction",
+    plane,
+    min_gap_ratio: float = 2.5,
+    max_exclude_fraction: float = 0.5,
+    plane_distance_m: float = 3.0,
+) -> set[str]:
+    """Flags registered images whose 2D-3D observations barely touch the
+    fitted facade plane -- confirmed real, 2026-09-12 (BACK facade, user-
+    reported roofline artifacts + a misaligned corner): a shot aimed mostly
+    at sky/rooftop-equipment/distant background still gets plenty of COLMAP
+    feature matches and triangulated points (thousands, in the confirmed
+    case), just essentially NONE of them near the actual wall plane --
+    unlike a coverage-count or per-image color-variance signal (both tried
+    on this same facade and confirmed unreliable, see rectification.py's
+    _mask_disagreement_islands docstring for that dead end), this reuses
+    SfM's own triangulation as the "is this image actually looking at the
+    wall" signal, since it's the one thing this pipeline already computes
+    that's grounded in real 3D geometry rather than 2D pixel statistics.
+    Excluding these before a second COLMAP pass keeps their unrelated
+    background matches from ever entering the pose graph, instead of only
+    filtering pixels after the fact.
+
+    Rather than a fixed absolute point-count threshold (only valid for one
+    facade's own scale/GSD/point density), this looks for the largest
+    RELATIVE gap in the sorted per-image on-wall-point counts and cuts
+    there -- confirmed on real BACK data: a ~40-image low cluster (0-250
+    points) sat behind a >3x gap from the rest (775+), a clear "these images
+    see something completely different" split, not a smooth continuum.
+    Candidate cut points are restricted to the lower `max_exclude_fraction`
+    of images (a real split separates a MINORITY of bad shots from the
+    majority, not the reverse) and the gap must clear `min_gap_ratio`
+    (CLAUDE.local.md's own "extreme, not mild, outlier" convention) or
+    nothing is excluded at all -- a facade whose images are all consistently
+    on-target shouldn't lose any coverage just because SOME gap, however
+    small, exists somewhere in the sorted list."""
+    normal = np.cross(plane.e_u, plane.e_v)
+    normal = normal / np.linalg.norm(normal)
+
+    counts: dict[str, int] = {}
+    for img in reconstruction.images.values():
+        image_id = Path(img.name).stem
+        on_wall = 0
+        for p in img.points2D:
+            if not p.has_point3D() or p.point3D_id not in reconstruction.points3D:
+                continue
+            point3d = reconstruction.points3D[p.point3D_id]
+            if abs(float(np.dot(point3d.xyz - plane.origin, normal))) < plane_distance_m:
+                on_wall += 1
+        counts[image_id] = on_wall
+
+    sorted_items = sorted(counts.items(), key=lambda item: item[1])
+    n = len(sorted_items)
+    if n < 4:
+        return set()
+
+    max_cut = max(1, int(n * max_exclude_fraction))
+    best_gap_ratio = 1.0
+    best_cut_idx = 0  # exclude sorted_items[:best_cut_idx]
+    for i in range(1, min(max_cut, n - 1) + 1):
+        lo = sorted_items[i - 1][1]
+        hi = sorted_items[i][1]
+        ratio = (hi + 1) / (lo + 1)
+        if ratio > best_gap_ratio:
+            best_gap_ratio = ratio
+            best_cut_idx = i
+
+    if best_gap_ratio < min_gap_ratio or best_cut_idx == 0:
+        return set()
+    return {image_id for image_id, _ in sorted_items[:best_cut_idx]}
+
+
+def _run_colmap_and_rectify_once(
+    facade_id: str,
+    colmap_images_dir: str,
+    colmap_filenames: list[str],
+    workspace_dir: Path,
+    cfg: Config,
+    logger,
+    by_id: dict[str, ImageMetadata],
+    catalog: list[ImageMetadata],
+    utm_epsg: int | None,
+    segment: FacadeSegment | None,
+):
+    """One COLMAP-mapping + plane-rectification attempt for the given image
+    list. Returns (colmap_result, reconstruction, plane, rect_result) -- any
+    field past colmap_result can be None if that stage wasn't reached/didn't
+    succeed (not enough images registered, no GPS to align to UTM, etc.),
+    mirroring the single-attempt code this replaces so a retry attempt fails
+    exactly as gracefully as the original one did. Raises ImportError if
+    pycolmap itself isn't installed (caller's concern, same as before)."""
+    import pycolmap
+
+    colmap_result = run_colmap(
+        facade_id, colmap_images_dir, colmap_filenames,
+        workspace_dir=workspace_dir, logger=logger,
+    )
+    reconstruction = None
+    plane = None
+    rect_result = None
+    if colmap_result.sparse_dir and colmap_result.num_images_registered >= 4:
+        try:
+            effective_utm_epsg = utm_epsg if utm_epsg is not None else estimate_utm_epsg(catalog)
+            if effective_utm_epsg is None:
+                log_event(
+                    logger, "warning", "no GPS on any image, cannot align CM reconstruction for rectification",
+                    facade_id=facade_id,
+                )
+            else:
+                reconstruction = pycolmap.Reconstruction(colmap_result.sparse_dir)
+                aligned = align_reconstruction_to_utm(reconstruction, by_id, effective_utm_epsg)
+                if not aligned:
+                    log_event(
+                        logger, "warning", "CM reconstruction has too little GPS coverage to align to UTM, skipping rectification",
+                        facade_id=facade_id,
+                    )
+                    reconstruction = None
+                else:
+                    if segment is not None:
+                        reference_altitudes = [
+                            by_id[Path(img.name).stem].gps.altitude_m
+                            for img in reconstruction.images.values()
+                            if Path(img.name).stem in by_id and by_id[Path(img.name).stem].gps.altitude_m is not None
+                        ]
+                        plane = facade_plane_from_segment(segment, reference_altitudes)
+                    else:
+                        plane = facade_plane_from_reconstruction(reconstruction)
+
+                    rect_result = rectify_and_blend(
+                        facade_id, reconstruction, plane, colmap_images_dir, cfg,
+                        colmap_mean_reprojection_error_px=colmap_result.mean_reprojection_error_px,
+                    )
+        except Exception as exc:
+            log_event(logger, "warning", "CM-pose rectification failed", facade_id=facade_id, error=str(exc))
+    return colmap_result, reconstruction, plane, rect_result
 
 
 def _run_facade_pipeline(
@@ -185,7 +323,9 @@ def _run_facade_pipeline(
                 colmap_images_dir = next(iter(source_dirs))
                 colmap_filenames = [Path(by_id[iid].file_path).name for iid in images.keys()]
                 try:
-                    colmap_result = run_colmap(
+                    # Stage 1: COLMAP + rectify on every image the H-chain quality
+                    # gate already accepted.
+                    colmap_result, reconstruction, plane, rect_result = _run_colmap_and_rectify_once(
                         facade_id, colmap_images_dir, colmap_filenames,
                         # workspace_dir lives *inside* this run's own output_dir (not
                         # output_dir.parent) so two different --output-dir runs of the
@@ -195,7 +335,7 @@ def _run_facade_pipeline(
                         # was never actually reused for anything, only a collision risk
                         # if two runs' lifetimes ever overlapped or a debugging script
                         # reused a stale one from a different run.
-                        workspace_dir=output_dir / "colmap", logger=logger,
+                        output_dir / "colmap", cfg, logger, by_id, catalog, utm_epsg, segment,
                     )
                     log_event(
                         logger, "info", "CM fallback complete",
@@ -206,99 +346,88 @@ def _run_facade_pipeline(
                         num_points3d=colmap_result.num_points3d,
                         mean_reprojection_error_px=colmap_result.mean_reprojection_error_px,
                     )
-                    atomic_write_json(output_dir / f"{facade_id}_colmap_report.json", asdict(colmap_result))
 
-                    # #13: use the recovered poses to rectify onto the real facade
-                    # plane instead of the drifting homography chain — needs enough
-                    # images registered to trust the plane fit, and *some* way to
-                    # get the reconstruction into real, gravity-aligned UTM+altitude
-                    # meters (align_reconstruction_to_utm's own requirement). Phase 2/3
-                    # (run_building_poc) always has an operator-supplied utm_epsg
-                    # alongside the footprint; Phase 1 (run_facade_poc) has neither, so
-                    # it derives a UTM zone from the images' own GPS instead — the
-                    # rectification math itself doesn't care which source utm_epsg
-                    # came from, only that it exists.
-                    if colmap_result.sparse_dir and colmap_result.num_images_registered >= 4:
-                        try:
-                            import pycolmap
-
-                            effective_utm_epsg = utm_epsg if utm_epsg is not None else estimate_utm_epsg(catalog)
-                            if effective_utm_epsg is None:
+                    # Stage 2 (2026-09-12, 사용자 요청: "자동 2단계 재실행", 시간이 더
+                    # 걸려도 됨): stage 1's own reconstruction is the only thing that can
+                    # tell us which input images barely saw the wall at all (a shot aimed
+                    # mostly at sky/rooftop equipment still matches/triangulates fine, just
+                    # against unrelated background -- see _detect_off_wall_images's own
+                    # docstring, confirmed real on BACK: ~40/121 images, 0 driving the
+                    # roofline artifacts and a misaligned corner). So this can only ever be
+                    # a retry *after* stage 1, never a pre-filter -- accepted cost, per
+                    # 사용자 confirmation. If nothing qualifies (no clear low-outlier
+                    # cluster) stage 1's result is simply kept, at no extra COLMAP cost.
+                    if reconstruction is not None and plane is not None:
+                        off_wall_ids = _detect_off_wall_images(reconstruction, plane)
+                        if off_wall_ids:
+                            retry_filenames = [f for f in colmap_filenames if Path(f).stem not in off_wall_ids]
+                            log_event(
+                                logger, "info", "벽면이 거의 안 보이는 이미지 감지 -- 제외 후 2단계 재실행",
+                                stage="OFF_WALL_RETRY", facade_id=facade_id,
+                                excluded_count=len(off_wall_ids),
+                                excluded_image_ids=sorted(off_wall_ids),
+                                retry_image_count=len(retry_filenames),
+                            )
+                            t_retry = time.time()
+                            retry_colmap_result, retry_reconstruction, retry_plane, retry_rect_result = (
+                                _run_colmap_and_rectify_once(
+                                    facade_id, colmap_images_dir, retry_filenames,
+                                    output_dir / "colmap_retry", cfg, logger, by_id, catalog, utm_epsg, segment,
+                                )
+                            )
+                            if retry_rect_result is not None:
+                                colmap_result, reconstruction, plane, rect_result = (
+                                    retry_colmap_result, retry_reconstruction, retry_plane, retry_rect_result
+                                )
                                 log_event(
-                                    logger, "warning", "no GPS on any image, cannot align CM reconstruction for rectification",
-                                    facade_id=facade_id,
+                                    logger, "info", "2단계 재실행 결과 채택",
+                                    stage="OFF_WALL_RETRY_ADOPTED", facade_id=facade_id,
+                                    elapsed_s=round(time.time() - t_retry, 2),
+                                    num_images_registered=colmap_result.num_images_registered,
+                                    coverage_ratio=rect_result.quality.coverage_ratio,
                                 )
                             else:
-                                reconstruction = pycolmap.Reconstruction(colmap_result.sparse_dir)
-                                aligned = align_reconstruction_to_utm(reconstruction, by_id, effective_utm_epsg)
-                                if not aligned:
-                                    log_event(
-                                        logger, "warning", "CM reconstruction has too little GPS coverage to align to UTM, skipping rectification",
-                                        facade_id=facade_id,
-                                    )
-                                else:
-                                    # segment is not None -> Phase 2/3, a real footprint
-                                    # edge defines the plane (#4.2's priority tiers).
-                                    # segment is None -> Phase 1, no footprint exists at
-                                    # all, so the plane is fitted straight from COLMAP's
-                                    # own triangulated points instead (exactly the fix
-                                    # for a facade run whose image set spans a rooftop
-                                    # nadir pass plus a few oblique facade-edge shots,
-                                    # which tore the old homography-chain mosaic across
-                                    # the roof/wall boundary).
-                                    if segment is not None:
-                                        reference_altitudes = [
-                                            by_id[Path(img.name).stem].gps.altitude_m
-                                            for img in reconstruction.images.values()
-                                            if Path(img.name).stem in by_id and by_id[Path(img.name).stem].gps.altitude_m is not None
-                                        ]
-                                        plane = facade_plane_from_segment(segment, reference_altitudes)
-                                    else:
-                                        plane = facade_plane_from_reconstruction(reconstruction)
+                                log_event(
+                                    logger, "warning", "2단계 재실행이 결과를 못 만들어 1단계 결과 유지",
+                                    stage="OFF_WALL_RETRY_FAILED", facade_id=facade_id,
+                                )
 
-                                    t_rect = time.time()
-                                    rect_result = rectify_and_blend(
-                                        facade_id, reconstruction, plane, colmap_images_dir, cfg,
-                                        colmap_mean_reprojection_error_px=colmap_result.mean_reprojection_error_px,
-                                    )
-                                    if rect_result.analysis_image is not None:
-                                        imwrite_unicode(output_dir / f"{facade_id}_analysis_colmap.tif", rect_result.analysis_image)
-                                    if rect_result.visual_image is not None:
-                                        imwrite_unicode(output_dir / f"{facade_id}_visual_colmap.tif", rect_result.visual_image)
-                                    imwrite_unicode(output_dir / f"{facade_id}_observed_mask_colmap.tif", rect_result.observed_mask)
-                                    atomic_write_json(output_dir / f"{facade_id}_quality_report_colmap.json", asdict(rect_result.quality))
-                                    # 2026-09-11, 사용자 결정: RTK/알려진 마커 등 진짜 측량급
-                                    # calibration이 아직 없어 우선 COLMAP+일반 GPS EXIF 정렬
-                                    # (align_reconstruction_to_utm) 스케일을 그대로 쓰기로 함
-                                    # -- CLAUDE.local.md #26의 승인된 소스 목록(Surveyed control
-                                    # point/Known marker/BIM-CAD/RTK-GCP)엔 없는, 정밀도가 더
-                                    # 낮은 소스라는 걸 알고 쓰는 것이므로 reference_object_type에
-                                    # 그 출처를 남겨 나중에 실측 정밀도 요구가 생기면 구분 가능하게
-                                    # 함. plane.px_per_m은 그 자체로 오차가 있는 게 아니라(캔버스
-                                    # 해상도를 정의하는 상수, 지금은 항상 100.0) "그 px가 실제 몇
-                                    # m인지"의 신뢰도가 GPS 정렬 품질에 달려있다는 뜻.
-                                    atomic_write_json(
-                                        output_dir / f"{facade_id}_scale_colmap.json",
-                                        {
-                                            "px_per_m": plane.px_per_m,
-                                            "calibrated": True,
-                                            "reference_object_type": "gps_colmap_alignment",
-                                            "reference_length_mm": None,
-                                        },
-                                    )
-                                    _write_source_transform_artifacts(output_dir, facade_id, "_colmap", rect_result)
-                                    log_event(
-                                        logger, "info", "CM-rectified mosaic complete",
-                                        stage="RECTIFIED_COLMAP", facade_id=facade_id,
-                                        elapsed_s=round(time.time() - t_rect, 2),
-                                        coverage_ratio=rect_result.quality.coverage_ratio,
-                                        image_count=rect_result.quality.image_count,
-                                    )
-                        except Exception as exc:
-                            log_event(
-                                logger, "warning", "CM-pose rectification failed",
-                                facade_id=facade_id, error=str(exc),
-                            )
+                    atomic_write_json(output_dir / f"{facade_id}_colmap_report.json", asdict(colmap_result))
+
+                    if rect_result is not None:
+                        if rect_result.analysis_image is not None:
+                            imwrite_unicode(output_dir / f"{facade_id}_analysis_colmap.tif", rect_result.analysis_image)
+                        if rect_result.visual_image is not None:
+                            imwrite_unicode(output_dir / f"{facade_id}_visual_colmap.tif", rect_result.visual_image)
+                        imwrite_unicode(output_dir / f"{facade_id}_observed_mask_colmap.tif", rect_result.observed_mask)
+                        atomic_write_json(output_dir / f"{facade_id}_quality_report_colmap.json", asdict(rect_result.quality))
+                        # 2026-09-11, 사용자 결정: RTK/알려진 마커 등 진짜 측량급
+                        # calibration이 아직 없어 우선 COLMAP+일반 GPS EXIF 정렬
+                        # (align_reconstruction_to_utm) 스케일을 그대로 쓰기로 함
+                        # -- CLAUDE.local.md #26의 승인된 소스 목록(Surveyed control
+                        # point/Known marker/BIM-CAD/RTK-GCP)엔 없는, 정밀도가 더
+                        # 낮은 소스라는 걸 알고 쓰는 것이므로 reference_object_type에
+                        # 그 출처를 남겨 나중에 실측 정밀도 요구가 생기면 구분 가능하게
+                        # 함. plane.px_per_m은 그 자체로 오차가 있는 게 아니라(캔버스
+                        # 해상도를 정의하는 상수, 지금은 항상 100.0) "그 px가 실제 몇
+                        # m인지"의 신뢰도가 GPS 정렬 품질에 달려있다는 뜻.
+                        atomic_write_json(
+                            output_dir / f"{facade_id}_scale_colmap.json",
+                            {
+                                "px_per_m": plane.px_per_m,
+                                "calibrated": True,
+                                "reference_object_type": "gps_colmap_alignment",
+                                "reference_length_mm": None,
+                            },
+                        )
+                        _write_source_transform_artifacts(output_dir, facade_id, "_colmap", rect_result)
+                        log_event(
+                            logger, "info", "CM-rectified mosaic complete",
+                            stage="RECTIFIED_COLMAP", facade_id=facade_id,
+                            elapsed_s=round(time.time() - t_colmap, 2),
+                            coverage_ratio=rect_result.quality.coverage_ratio,
+                            image_count=rect_result.quality.image_count,
+                        )
                 except ImportError:
                     log_event(
                         logger, "warning", "pycolmap not installed, cannot run CM fallback",
