@@ -145,7 +145,14 @@ def load_facade_snapshot(output_dir: str | Path, facade_id: str) -> FacadeSnapsh
     quality = _read_json(output_dir / f"{facade_id}_quality_report.json")
     quality_colmap = _read_json(output_dir / f"{facade_id}_quality_report_colmap.json")
     colmap = _read_json(output_dir / f"{facade_id}_colmap_report.json")
-    raw_cracks = _read_json(output_dir / f"{facade_id}_cracks.json") or []
+    # 2026-09-13: 2차(구조물 오탐 제외) 결과가 있으면 그걸 우선 사용 -- 뷰어의
+    # FacadeSnapshot.DisplayCracks(CracksV2 ?? Cracks)와 동일한 우선순위. 이걸 안 하면
+    # 보고서가 계속 1차(모든 크랙 표시, 창틀/판넬 이음새 등 구조물 오탐 포함) 원본으로
+    # 만들어져서 총 균열 수/평균 폭 등이 실제보다 크게 부풀려짐(실측: 오탐 다수 포함된
+    # 1차 기준 평균 폭 605mm처럼 비정상적인 값이 나옴 -- 사용자가 실제 리포트에서 확인).
+    cracks_v2_path = output_dir / f"{facade_id}_cracks_v2.json"
+    cracks_path = cracks_v2_path if cracks_v2_path.exists() else output_dir / f"{facade_id}_cracks.json"
+    raw_cracks = _read_json(cracks_path) or []
     raw_cracks = raw_cracks if isinstance(raw_cracks, list) else []
     # {facade_id}_crack_review.json (written by the viewer's review UI) is
     # entirely optional -- a facade nobody has reviewed yet just renders every
@@ -394,11 +401,14 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
 def _facade_deliverables(snapshot: FacadeSnapshot) -> list[tuple[str, bool, str]]:
     analysis_name = snapshot.analysis_path.name if snapshot.analysis_path else ""
     visual_path = _pick(snapshot.output_dir, snapshot.facade_id, "_visual_colmap.tif", "_visual.tif")
+    # load_facade_snapshot과 동일한 2차 우선 규칙 -- 실제로 읽은 파일명을 그대로 표시한다.
+    cracks_v2_path = snapshot.output_dir / f"{snapshot.facade_id}_cracks_v2.json"
+    cracks_file_name = cracks_v2_path.name if cracks_v2_path.exists() else f"{snapshot.facade_id}_cracks.json"
     return [
         ("외벽 스티칭 결과 (분석용)", snapshot.analysis_path is not None, analysis_name),
         ("외벽 스티칭 결과 (열람용)", visual_path is not None, visual_path.name if visual_path else ""),
         ("크랙 위치도", snapshot.crack_mask_path is not None, f"{snapshot.facade_id}_crack_mask.tif"),
-        ("크랙 데이터 (JSON)", bool(snapshot.cracks), f"{snapshot.facade_id}_cracks.json"),
+        ("크랙 데이터 (JSON)", bool(snapshot.cracks), cracks_file_name),
         ("스티칭 품질 리포트 (JSON)", snapshot.quality is not None, f"{snapshot.facade_id}_quality_report.json"),
         ("정밀 보정 리포트 (JSON)", snapshot.colmap is not None, f"{snapshot.facade_id}_colmap_report.json"),
         ("본 PDF 보고서", True, f"{snapshot.facade_id}_report.pdf"),
