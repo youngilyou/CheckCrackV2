@@ -54,6 +54,20 @@
                             </Grid.LayoutTransform>
                             <Image Source="{Binding OriginalDisplayBitmap}" Width="{Binding OriginalDisplayWidth}" Height="{Binding OriginalDisplayHeight}"
                                    Stretch="Fill"/>
+                            <!-- 2026-09-13: 균열 검토 모드에서 크랙을 선택하면(SelectedReviewItem)
+                                 그 크랙의 위치를 이 원본 사진 위에 원(안쪽 투명)으로 표시한다
+                                 (사용자 요청. 원본 보기 창의 점 마커는 대신 여기로 옮김,
+                                 ResultsCompareViewModel.ShowCrackMarkerInPanel1 참고). Image와
+                                 같은 Grid 안에 두어 같은 LayoutTransform(줌)을 그대로 공유한다. -->
+                            <Canvas Width="{Binding OriginalDisplayWidth}" Height="{Binding OriginalDisplayHeight}" IsHitTestVisible="False">
+                                <Ellipse Width="60" Height="60" Stroke="#FFD400" StrokeThickness="1.5" Fill="Transparent"
+                                         Canvas.Left="{Binding CrackMarkerDisplayX}" Canvas.Top="{Binding CrackMarkerDisplayY}"
+                                         Visibility="{Binding HasCrackMarker, Converter={StaticResource TruthyToVisibilityConverter}}">
+                                    <Ellipse.RenderTransform>
+                                        <TranslateTransform X="-30" Y="-30"/>
+                                    </Ellipse.RenderTransform>
+                                </Ellipse>
+                            </Canvas>
                         </Grid>
                     </ScrollViewer>
                 </DockPanel>

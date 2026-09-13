@@ -239,6 +239,10 @@ public partial class ResultsCompareViewModel : ObservableObject
         panel.OriginalImageList = new List<string>();
         panel.OriginalImageIndex = -1;
         panel.OriginalDisplayBitmap = null;
+        panel.OriginalOrigWidth = 0;
+        panel.OriginalOrigHeight = 0;
+        panel.CrackMarkerDisplayX = null;
+        panel.CrackMarkerDisplayY = null;
         panel.StitchDisplayBitmap = null;
         panel.StitchImagePath = "";
         panel.StitchOrigWidth = 0;
@@ -294,10 +298,12 @@ public partial class ResultsCompareViewModel : ObservableObject
     {
         if (panel.OriginalImageIndex < 0 || panel.OriginalImageIndex >= panel.OriginalImageList.Count)
             return;
-        var bitmap = LoadScaledBitmap(panel.OriginalImageList[panel.OriginalImageIndex]);
+        var bitmap = LoadScaledBitmap(panel.OriginalImageList[panel.OriginalImageIndex], out var origWidth, out var origHeight);
         panel.OriginalDisplayBitmap = bitmap;
         panel.OriginalDisplayWidth = bitmap?.PixelWidth ?? 0;
         panel.OriginalDisplayHeight = bitmap?.PixelHeight ?? 0;
+        panel.OriginalOrigWidth = origWidth;
+        panel.OriginalOrigHeight = origHeight;
         panel.ZoomFactor = 1.0;
     }
 
@@ -307,6 +313,10 @@ public partial class ResultsCompareViewModel : ObservableObject
         if (panel.OriginalImageIndex <= 0)
             return;
         panel.OriginalImageIndex--;
+        // 마커는 특정 사진(선택된 크랙이 찍힌 그 사진) 전용이라, 이전/다음으로 넘기면
+        // 더 이상 유효하지 않다 -- 엉뚱한 사진 위에 이전 크랙 위치가 남아있지 않게 지운다.
+        panel.CrackMarkerDisplayX = null;
+        panel.CrackMarkerDisplayY = null;
         LoadOriginalImageAt(panel);
     }
 
@@ -316,6 +326,8 @@ public partial class ResultsCompareViewModel : ObservableObject
         if (panel.OriginalImageIndex >= panel.OriginalImageList.Count - 1)
             return;
         panel.OriginalImageIndex++;
+        panel.CrackMarkerDisplayX = null;
+        panel.CrackMarkerDisplayY = null;
         LoadOriginalImageAt(panel);
     }
 
@@ -438,6 +450,14 @@ public partial class ResultsCompareViewModel : ObservableObject
                 var scale = targetPanel.OriginalDisplayWidth / entry.Width;
                 targetPanel.PendingCenterDisplayX = Math.Clamp(srcX, 0, entry.Width) * scale;
                 targetPanel.PendingCenterDisplayY = Math.Clamp(srcY, 0, entry.Height) * scale;
+
+                // 2026-09-13 (사용자 요청, "너무 어렵게 생각 하지 마삼" -- 스티칭 패널 클릭
+                // -> 원본 패널 점프는 이미 되니, 클릭한 그 지점을 원본 사진 위에 원(안쪽
+                // 투명)으로 그냥 표시만 하면 됨): 위에서 이미 계산한 같은 좌표를 그대로
+                // CrackMarkerDisplayX/Y에도 실어서 ResultsCompareView.xaml의 원 마커가
+                // 그 지점에 뜨게 한다.
+                targetPanel.CrackMarkerDisplayX = targetPanel.PendingCenterDisplayX;
+                targetPanel.CrackMarkerDisplayY = targetPanel.PendingCenterDisplayY;
             }
         }
         return StitchClickResult.Success;
@@ -500,11 +520,19 @@ public partial class ResultsCompareViewModel : ObservableObject
     /// <summary>Header-only read for true pixel size (mirrors AiTrainingViewModel.LoadImage),
     /// then decodes at a display-safe DecodePixelWidth -- facade mosaics can be tens of
     /// megapixels, originals are normal camera resolution, both are safe to cap the same way.</summary>
-    private static BitmapImage? LoadScaledBitmap(string path)
+    private static BitmapImage? LoadScaledBitmap(string path) => LoadScaledBitmap(path, out _, out _);
+
+    // 2026-09-13: origWidth/origHeight를 out으로 노출하는 오버로드 -- ComparePanelState.
+    // OriginalOrigWidth/Height(균열 마커를 표시-픽셀 좌표로 환산하는 데 필요)를 채우려고
+    // 헤더를 다시 읽는 대신, 이미 이 메서드가 하던 헤더 읽기 결과를 그대로 재사용한다
+    // (LoadStitchImage가 StitchOrigWidth/Height용으로 별도 헤더 읽기를 하는 것과 달리,
+    // 여기는 호출부가 하나뿐이라 이 방식이 더 낫다).
+    private static BitmapImage? LoadScaledBitmap(string path, out int origWidth, out int origHeight)
     {
+        origWidth = 0;
+        origHeight = 0;
         try
         {
-            int origWidth, origHeight;
             using (var stream = File.OpenRead(path))
             {
                 var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
@@ -533,6 +561,8 @@ public partial class ResultsCompareViewModel : ObservableObject
         }
         catch
         {
+            origWidth = 0;
+            origHeight = 0;
             return null;
         }
     }
@@ -572,6 +602,59 @@ public partial class ResultsCompareViewModel : ObservableObject
     /// currently open, ResultsCompareView.xaml.cs's PropertyChanged subscription
     /// pushes this crack's SourceObservations to it, centered on the crack location.</summary>
     [ObservableProperty] private CrackReviewItem? _selectedReviewItem;
+
+    /// <summary>2026-09-13: 사용자 요청 -- 원본 보기 창의 점(중심 마커)은 제거하고, 대신
+    /// "결과 보기" 화면의 왼쪽 원본 패널(Panel1, 항상 원본 모드)에 그 위치를 원(안쪽 투명)으로
+    /// 표시한다. OriginalCrackViewerWindow.ShowCrack과 마찬가지로 항상 SourceObservations[0]
+    /// (가장 많은 픽셀을 소유한 사진)을 기준으로 한다.</summary>
+    partial void OnSelectedReviewItemChanged(CrackReviewItem? value) => ShowCrackMarkerInPanel1(value);
+
+    private void ShowCrackMarkerInPanel1(CrackReviewItem? item)
+    {
+        var panel = Panel1;
+        var obs = item?.SourceObservations.Count > 0 ? item.SourceObservations[0] : null;
+        if (obs == null || obs.BboxPxInSource.Length != 4)
+        {
+            panel.CrackMarkerDisplayX = null;
+            panel.CrackMarkerDisplayY = null;
+            return;
+        }
+
+        // JumpToOriginalImageAt과 동일한 이유로, 이미 "원본" 모드면 Mode 세터가
+        // PropertyChanged를 안 태우므로(값이 안 바뀜) 리스트가 비어있을 때만 직접 채운다.
+        panel.Mode = "원본";
+        if (panel.OriginalImageList.Count == 0)
+            LoadOriginalImages(panel);
+
+        var idx = panel.OriginalImageList.FindIndex(
+            p => string.Equals(Path.GetFileNameWithoutExtension(p), obs.ImageId, StringComparison.Ordinal));
+        if (idx < 0)
+        {
+            panel.CrackMarkerDisplayX = null;
+            panel.CrackMarkerDisplayY = null;
+            return;
+        }
+
+        if (panel.OriginalImageIndex != idx)
+        {
+            panel.OriginalImageIndex = idx;
+            LoadOriginalImageAt(panel);
+        }
+
+        if (panel.OriginalOrigWidth <= 0 || panel.OriginalOrigHeight <= 0)
+        {
+            panel.CrackMarkerDisplayX = null;
+            panel.CrackMarkerDisplayY = null;
+            return;
+        }
+
+        var bbox = obs.BboxPxInSource;
+        double cx = (bbox[0] + bbox[2]) / 2.0;
+        double cy = (bbox[1] + bbox[3]) / 2.0;
+        var scale = panel.OriginalDisplayWidth / panel.OriginalOrigWidth;
+        panel.CrackMarkerDisplayX = cx * scale;
+        panel.CrackMarkerDisplayY = cy * scale;
+    }
 
     [ObservableProperty] private bool _isReviewMode;
     [ObservableProperty] private BitmapImage? _reviewDisplayBitmap;

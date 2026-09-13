@@ -29,6 +29,26 @@ public partial class ComparePanelState : ObservableObject
     [ObservableProperty] private double? _pendingCenterDisplayX;
     [ObservableProperty] private double? _pendingCenterDisplayY;
 
+    // 현재 표시 중인 원본 사진의 실제(전체 해상도) 픽셀 크기 -- OriginalDisplayWidth/Height는
+    // LoadScaledBitmap이 MaxDisplayDim으로 축소한 표시용 크기라, CrackMarkerDisplayX/Y처럼
+    // source-pixel 좌표(bbox_px_in_source)를 표시 좌표로 환산하려면 둘 다 필요하다
+    // (StitchOrigWidth/Height와 동일한 이유, ResultsCompareViewModel.LoadOriginalImageAt 참고).
+    [ObservableProperty] private int _originalOrigWidth;
+    [ObservableProperty] private int _originalOrigHeight;
+
+    // 2026-09-13: 균열 검토 모드에서 크랙을 선택했을 때(SelectedReviewItem), 그 크랙이 찍힌
+    // 원본 사진 위 위치를 이 패널(항상 Panel1, "왼쪽 원본")에 원 마커로 표시하기 위한 좌표 --
+    // OriginalDisplayWidth/Height 기준(ZoomFactor=1.0 기준) 표시-픽셀 좌표. null이면 "표시할
+    // 마커 없음"(크랙 미선택, source_observations 없음, 해당 사진을 못 찾음 등).
+    // ResultsCompareViewModel.ShowCrackMarkerInPanel1이 채우고, PreviousOriginal/NextOriginal/
+    // ReloadPanel이 더 이상 유효하지 않게 될 때 null로 되돌린다.
+    [ObservableProperty] private double? _crackMarkerDisplayX;
+    [ObservableProperty] private double? _crackMarkerDisplayY;
+
+    public bool HasCrackMarker => CrackMarkerDisplayX.HasValue && CrackMarkerDisplayY.HasValue;
+    partial void OnCrackMarkerDisplayXChanged(double? value) => OnPropertyChanged(nameof(HasCrackMarker));
+    partial void OnCrackMarkerDisplayYChanged(double? value) => OnPropertyChanged(nameof(HasCrackMarker));
+
     public bool HasOriginalImageList => OriginalImageList.Count > 0;
     public string OriginalImageLabel => HasOriginalImageList ? $"{OriginalImageIndex + 1} / {OriginalImageList.Count}" : "";
 

@@ -20,19 +20,10 @@
                      어디를 봐야 하는지 자체를 사각형으로 짚어준다. -->
                 <Rectangle x:Name="CrackBboxOverlay" Stroke="#FF4F4F" StrokeThickness="2"
                            IsHitTestVisible="False" Visibility="Collapsed"/>
-                <!-- 사용자 요청(2026-09-12): "선택한 곳이 즉시 눈에 들어 오지 않음".
-                     위 bbox 사각형만으로는 크랙 영역 전체를 짚어줄 뿐 정확히 어디를 봐야
-                     하는지 한눈에 안 들어온다는 지적. bbox 중심(=CenterOnCrack이 뷰포트
-                     중앙에 놓는 바로 그 지점)에 화면 크기 고정(줌과 무관하게 항상 같은
-                     크기)인 타겟 마커를 추가로 겹쳐 그린다. 흰 테두리(바깥, 어두운 배경에서도
-                     보임) + 밝은 노랑 안쪽 원(건물 외벽의 흔한 회색/베이지/빨강 계열과
-                     부딪히지 않는 색)으로 어떤 배경에서도 또렷하게 도드라지도록 함.
-                     ApplyTransform이 매 줌/팬 스텝마다 중심 좌표를 다시 계산해 위치를
-                     갱신한다(Canvas_MouseMove의 드래그 중에도 동일하게 갱신). -->
-                <Ellipse x:Name="CrackCenterMarkerOuter" Width="26" Height="26" Stroke="White" StrokeThickness="4"
-                         Fill="Transparent" IsHitTestVisible="False" Visibility="Collapsed"/>
-                <Ellipse x:Name="CrackCenterMarkerInner" Width="16" Height="16" Stroke="#FFD400" StrokeThickness="3"
-                         Fill="Transparent" IsHitTestVisible="False" Visibility="Collapsed"/>
+                <!-- 2026-09-13: 예전엔 여기에도 화면 크기 고정 타겟 마커(점)를 겹쳐 그렸으나,
+                     사용자 요청으로 제거함. 대신 "결과 보기" 화면 왼쪽 원본 패널에 원(안쪽
+                     투명)으로 표시한다(ResultsCompareView.xaml의 CrackMarkerDisplayX/Y 참고).
+                     이 창은 이제 bbox 사각형만으로 위치를 짚어준다. -->
             </Canvas>
         </Grid>
 

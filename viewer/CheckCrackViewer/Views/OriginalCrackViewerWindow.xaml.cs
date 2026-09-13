@@ -104,8 +104,6 @@ public partial class OriginalCrackViewerWindow : Window
             EmptyStateText.Visibility = Visibility.Visible;
             TheImage.Source = null;
             CrackBboxOverlay.Visibility = Visibility.Collapsed;
-            CrackCenterMarkerOuter.Visibility = Visibility.Collapsed;
-            CrackCenterMarkerInner.Visibility = Visibility.Collapsed;
             PositionText.Text = "";
             return;
         }
@@ -136,8 +134,6 @@ public partial class OriginalCrackViewerWindow : Window
         {
             TheImage.Source = null;
             CrackBboxOverlay.Visibility = Visibility.Collapsed;
-            CrackCenterMarkerOuter.Visibility = Visibility.Collapsed;
-            CrackCenterMarkerInner.Visibility = Visibility.Collapsed;
             return;
         }
 
@@ -215,28 +211,11 @@ public partial class OriginalCrackViewerWindow : Window
             Canvas.SetLeft(CrackBboxOverlay, left + x0 * _scale);
             Canvas.SetTop(CrackBboxOverlay, top + y0 * _scale);
             CrackBboxOverlay.Visibility = Visibility.Visible;
-
-            PositionCenterMarker(left + ((x0 + x1) / 2.0) * _scale, top + ((y0 + y1) / 2.0) * _scale);
         }
         else
         {
             CrackBboxOverlay.Visibility = Visibility.Collapsed;
-            CrackCenterMarkerOuter.Visibility = Visibility.Collapsed;
-            CrackCenterMarkerInner.Visibility = Visibility.Collapsed;
         }
-    }
-
-    /// <summary>Centers both marker rings on (screenX, screenY) -- Width/Height stay
-    /// fixed (set in XAML) so the marker is always the same on-screen size regardless
-    /// of zoom, unlike CrackBboxOverlay which scales with the image.</summary>
-    private void PositionCenterMarker(double screenX, double screenY)
-    {
-        Canvas.SetLeft(CrackCenterMarkerOuter, screenX - CrackCenterMarkerOuter.Width / 2);
-        Canvas.SetTop(CrackCenterMarkerOuter, screenY - CrackCenterMarkerOuter.Height / 2);
-        Canvas.SetLeft(CrackCenterMarkerInner, screenX - CrackCenterMarkerInner.Width / 2);
-        Canvas.SetTop(CrackCenterMarkerInner, screenY - CrackCenterMarkerInner.Height / 2);
-        CrackCenterMarkerOuter.Visibility = Visibility.Visible;
-        CrackCenterMarkerInner.Visibility = Visibility.Visible;
     }
 
     private void Viewport_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -324,7 +303,6 @@ public partial class OriginalCrackViewerWindow : Window
         {
             Canvas.SetLeft(CrackBboxOverlay, left + bbox[0] * _scale);
             Canvas.SetTop(CrackBboxOverlay, top + bbox[1] * _scale);
-            PositionCenterMarker(left + ((bbox[0] + bbox[2]) / 2.0) * _scale, top + ((bbox[1] + bbox[3]) / 2.0) * _scale);
         }
     }
 
