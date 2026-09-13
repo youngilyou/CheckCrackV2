@@ -218,7 +218,12 @@ public static class CrackVisionArchiveQueryService
         string outputDir, string? mosaicPath, double? coverageRatio, bool needsRetake, bool usedColmap,
         CancellationToken cancellationToken = default)
     {
-        var cracksPath = Path.Combine(outputDir, $"{facadeId}_cracks.json");
+        // 2026-09-13: 2차("구조물 오탐 제외") 우선, 없으면 1차로 fallback -- 화면 표시
+        // (FacadeSnapshot.DisplayCracks)와 동일한 우선순위. DB에 최종 저장되는 크랙 데이터도
+        // 뷰어가 실제로 보여주는 것과 일치해야 SmartCrackWeb 등 다운스트림이 화면과 다른
+        // 데이터를 보는 불일치가 생기지 않는다.
+        var cracksV2Path = Path.Combine(outputDir, $"{facadeId}_cracks_v2.json");
+        var cracksPath = File.Exists(cracksV2Path) ? cracksV2Path : Path.Combine(outputDir, $"{facadeId}_cracks.json");
         if (!File.Exists(cracksPath))
             return;
 

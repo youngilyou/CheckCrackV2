@@ -544,7 +544,11 @@ public partial class AiTrainingViewModel : ObservableObject
 
     private void LoadAiDetectionsIfPresent(string folderPath)
     {
-        var jsonPath = Path.Combine(folderPath, "output", "originals_cracks.json");
+        // 2026-09-13: 2차("구조물 오탐 제외") 우선, 없으면 1차로 fallback -- 결과보기 화면의
+        // FacadeSnapshot.DisplayCracks와 동일한 우선순위 (tools/detect_cracks_images.py가
+        // crack.model_v2 설정 시 함께 써주는 originals_cracks_v2.json).
+        var jsonPathV2 = Path.Combine(folderPath, "output", "originals_cracks_v2.json");
+        var jsonPath = File.Exists(jsonPathV2) ? jsonPathV2 : Path.Combine(folderPath, "output", "originals_cracks.json");
         if (!File.Exists(jsonPath))
             return;
         try

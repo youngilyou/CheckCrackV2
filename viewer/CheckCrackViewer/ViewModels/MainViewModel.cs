@@ -2077,10 +2077,13 @@ public partial class MainViewModel : ObservableObject
             facade.HasRectifiedMosaic = true;
             facade.CoverageRatioColmap = snap.QualityColmap.CoverageRatio;
         }
-        if (snap.Cracks != null)
+        // 2026-09-13: DisplayCracks (2차 우선, 없으면 1차 fallback) -- 화면/카운트 배지는
+        // 이제 2차("구조물 오탐 제외") 결과를 기본으로 보여준다. FacadeSnapshot.DisplayCracks의
+        // 자체 doc comment 참고.
+        if (snap.DisplayCracks != null)
         {
             facade.HasCrackResults = true;
-            facade.CrackCount = snap.Cracks.Count;
+            facade.CrackCount = snap.DisplayCracks.Count;
         }
         if (snap.ReportPath != null)
         {

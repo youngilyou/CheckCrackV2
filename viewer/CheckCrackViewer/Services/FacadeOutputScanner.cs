@@ -45,7 +45,23 @@ public partial class FacadeSnapshot : ObservableObject
     public QualityReportModel? Quality { get; set; }
     public QualityReportModel? QualityColmap { get; set; }
     public ColmapReportModel? Colmap { get; set; }
+    /// <summary>1차("모든 크랙 표시") -- {facade_id}_cracks.json, tools/detect_cracks_folder.py's
+    /// original/broader model. Kept around for the Postgres write-back fallback and as the
+    /// underlying data DisplayCracks below falls back to; nothing should read this directly
+    /// for on-screen display anymore -- use DisplayCracks.</summary>
     public List<CrackResultModel>? Cracks { get; set; }
+    /// <summary>2026-09-13: 2차("구조물 오탐 제외") -- {facade_id}_cracks_v2.json, the separate
+    /// fine-tuned model (config/pipeline.yaml's crack.model_v2) that suppresses window-frame/
+    /// panel-joint/building-corner false positives. Null for a facade whose crack detection ran
+    /// before 2차 existed, or wherever crack.model_v2 isn't configured -- see DisplayCracks.</summary>
+    public List<CrackResultModel>? CracksV2 { get; set; }
+    /// <summary>2026-09-13: what the UI should actually show -- 2차 if it ran, else fall back
+    /// to 1차 (same "prefer COLMAP-rectified, else plain" precedence convention as
+    /// AnalysisColmapImagePath ?? AnalysisImagePath elsewhere in this app, just expressed as a
+    /// property here instead of a per-call-site `??` because every consumer wants the same
+    /// preference, unlike the mosaic image paths where different call sites want different
+    /// variants for different purposes).</summary>
+    public List<CrackResultModel>? DisplayCracks => CracksV2 ?? Cracks;
 
     // 2026-08-29: 운영자가 직접(누락 재촬영 필요) 또는 앱의 초기 의심 판정 + 운영자 최종
     // 확인(정밀촬영 필요)으로 채워짐 -- {facade_id}_quality_flags.json, FacadeQualityFlagsStore
@@ -170,6 +186,7 @@ public static class FacadeOutputScanner
             QualityColmap = ReadJson<QualityReportModel>(Path.Combine(outputDir, $"{facadeId}_quality_report_colmap.json")),
             Colmap = colmap,
             Cracks = ReadJson<List<CrackResultModel>>(Path.Combine(outputDir, $"{facadeId}_cracks.json")),
+            CracksV2 = ReadJson<List<CrackResultModel>>(Path.Combine(outputDir, $"{facadeId}_cracks_v2.json")),
             AnalysisImagePath = ExistsOrNull(Path.Combine(outputDir, $"{facadeId}_analysis.tif")),
             VisualImagePath = ExistsOrNull(Path.Combine(outputDir, $"{facadeId}_visual.tif")),
             AnalysisColmapImagePath = ExistsOrNull(Path.Combine(outputDir, $"{facadeId}_analysis_colmap.tif")),

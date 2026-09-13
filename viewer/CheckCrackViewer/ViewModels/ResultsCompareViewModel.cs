@@ -224,6 +224,7 @@ public partial class ResultsCompareViewModel : ObservableObject
         dst.QualityColmap = src.QualityColmap;
         dst.Colmap = src.Colmap;
         dst.Cracks = src.Cracks;
+        dst.CracksV2 = src.CracksV2;
         dst.AnalysisImagePath = src.AnalysisImagePath;
         dst.VisualImagePath = src.VisualImagePath;
         dst.AnalysisColmapImagePath = src.AnalysisColmapImagePath;
@@ -683,7 +684,7 @@ public partial class ResultsCompareViewModel : ObservableObject
 
         _reviewSeamArtifacts = SourceObservationCalculator.LoadSeamArtifacts(facade.OutputDir, facade.FacadeId);
 
-        foreach (var crack in facade.Cracks ?? new List<CrackResultModel>())
+        foreach (var crack in facade.DisplayCracks ?? new List<CrackResultModel>())
         {
             if (crack.PolygonPx == null || crack.PolygonPx.Length == 0)
                 continue;
@@ -753,7 +754,7 @@ public partial class ResultsCompareViewModel : ObservableObject
     private void UpdateReviewStatusText()
     {
         RenumberReviewItems();
-        var aiTotal = SelectedFacade?.Cracks?.Count ?? 0;
+        var aiTotal = SelectedFacade?.DisplayCracks?.Count ?? 0;
         var rejected = ReviewItems.Count(i => i.Status == CrackReviewStatus.Rejected);
         var manual = ReviewItems.Count(i => i.Status == CrackReviewStatus.Manual);
         ReviewStatusText = $"AI 탐지 {aiTotal}건 · 제외 {rejected}건 · 수동 추가 {manual}건";

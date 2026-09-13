@@ -205,7 +205,10 @@ public partial class OriginalAiViewModel : ObservableObject
 
     private void LoadDetectionsIfPresent(string folderPath)
     {
-        var jsonPath = Path.Combine(folderPath, "output", "originals_cracks.json");
+        // 2026-09-13: 2차("구조물 오탐 제외") 우선, 없으면 1차로 fallback -- AiTrainingViewModel.
+        // LoadAiDetectionsIfPresent와 동일한 우선순위.
+        var jsonPathV2 = Path.Combine(folderPath, "output", "originals_cracks_v2.json");
+        var jsonPath = File.Exists(jsonPathV2) ? jsonPathV2 : Path.Combine(folderPath, "output", "originals_cracks.json");
         if (!File.Exists(jsonPath))
             return;
         try
