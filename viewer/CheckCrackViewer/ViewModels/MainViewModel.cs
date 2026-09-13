@@ -2079,12 +2079,17 @@ public partial class MainViewModel : ObservableObject
         }
         // 2026-09-13: DisplayCracks (2차 우선, 없으면 1차 fallback) -- 화면/카운트 배지는
         // 이제 2차("구조물 오탐 제외") 결과를 기본으로 보여준다. FacadeSnapshot.DisplayCracks의
-        // 자체 doc comment 참고.
+        // 자체 doc comment 참고. CrackCountV1/HasCracksV2도 같이 채워서 "1차 → 2차" 탐지율
+        // 비교(오탐 몇 건 제외됐는지)를 화면에서 볼 수 있게 한다(운영자 요청, "탐지율도 결과로
+        // 볼 수 있어야 함") -- 2차가 아예 안 돌았던(구버전) facade는 HasCracksV2=false로
+        // 남아서 비교 텍스트 자체를 숨긴다(1차 숫자 하나만 있는데 "1차→1차"처럼 보이는 것 방지).
         if (snap.DisplayCracks != null)
         {
             facade.HasCrackResults = true;
             facade.CrackCount = snap.DisplayCracks.Count;
         }
+        facade.CrackCountV1 = snap.Cracks?.Count ?? 0;
+        facade.HasCracksV2 = snap.CracksV2 != null;
         if (snap.ReportPath != null)
         {
             facade.HasReport = true;

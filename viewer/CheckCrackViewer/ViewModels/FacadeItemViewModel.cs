@@ -73,6 +73,11 @@ public partial class FacadeItemViewModel : ObservableObject
     // --- crack segmentation (only if {facade_id}_cracks.json exists) ---
     [ObservableProperty] private bool _hasCrackResults;
     [ObservableProperty] private int _crackCount;
+    // 2026-09-13: 1차(모든 크랙)/2차(구조물 오탐 제외) 탐지율 비교 표시용. CrackCount는 계속
+    // DisplayCracks(2차 우선) 기준 "최종" 카운트, CrackCountV1은 항상 1차 원본 카운트,
+    // HasCracksV2는 이 facade에 2차 결과 파일 자체가 있었는지(구버전 facade는 없을 수 있음).
+    [ObservableProperty] private int _crackCountV1;
+    [ObservableProperty] private bool _hasCracksV2;
     [ObservableProperty] private bool _isDetectingCracks;
 
     // --- PDF report (only if {facade_id}_report.pdf exists) ---
@@ -145,6 +150,8 @@ public partial class FacadeItemViewModel : ObservableObject
 
         HasCrackResults = false;
         CrackCount = 0;
+        CrackCountV1 = 0;
+        HasCracksV2 = false;
 
         HasReport = false;
         ReportPath = null;

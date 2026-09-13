@@ -612,8 +612,17 @@
 
                                                     <StackPanel Visibility="{Binding HasMosaic, Converter={StaticResource TruthyToVisibilityConverter}}">
                                                         <StackPanel Orientation="Horizontal" Visibility="{Binding HasCrackResults, Converter={StaticResource TruthyToVisibilityConverter}}">
-                                                            <TextBlock Text="탐지된 crack: " Foreground="{StaticResource Text2}"/>
-                                                            <TextBlock Text="{Binding CrackCount}" FontWeight="Bold" FontFamily="Consolas" Foreground="{StaticResource Text}"/>
+                                                            <StackPanel Orientation="Horizontal" Visibility="{Binding HasCracksV2, Converter={StaticResource TruthyToVisibilityConverter}}">
+                                                                <TextBlock Text="1차 탐지: " Foreground="{StaticResource Text2}"/>
+                                                                <TextBlock Text="{Binding CrackCountV1}" FontWeight="Bold" FontFamily="Consolas" Foreground="{StaticResource Text}"/>
+                                                                <TextBlock Text="건 → 2차(오탐 제외): " Foreground="{StaticResource Text2}"/>
+                                                                <TextBlock Text="{Binding CrackCount}" FontWeight="Bold" FontFamily="Consolas" Foreground="{StaticResource Accent}"/>
+                                                                <TextBlock Text="건" Foreground="{StaticResource Text2}"/>
+                                                            </StackPanel>
+                                                            <StackPanel Orientation="Horizontal" Visibility="{Binding HasCracksV2, Converter={StaticResource FalsyToVisibilityConverter}}">
+                                                                <TextBlock Text="탐지된 crack: " Foreground="{StaticResource Text2}"/>
+                                                                <TextBlock Text="{Binding CrackCount}" FontWeight="Bold" FontFamily="Consolas" Foreground="{StaticResource Text}"/>
+                                                            </StackPanel>
                                                             <TextBlock Text="  (현재 모델은 도메인 갭으로 오탐 가능 — 육안 확인 필요)" Foreground="{StaticResource Text2}" FontSize="11"/>
                                                         </StackPanel>
 
