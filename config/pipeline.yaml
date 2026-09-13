@@ -61,7 +61,18 @@ tiling:
   skip_if_observed_ratio_below: 0.5
 
 crack:
-  model: runs/segment/training/crack_seg/runs/baseline2/weights/best.pt
+  # 1차 (모든 크랙 표시) -- 원본 baseline2 그대로, 창틀/판넬이음새/건물모서리 등도 크랙 후보로 표시.
+  # 2026-09-13: training/crack_seg/models/v1_all_cracks/에 안정 경로로 재배치 (가중치 파일 자체는 동일).
+  model: training/crack_seg/models/v1_all_cracks/best.pt
+  # 2차 (구조물 오탐 제외) -- 1차와 별개의 학습 산출물. 358개 확정 오탐(창틀/판넬이음새/건물모서리 등,
+  # training_data_structural_fp_v2/) + crack512 실제 양성 4916장을 섞어 파인튜닝
+  # (training/crack_seg/finetune_hard_negatives_full_positive.py) -- 하드네거티브만으로는 실제
+  # crack recall이 떨어져서(catastrophic forgetting, CLAUDE.local.md 2026-09-13 기록 참고) 양성
+  # 데이터를 반드시 함께 섞어야 함. 실측: crack512 held-out 546장 기준 mAP50 box 0.692->0.704,
+  # mask 0.521->0.540 (개선), BACK 68장 재검출 시 오탐 499개->58개(-91%).
+  # detect_cracks_folder.py가 1차/2차 둘 다 항상 돌려서 {facade_id}_cracks.json(1차)/
+  # {facade_id}_cracks_v2.json(2차)로 각각 저장 -- 최종 채택 여부는 3차(육안 검토, 운영자)가 판단.
+  model_v2: training/crack_seg/models/v2_exclude_structural_fp/best.pt
   confidence: 0.25
   min_polygon_area_px: 15  # drop speck noise below this at tile resolution
 

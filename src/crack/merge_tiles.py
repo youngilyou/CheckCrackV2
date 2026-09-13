@@ -107,23 +107,22 @@ def match_crack_ids(
             next_id += 1
 
 
-def merge_detections(
-    tiles_by_id: dict[str, Tile],
-    detections: list[CrackDetection],
-    facade_id: str,
-    iou_threshold: float = 0.2,
-) -> list[CrackPolygon]:
-    items: list[tuple[Polygon, float, str]] = []
-    for det in detections:
-        poly = _to_shapely(restore_global_coords(tiles_by_id[det.tile_id], det))
-        if poly is not None:
-            items.append((poly, det.confidence, det.tile_id))
-    if not items:
-        return []
-
-    # Union-find over polygons whose overlap ratio clears iou_threshold —
-    # groups multi-tile fragments of the same crack without assuming any
-    # particular tile adjacency.
+def group_overlapping_polygons(
+    items: list[tuple[Polygon, float, str]],
+    iou_threshold: float,
+) -> list[list[int]]:
+    """Union-find over `items` (shapely Polygon, confidence, tag) whose
+    pairwise overlap ratio (intersection / union area) clears `iou_threshold`
+    -- groups fragments of the same real crack without assuming any
+    particular adjacency (tile-neighbor, or -- 2026-09-12, raw-photo crack
+    detection redesign -- different SOURCE IMAGES of the same physical
+    crack, once transformed into a shared coordinate frame). Extracted out
+    of `merge_detections` (originally tile-overlap-only) so both that
+    function and the new cross-image merge (raw_pipeline.py) share the same
+    core algorithm instead of duplicating it. Returns index groups into
+    `items`, not merged geometry -- callers combine differently (tile merge
+    just unions polygons; cross-image merge also needs to keep each member's
+    own raw-space polygon/measurement for source_observations + averaging)."""
     n = len(items)
     parent = list(range(n))
 
@@ -138,6 +137,8 @@ def merge_detections(
         if ri != rj:
             parent[rj] = ri
 
+    if n == 0:
+        return []
     tree = STRtree([it[0] for it in items])
     for i, (poly, _, _) in enumerate(items):
         for j in tree.query(poly):
@@ -155,9 +156,25 @@ def merge_detections(
     groups: dict[int, list[int]] = {}
     for i in range(n):
         groups.setdefault(find(i), []).append(i)
+    return list(groups.values())
+
+
+def merge_detections(
+    tiles_by_id: dict[str, Tile],
+    detections: list[CrackDetection],
+    facade_id: str,
+    iou_threshold: float = 0.2,
+) -> list[CrackPolygon]:
+    items: list[tuple[Polygon, float, str]] = []
+    for det in detections:
+        poly = _to_shapely(restore_global_coords(tiles_by_id[det.tile_id], det))
+        if poly is not None:
+            items.append((poly, det.confidence, det.tile_id))
+    if not items:
+        return []
 
     merged: list[CrackPolygon] = []
-    for k, idxs in enumerate(groups.values()):
+    for k, idxs in enumerate(group_overlapping_polygons(items, iou_threshold)):
         polys = [items[i][0] for i in idxs]
         confs = [items[i][1] for i in idxs]
         tile_ids = sorted({items[i][2] for i in idxs})

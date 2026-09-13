@@ -37,9 +37,16 @@ training/crack_seg/dataset/
 training/crack_seg/dataset_labeled/
 training/crack_seg/dataset_raw_crops/
 training/crack_seg/dataset_stitched/
+training/crack_seg/dataset_structural_fp_v2/
 training/export/
 /training_data_raw_crops/
 /training_data_stitched/
+# training_data_structural_fp_v2/ is DELIBERATELY NOT ignored (unlike the two
+# lines above) -- it holds the 2차("구조물 오탐 제외") hard-negative review
+# labels + annotation JSONs (tools/build_hard_negatives_from_review.py's
+# output), which are real source data worth version-controlling, not
+# ephemeral local viewer-annotation state like training_data_raw_crops/
+# training_data_stitched are.
 logs/
 metadata/*.parquet
 metadata/*.json

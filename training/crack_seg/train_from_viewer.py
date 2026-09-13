@@ -77,6 +77,22 @@ SOURCES: dict[str, dict] = {
         "dataset_dir": CRACK_SEG_DIR / "dataset_stitched",
         "training_data_dir": ROOT / "training_data_stitched",
     },
+    # 2026-09-13: 2차("구조물 오탐 제외") -- confirmed-false-positive hard
+    # negatives (window frame/panel joint/building corner etc., see
+    # tools/build_hard_negatives_from_review.py) for the SEPARATE 2차 model
+    # (config/pipeline.yaml's crack.model_v2), kept in its own named
+    # dataset/training-data folder rather than mixed into "raw_crops" -- see
+    # that config key's own comment for why 1차/2차 are two distinct
+    # checkpoints, never one model overwritten in place. Actual training goes
+    # through finetune_hard_negatives_full_positive.py (not the generic
+    # build_dataset_from_annotations() path this SOURCES entry otherwise
+    # implies), because it also needs to mix in crack512 real positives from
+    # a separate repo -- this entry exists mainly so the dataset/training-data
+    # folder naming stays consistent with the other three sources.
+    "structural_fp_v2": {
+        "dataset_dir": CRACK_SEG_DIR / "dataset_structural_fp_v2",
+        "training_data_dir": ROOT / "training_data_structural_fp_v2",
+    },
 }
 
 
@@ -205,27 +221,52 @@ def ensure_non_empty_train_val(samples: list[dict]) -> str:
     return "hash_by_source_image"
 
 
-def iter_regions(data: dict) -> list[tuple[int, list[tuple[int, int]]]]:
-    """Read the current polygon format, with compatibility for older box JSON."""
+def _parse_region_list(
+    region_items: list, box_items: list, id_key: str
+) -> list[tuple[int, list[tuple[int, int]]]]:
+    """Shared points/box parsing used by both iter_regions (crack polygons) and
+    iter_background_regions (2026-09-13, confirmed-non-crack regions -- see
+    that function's own comment). `id_key` ("region_id"/"box_id") is the only
+    thing that differs between the two callers' JSON conventions."""
     regions: list[tuple[int, list[tuple[int, int]]]] = []
-    if isinstance(data.get("regions"), list):
-        for idx, region in enumerate(data["regions"], start=1):
+    if isinstance(region_items, list) and region_items:
+        for idx, region in enumerate(region_items, start=1):
             points = region.get("points") or []
             polygon = [(int(p["x"]), int(p["y"])) for p in points if "x" in p and "y" in p]
             if len(polygon) >= 3:
-                regions.append((int(region.get("region_id") or idx), polygon))
+                regions.append((int(region.get(id_key) or idx), polygon))
         return regions
 
-    for idx, box in enumerate(data.get("boxes") or [], start=1):
+    for idx, box in enumerate(box_items or [], start=1):
         try:
             x0, y0, x1, y1 = int(box["x0"]), int(box["y0"]), int(box["x1"]), int(box["y1"])
         except KeyError:
             continue
         regions.append((
-            int(box.get("box_id") or idx),
+            int(box.get(id_key) or idx),
             [(x0, y0), (x1, y0), (x1, y1), (x0, y1)],
         ))
     return regions
+
+
+def iter_regions(data: dict) -> list[tuple[int, list[tuple[int, int]]]]:
+    """Read the current polygon format, with compatibility for older box JSON."""
+    return _parse_region_list(data.get("regions"), data.get("boxes"), "region_id")
+
+
+def iter_background_regions(data: dict) -> list[tuple[int, list[tuple[int, int]]]]:
+    """2026-09-13: confirmed-NOT-a-crack regions (window frame/panel joint/
+    building corner/etc that the raw-photo detector false-positived on -- see
+    CLAUDE.local.md's 2026-09 raw-photo false-positive investigation). Same
+    JSON shape as `regions` (points-polygon preferred, box fallback), just a
+    separate top-level key -- `iter_regions` must never treat these as crack
+    labels, and this must never be treated as a crack label either. Produces
+    an EMPTY YOLO-seg label file per crop (no class-0 polygon at all), the
+    standard way to tell a detector "nothing to detect here" -- this is what
+    was actually missing before: every region the old code saw always got a
+    crack polygon, and an image with zero `regions` was skipped outright,
+    so there was previously no way to teach the model a negative example."""
+    return _parse_region_list(data.get("background_regions"), data.get("background_boxes"), "region_id")
 
 
 def build_dataset_from_annotations(training_data_dir: Path, dataset_dir: Path) -> dict:
@@ -255,10 +296,15 @@ def build_dataset_from_annotations(training_data_dir: Path, dataset_dir: Path) -
         source_id = data.get("facade_id") or json_path.stem
         image_path = data.get("image_path")
         regions = iter_regions(data)
+        # 2026-09-13: background_regions (confirmed-non-crack, e.g. a raw-photo
+        # false-positive on a window frame/panel joint) -- see
+        # iter_background_regions' own comment for why this is a separate key
+        # from `regions`, never merged into the same list.
+        background_regions = iter_background_regions(data)
         if not image_path or not Path(image_path).exists():
             print(f"skip {source_id}: image_path missing or not found ({image_path})")
             continue
-        if not regions:
+        if not regions and not background_regions:
             continue
 
         img = cv2.imread(image_path)
@@ -270,7 +316,16 @@ def build_dataset_from_annotations(training_data_dir: Path, dataset_dir: Path) -
         source_split = choose_split(str(source_id), source_count)
         source_hash = file_sha256(Path(image_path))
 
-        for region_id, polygon_points in regions:
+        # is_background=True writes an EMPTY label file (no class-0 polygon at
+        # all) instead of a crack polygon -- the crop still needs padding/size
+        # handling identical to a crack region so the model sees this exact
+        # false-positive-triggering pattern at the same scale/context it was
+        # originally detected at.
+        for region_id, polygon_points, is_background in [
+            (rid, pts, False) for rid, pts in regions
+        ] + [
+            (rid, pts, True) for rid, pts in background_regions
+        ]:
             x_values = [p[0] for p in polygon_points]
             y_values = [p[1] for p in polygon_points]
             x0, y0, x1, y1 = min(x_values), min(y_values), max(x_values), max(y_values)
@@ -288,20 +343,26 @@ def build_dataset_from_annotations(training_data_dir: Path, dataset_dir: Path) -
             if ch < 8 or cw < 8:
                 continue
 
-            label_points: list[str] = []
             local_points: list[tuple[int, int]] = []
+            label_points: list[str] = []
             for px, py in polygon_points:
                 local_x = int(np.clip(px - cx0, 0, cw - 1))
                 local_y = int(np.clip(py - cy0, 0, ch - 1))
                 local_points.append((local_x, local_y))
                 label_points.append(f"{local_x / cw:.6f}")
                 label_points.append(f"{local_y / ch:.6f}")
-            polygon = "0 " + " ".join(label_points)
+            # Empty string (not "0 ...") for a background region -- an empty
+            # .txt file is Ultralytics' own convention for "no object in this
+            # image", the actual mechanism that was missing before this
+            # region type existed (see iter_background_regions' docstring).
+            polygon = "" if is_background else "0 " + " ".join(label_points)
 
-            stem = f"viewer_{source_id}_{region_id}"
+            prefix = "viewer_bg" if is_background else "viewer"
+            stem = f"{prefix}_{source_id}_{region_id}"
             samples.append({
                 "sample_id": stem,
                 "split": source_split,
+                "label_kind": "background" if is_background else "crack",
                 "source_annotation_json": str(json_path),
                 "source_id": source_id,
                 "source_image": image_path,
@@ -404,7 +465,13 @@ def detect_training_device() -> tuple[int | str, dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", choices=list(SOURCES), required=True)
+    # "structural_fp_v2" is deliberately excluded here -- its SOURCES entry
+    # only exists for dataset/training-data folder naming consistency (see
+    # that entry's own comment). Running it through this generic path would
+    # silently redo the all-negative-only fine-tune that regressed real-crack
+    # recall (CLAUDE.local.md 2026-09-13); it must go through
+    # finetune_hard_negatives_full_positive.py, which mixes in real positives.
+    parser.add_argument("--source", choices=[s for s in SOURCES if s != "structural_fp_v2"], required=True)
     parser.add_argument("--mode", choices=["new", "finetune"], required=True)
     parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--labeled-input", type=Path, default=None)
