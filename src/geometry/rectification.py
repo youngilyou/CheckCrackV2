@@ -590,6 +590,72 @@ def lookup_offset(offset_grid: PlaneOffsetGrid, canvas_x: float, canvas_y: float
     return total_value / total_weight
 
 
+def _build_trust_mask(
+    img: "pycolmap.Image",
+    reconstruction: pycolmap.Reconstruction,
+    plane: FacadePlane,
+    src_w: int,
+    src_h: int,
+    cell_px: int = 200,
+    min_points_per_cell: int = 3,
+    distrust_offset_m: float = 3.0,
+) -> np.ndarray:
+    """Per-SOURCE-image mask (src_h, src_w), 255 = trusted, 0 = distrusted --
+    NOT a second 3D plane, but a cheap, well-scoped proxy for the same idea:
+    stop a source image's genuinely off-plane content (a building corner
+    viewed edge-on, sky/terrain past the roofline) from ever COMPETING for
+    canvas ownership against a same-region image that actually shows the
+    flat wall there, without needing dense per-pixel depth (not available in
+    this SIFT-sparse pipeline) or a second explicit plane fit.
+
+    Confirmed real, 2026-09 (BACK facade): the drone's corner-orbit pass
+    produced NINE consecutive images (DJI_0048-0056) that each mix real
+    on-wall content with varying amounts of corner/side-wall content in the
+    SAME frame (on-wall vs far-off-plane 2D-3D point fraction ranged
+    continuously from 0.10 to 0.82 across them, no clean few-outliers split)
+    -- confirmed via direct visual inspection that whichever of these images
+    the seam-selection graph-cut happened to pick as owner for a given canvas
+    region determined whether that region rendered flat (good) or distorted/
+    "3D-looking" (bad), alternating floor to floor down the corner column.
+    Excluding whole images (the DJI_0089/0131 rotation-outlier approach) is
+    unsafe here since ALL nine images have SOME real, needed on-wall content
+    -- only each one's own off-plane REGION should be devalued.
+
+    Bins this image's own 2D-3D correspondences (img.points2D, the same SfM
+    data _detect_off_wall_images/build_plane_offset_grid already use) into a
+    coarse SOURCE-PIXEL grid and marks a cell distrusted only when it has
+    enough points (`min_points_per_cell`) AND their median |offset| from the
+    plane exceeds `distrust_offset_m` (same 3.0m convention used elsewhere
+    in this file for "clearly not on this wall"). A cell with too few points
+    to judge defaults to TRUSTED -- sparse SIFT coverage is naturally uneven,
+    and treating "no evidence" as "guilty" would erase large innocent
+    regions purely for lacking feature matches, not for any actual off-plane
+    signal."""
+    normal = plane.normal
+    buckets: dict[tuple[int, int], list[float]] = {}
+    for p in img.points2D:
+        if not p.has_point3D() or p.point3D_id not in reconstruction.points3D:
+            continue
+        point3d = reconstruction.points3D[p.point3D_id]
+        offset = float(np.dot(point3d.xyz - plane.origin, normal))
+        px, py = p.xy
+        cell = (int(px // cell_px), int(py // cell_px))
+        buckets.setdefault(cell, []).append(offset)
+
+    n_cols = int(np.ceil(src_w / cell_px)) + 1
+    n_rows = int(np.ceil(src_h / cell_px)) + 1
+    trust_small = np.full((n_rows, n_cols), 255, dtype=np.uint8)
+    for (cx, cy), offsets in buckets.items():
+        if len(offsets) < min_points_per_cell:
+            continue
+        if not (0 <= cy < n_rows and 0 <= cx < n_cols):
+            continue
+        if float(np.median(np.abs(offsets))) > distrust_offset_m:
+            trust_small[cy, cx] = 0
+
+    return cv2.resize(trust_small, (src_w, src_h), interpolation=cv2.INTER_NEAREST)
+
+
 def _warp_image_smooth(
     raw: np.ndarray,
     K: np.ndarray,
@@ -599,6 +665,7 @@ def _warp_image_smooth(
     offset_grid: PlaneOffsetGrid,
     roi: tuple[int, int, int, int],  # (x0, y0, x1, y1) in full-canvas pixel coords
     sample_step_px: int = 24,
+    src_trust_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-pixel remap warp of one source image into its canvas ROI, using a
     LOCALLY plane-offset-corrected world point at every sampled canvas
@@ -619,7 +686,14 @@ def _warp_image_smooth(
     visible torn seam / jagged staircase at the wall/roofline boundary. A
     dense, smoothly-interpolated remap has no such boundary anywhere by
     construction, since every output pixel gets its own smoothly-blended
-    correction instead of inheriting one whole cell's single value."""
+    correction instead of inheriting one whole cell's single value.
+
+    `src_trust_mask` (see _build_trust_mask), if given, is used as this
+    image's valid-pixel mask INSTEAD of the default all-255 mask -- so a
+    region this specific image's own SfM points flag as off-plane never
+    reaches the seam/blend step as this image's content, without touching
+    `warped_img` at all (other images can still legitimately win that same
+    canvas region if their own content there is trustworthy)."""
     x0, y0, x1, y1 = roi
     local_w, local_h = x1 - x0, y1 - y0
     src_h, src_w = raw.shape[:2]
@@ -656,7 +730,7 @@ def _warp_image_smooth(
         raw, map_x, map_y, interpolation=cv2.INTER_LINEAR,
         borderMode=cv2.BORDER_CONSTANT, borderValue=0,
     )
-    src_mask = np.full((src_h, src_w), 255, dtype=np.uint8)
+    src_mask = src_trust_mask if src_trust_mask is not None else np.full((src_h, src_w), 255, dtype=np.uint8)
     warped_mask = cv2.remap(
         src_mask, map_x, map_y, interpolation=cv2.INTER_NEAREST,
         borderMode=cv2.BORDER_CONSTANT, borderValue=0,
@@ -732,6 +806,7 @@ def rectify_images(
         H = _camera_to_facade_homography(K, R, t, plane)
 
         src_h, src_w = raw.shape[:2]
+        trust_mask = _build_trust_mask(img, reconstruction, plane, src_w, src_h)
         corners_img = np.array(
             [[0, 0], [src_w, 0], [src_w, src_h], [0, src_h]], dtype=np.float64
         ).reshape(-1, 1, 2)
@@ -749,7 +824,9 @@ def rectify_images(
         # below in SourceTransform, since crack/pipeline.py's later inversion
         # back to source-image pixels is out of scope for this pass (visual
         # mosaic quality only).
-        warped_img, warped_mask = _warp_image_smooth(raw, K, R, t, plane, offset_grid, (x0, y0, x1, y1))
+        warped_img, warped_mask = _warp_image_smooth(
+            raw, K, R, t, plane, offset_grid, (x0, y0, x1, y1), src_trust_mask=trust_mask,
+        )
 
         warped[image_id] = WarpedImage(image=warped_img, mask=warped_mask, corner=(x0, y0), size=(local_w, local_h))
         source_transforms[image_id] = SourceTransform(H=H, width=src_w, height=src_h)
