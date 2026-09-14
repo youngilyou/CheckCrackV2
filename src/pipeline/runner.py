@@ -119,6 +119,143 @@ def _detect_off_wall_images(
     return {image_id for image_id, _ in sorted_items[:best_cut_idx]}
 
 
+def _in_plane_roll_deg(img: "pycolmap.Image", plane) -> float:
+    """This camera's own in-plane rotation ("roll" relative to the facade),
+    in degrees -- projects the camera's world-frame "up" vector onto the
+    facade plane and measures its angle against the plane's own (e_u, e_v)
+    basis. A drone flying a smooth path (including orbiting a building
+    corner) produces a smoothly-varying sequence of this angle when images
+    are read in DJI capture order; see _detect_rotation_outlier_images."""
+    R = img.cam_from_world().rotation.matrix()
+    cam_up_world = R.T @ np.array([0.0, -1.0, 0.0])
+    normal = plane.normal
+    in_plane = cam_up_world - np.dot(cam_up_world, normal) * normal
+    comp_u = float(np.dot(in_plane, plane.e_u))
+    comp_v = float(np.dot(in_plane, plane.e_v))
+    return float(np.degrees(np.arctan2(comp_u, comp_v)))
+
+
+def _wrap_deg(angle_deg: float) -> float:
+    """Wrap to (-180, 180] so a jump like 179 -> -179 reads as +2, not -358."""
+    return (angle_deg + 180.0) % 360.0 - 180.0
+
+
+def _detect_rotation_outlier_images(
+    reconstruction: "pycolmap.Reconstruction",
+    plane,
+    images_dir: str,
+    keep_ids: set[str],
+    min_jump_deg: float = 5.0,
+    min_redundant_fraction: float = 0.9,
+) -> set[str]:
+    """Flags a registered image whose in-plane roll (`_in_plane_roll_deg`)
+    reverses direction relative to its DJI-capture-order neighbors -- jumping
+    sharply one way in, then sharply back out, rather than continuing the
+    same direction its neighbors are already rotating in -- AND only
+    excludes it if other images already substantially cover the same canvas
+    region, so a genuinely unique viewpoint never silently loses coverage
+    just because its pose looks unusual.
+
+    Confirmed real, 2026-09 (BACK facade, DJI_0089/DJI_0131): both sit inside
+    a drone-orbiting-a-corner maneuver (two clusters of rapidly-changing
+    roll), but unlike their neighbors, which smoothly interpolate (same-sign
+    jump in and out), each one jumps sharply in one direction and then
+    sharply back (+7.48 deg in, -12.18 deg out for DJI_0089; +7.18 deg in,
+    -12.36 deg out for DJI_0131 -- both re-derived here from a fresh COLMAP
+    run and matching the original manually-found numbers almost exactly) --
+    a "notch" in an otherwise smooth sequence, consistent with a
+    less-reliable pose estimate rather than a real physical rotation (no real
+    drone orbit reverses its own sweep direction for exactly one frame and
+    then immediately continues the original sweep). Manually excluding just
+    these two from the stitch input fixed a seam-misalignment artifact at the
+    exact canvas location their projected footprint touched (confirmed via a
+    direct before/after crop comparison of a full fresh COLMAP run with/
+    without them) -- this generalizes that one-off manual test into an
+    automatic rule.
+
+    Sign reversal (`jump_in * jump_out < 0`), not distance from a linear
+    interpolation of the two neighbors, is what actually isolates this
+    pattern -- a naive "how far is this image's angle from the straight-line
+    interpolation of its neighbors" check was tried first and MISSED both
+    known cases, because DJI_0089/DJI_0131's own angle sits right at the
+    +-180 deg wrap boundary (-177 deg, i.e. having continued essentially the
+    same direction as its jump_in past +180), which happens to land close to
+    that interpolated midpoint even though the jump_in/jump_out relationship
+    is clearly anomalous. Re-verified against this exact sequence: the sign-
+    reversal rule isolates exactly DJI_0089 and DJI_0131 and nothing else out
+    of all 68 registered images.
+
+    `min_jump_deg` requires BOTH the incoming and outgoing angle jumps to be
+    meaningfully large before even considering a candidate -- during a
+    straight, non-orbiting flight leg the roll barely changes at all, and
+    ordinary pose-estimation jitter there should never trigger this.
+
+    The redundant-coverage check reuses `rectify_images`'s own per-image
+    masks (expensive -- loads and warps every image -- but only ever paid
+    when there's at least one rotation-angle candidate to check; the common
+    case of a facade with no such candidates returns immediately without
+    calling it at all, mirroring _detect_off_wall_images's cheap default
+    path)."""
+    images_by_id = {
+        Path(img.name).stem: img
+        for img in reconstruction.images.values()
+        if Path(img.name).stem in keep_ids
+    }
+    if len(images_by_id) < 3:
+        return set()
+
+    ordered_ids = sorted(images_by_id.keys())
+    angles = {iid: _in_plane_roll_deg(images_by_id[iid], plane) for iid in ordered_ids}
+
+    candidates: set[str] = set()
+    for i in range(1, len(ordered_ids) - 1):
+        prev_id, cur_id, next_id = ordered_ids[i - 1], ordered_ids[i], ordered_ids[i + 1]
+        jump_in = _wrap_deg(angles[cur_id] - angles[prev_id])
+        jump_out = _wrap_deg(angles[next_id] - angles[cur_id])
+        if abs(jump_in) < min_jump_deg or abs(jump_out) < min_jump_deg:
+            continue
+        if jump_in * jump_out < 0:
+            candidates.add(cur_id)
+
+    if not candidates:
+        return set()
+
+    warped, canvas_size, _ = rectify_images(reconstruction, plane, images_dir)
+    canvas_w, canvas_h = canvas_size
+    others_coverage = np.zeros((canvas_h, canvas_w), dtype=bool)
+    for iid, w in warped.items():
+        if iid in candidates or iid not in images_by_id:
+            continue
+        x, y = w.corner
+        ww, hh = w.size
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(canvas_w, x + ww), min(canvas_h, y + hh)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        others_coverage[y0:y1, x0:x1] |= w.mask[y0 - y : y1 - y, x0 - x : x1 - x] > 0
+
+    excluded: set[str] = set()
+    for iid in candidates:
+        w = warped.get(iid)
+        if w is None:
+            continue
+        x, y = w.corner
+        ww, hh = w.size
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(canvas_w, x + ww), min(canvas_h, y + hh)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        own_mask = w.mask[y0 - y : y1 - y, x0 - x : x1 - x] > 0
+        own_area = int(own_mask.sum())
+        if own_area == 0:
+            continue
+        redundant_area = int((own_mask & others_coverage[y0:y1, x0:x1]).sum())
+        if redundant_area / own_area >= min_redundant_fraction:
+            excluded.add(iid)
+
+    return excluded
+
+
 def _run_colmap_mapping_only(
     facade_id: str,
     colmap_images_dir: str,
@@ -316,6 +453,24 @@ def _run_facade_pipeline(
                             excluded_count=len(off_wall_ids), excluded_image_ids=sorted(off_wall_ids),
                         )
                         catalog = [m for m in catalog if m.image_id not in off_wall_ids]
+                        by_id = {m.image_id: m for m in catalog}
+
+                    try:
+                        rotation_outlier_ids = _detect_rotation_outlier_images(
+                            stage1_reconstruction, stage1_plane, colmap_images_dir,
+                            keep_ids={m.image_id for m in catalog},
+                        )
+                    except Exception as exc:
+                        log_event(logger, "warning", "회전 이상치 감지 실패 -- 건너뜀", facade_id=facade_id, error=str(exc))
+                        rotation_outlier_ids = set()
+                    if rotation_outlier_ids:
+                        log_event(
+                            logger, "info",
+                            "회전 각도가 주변과 어긋나고 다른 이미지로 충분히 중복 커버되는 이미지 자동 감지 -- 제외",
+                            stage="ROTATION_OUTLIER_DETECTED", facade_id=facade_id,
+                            excluded_count=len(rotation_outlier_ids), excluded_image_ids=sorted(rotation_outlier_ids),
+                        )
+                        catalog = [m for m in catalog if m.image_id not in rotation_outlier_ids]
                         by_id = {m.image_id: m for m in catalog}
             except ImportError:
                 log_event(logger, "warning", "pycolmap not installed, skipping CM entirely", facade_id=facade_id)
