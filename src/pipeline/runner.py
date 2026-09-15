@@ -31,6 +31,7 @@ from src.common.config import Config, load_config
 from src.common.imageio import imread_unicode, imwrite_unicode
 from src.common.logging import get_logger, log_event
 from src.common.types import GeometryFailureCode, GeometryResult, ImageMetadata
+from src.geometry.coverage import compute_overlap_report
 from src.geometry.homography import estimate_homography
 from src.geometry.quality import apply_quality_gate
 from src.geometry.rectification import (
@@ -324,7 +325,7 @@ def _run_colmap_mapping_only(
     return colmap_result, reconstruction, plane
 
 
-def _estimate_coverage_ratio(reconstruction, plane, images_dir: str) -> float | None:
+def _estimate_coverage_ratio(reconstruction, plane, images_dir: str):
     """Cheap coverage_ratio estimate: warps just each image's binary mask onto
     the facade plane (rectify_images) and unions them via paste_max -- skips
     rectify_and_blend's expensive seam-finding/blending entirely, since this
@@ -332,17 +333,23 @@ def _estimate_coverage_ratio(reconstruction, plane, images_dir: str) -> float | 
     (2026-09-12, 사용자 승인): "이번엔(BACK) coverage가 줄지 않아 안전했다"는
     사실이 "항상 안전하다"를 보장하지 않으므로, 필터링 후 coverage_ratio가
     필터링 전보다 떨어지면 명시적으로 경고한다 -- 제외된 이미지가 실은 어떤
-    벽면을 고유하게 커버하고 있었을 가능성 신호."""
+    벽면을 고유하게 커버하고 있었을 가능성 신호.
+
+    Returns (coverage_ratio, warped, canvas_size) -- `warped` is also handed
+    to geometry/coverage.py's compute_overlap_report by this function's
+    caller (2026-09-15) so that check doesn't pay for a second rectify_images
+    pass just to get the same per-image ROIs/masks this one already computed."""
     from src.stitching.mosaic import paste_max
 
     warped, canvas_size, _ = rectify_images(reconstruction, plane, images_dir)
     canvas_w, canvas_h = canvas_size
     if canvas_w <= 0 or canvas_h <= 0:
-        return None
+        return None, warped, canvas_size
     observed = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
     for w in warped.values():
         paste_max(observed, w.mask, w.corner)
-    return float(np.count_nonzero(observed)) / float(observed.size)
+    coverage_ratio = float(np.count_nonzero(observed)) / float(observed.size)
+    return coverage_ratio, warped, canvas_size
 
 
 def _run_colmap_and_rectify_once(
@@ -438,12 +445,42 @@ def _run_facade_pipeline(
                     mean_reprojection_error_px=stage1_colmap_result.mean_reprojection_error_px,
                 )
                 if stage1_reconstruction is not None and stage1_plane is not None:
+                    stage1_warped = None
                     try:
-                        stage1_coverage_estimate = _estimate_coverage_ratio(
+                        stage1_coverage_estimate, stage1_warped, _ = _estimate_coverage_ratio(
                             stage1_reconstruction, stage1_plane, colmap_images_dir,
                         )
                     except Exception as exc:
                         log_event(logger, "warning", "1단계 coverage 추정 실패", facade_id=facade_id, error=str(exc))
+
+                    if stage1_warped:
+                        try:
+                            overlap_cfg = cfg.capture if "capture" in cfg else None
+                            overlap_report = compute_overlap_report(
+                                facade_id, stage1_warped,
+                                horizontal_overlap_target=float(overlap_cfg.horizontal_overlap_target) if overlap_cfg else 0.80,
+                                vertical_overlap_target=float(overlap_cfg.vertical_overlap_target) if overlap_cfg else 0.80,
+                                minimum_overlap=float(overlap_cfg.minimum_overlap) if overlap_cfg else 0.70,
+                            )
+                            atomic_write_json(output_dir / f"{facade_id}_overlap_report.json", asdict(overlap_report))
+                            if overlap_report.needs_retake:
+                                log_event(
+                                    logger, "warning", "중복도 미달 구간 감지 -- 재촬영 검토 필요",
+                                    stage="OVERLAP_CHECK", facade_id=facade_id,
+                                    gap_count=len(overlap_report.gaps),
+                                    gaps=[asdict(g) for g in overlap_report.gaps][:20],
+                                    horizontal_overlap_mean=overlap_report.horizontal_overlap_mean,
+                                    vertical_overlap_mean=overlap_report.vertical_overlap_mean,
+                                )
+                            else:
+                                log_event(
+                                    logger, "info", "중복도 검증 통과",
+                                    stage="OVERLAP_CHECK", facade_id=facade_id,
+                                    horizontal_overlap_mean=overlap_report.horizontal_overlap_mean,
+                                    vertical_overlap_mean=overlap_report.vertical_overlap_mean,
+                                )
+                        except Exception as exc:
+                            log_event(logger, "warning", "중복도 검증 실패", facade_id=facade_id, error=str(exc))
 
                     off_wall_ids = _detect_off_wall_images(stage1_reconstruction, stage1_plane)
                     if off_wall_ids:

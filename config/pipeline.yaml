@@ -5,6 +5,16 @@
 project:
   building_id: B001
 
+# TTA 촬영 중복도 기준(2026-09-15): 종방향(비행 방향, horizontal) >=80%, 횡방향(다음
+# 줄로 이동, vertical) 70~80%, 최소 70%. CLAUDE.local.md #3.4에 목표치만 문서화돼
+# 있었고 이를 실제로 검증하는 코드가 없었음 -- src/geometry/coverage.py가
+# pipeline/runner.py stage1 직후 이 값 기준으로 실제 촬영 결과를 검증해
+# {facade_id}_overlap_report.json + 미달시 자동 경고(log_event)를 생성한다.
+capture:
+  horizontal_overlap_target: 0.80
+  vertical_overlap_target: 0.80
+  minimum_overlap: 0.70
+
 facade_segmentation:
   merge_if_normal_angle_delta_deg: 8
   split_if_normal_angle_delta_deg: 15
@@ -18,7 +28,16 @@ facade_assignment:
   w_view: 0.4
   w_waypoint: 0.0  # no mission/waypoint DB yet; see facade_classifier.py docstring
   w_distance: 0.2
-  ideal_standoff_m: 15.0
+  # 2026-09-15 사용자 확정: 기존 15.0m -> 10.0m로 축소. 실측(BACK facade 실제 DJI XMP
+  # CalibratedFocalLength=4545.45px, L2D-20c 광각 카메라, 5280px 폭) 기준 GSD(mm/px) =
+  # 거리(mm)/focal_px 공식으로 역산하면 15m=~3.3mm/px, 10m=~2.2mm/px, TTA 기준 요구치인
+  # <=1mm/px를 만족하려면 ~4.5m까지 가까워져야 하는데 이는 발코니/실외기 돌출이 있는
+  # 아파트 외벽에서 안전 여유가 없는 거리라 채택 안 함. 10m도 <=1mm/px 기준 자체는
+  # 아직 못 만족(약 2.2배 부족)하지만 15m보다는 현실적인 절충치로 사용자가 선택 --
+  # 이 값만으로는 근본 해결이 아니며, 진짜 <=1mm/px를 만족하려면 망원(zoom/tele) 카메라
+  # 전환이 필요함(광각 L2D-20c로는 어떤 안전 거리에서도 불가능). RTK는 GPS 위치/스케일
+  # 정밀도를 높일 뿐 광학 GSD 자체는 바꾸지 않는다는 점에 유의.
+  ideal_standoff_m: 10.0
   max_standoff_m: 40.0
 
 matching:

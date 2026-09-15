@@ -630,7 +630,28 @@ def _build_trust_mask(
     to judge defaults to TRUSTED -- sparse SIFT coverage is naturally uneven,
     and treating "no evidence" as "guilty" would erase large innocent
     regions purely for lacking feature matches, not for any actual off-plane
-    signal."""
+    signal.
+
+    The one-cell erosion of the trusted (255) region below (equivalently, a
+    one-cell dilation of the distrusted region) exists because a cell
+    immediately next to a confidently-distrusted cell can itself have too
+    FEW points to individually clear `min_points_per_cell` -- confirmed real,
+    2026-09 (BACK facade, the building's OTHER/right-side corner-orbit
+    images, e.g. DJI_0164): its sky/background region has visibly fewer SIFT
+    matches than the left-corner images this function was first validated
+    against, so several of its own off-plane cells landed just under
+    `min_points_per_cell` and defaulted to trusted, leaving a thin sliver of
+    untrusted corner content still eligible for seam ownership right at the
+    edge of an otherwise-correctly-distrusted region -- visible as a jagged,
+    flickering canvas seam alternating between several source images down
+    that corner column, not the same ghosting artifact the left corner had
+    (already fixed) but the same root cause. A sparse cell bordering a
+    confidently-distrusted one is overwhelmingly more likely to be more of
+    the same off-plane content than genuinely-independent flat wall, so
+    treating it as distrusted too is the safer assumption right at that
+    boundary -- one cell (200px in source space) is a deliberately small
+    margin so this doesn't eat into unrelated, genuinely-trusted interior
+    regions."""
     normal = plane.normal
     buckets: dict[tuple[int, int], list[float]] = {}
     for p in img.points2D:
@@ -653,6 +674,7 @@ def _build_trust_mask(
         if float(np.median(np.abs(offsets))) > distrust_offset_m:
             trust_small[cy, cx] = 0
 
+    trust_small = cv2.erode(trust_small, np.ones((3, 3), dtype=np.uint8))
     return cv2.resize(trust_small, (src_w, src_h), interpolation=cv2.INTER_NEAREST)
 
 
