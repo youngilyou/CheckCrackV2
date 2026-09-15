@@ -492,23 +492,22 @@ def _run_facade_pipeline(
                         catalog = [m for m in catalog if m.image_id not in off_wall_ids]
                         by_id = {m.image_id: m for m in catalog}
 
-                    try:
-                        rotation_outlier_ids = _detect_rotation_outlier_images(
-                            stage1_reconstruction, stage1_plane, colmap_images_dir,
-                            keep_ids={m.image_id for m in catalog},
-                        )
-                    except Exception as exc:
-                        log_event(logger, "warning", "회전 이상치 감지 실패 -- 건너뜀", facade_id=facade_id, error=str(exc))
-                        rotation_outlier_ids = set()
-                    if rotation_outlier_ids:
-                        log_event(
-                            logger, "info",
-                            "회전 각도가 주변과 어긋나고 다른 이미지로 충분히 중복 커버되는 이미지 자동 감지 -- 제외",
-                            stage="ROTATION_OUTLIER_DETECTED", facade_id=facade_id,
-                            excluded_count=len(rotation_outlier_ids), excluded_image_ids=sorted(rotation_outlier_ids),
-                        )
-                        catalog = [m for m in catalog if m.image_id not in rotation_outlier_ids]
-                        by_id = {m.image_id: m for m in catalog}
+                    # 2026-09-15 사용자 확정: _detect_rotation_outlier_images(11376db) 자동 제외
+                    # 비활성화. BACK facade 실측으로 확인된 문제 -- 이 함수의 "중복 커버리지"
+                    # 안전장치는 제외 대상(DJI_0089/DJI_0131) 자기 자신의 캔버스 위치만
+                    # 확인하는데, COLMAP 번들조정은 전체 이미지를 동시에 푸는 전역 최적화라
+                    # 이 두 장을 빼면 그 둘과 물리적으로 안 겹치는 다른 위치(BACK 반대쪽
+                    # 코너, DJI_0162/DJI_0164 부근)의 상대 포즈까지 같이 틀어짐 -- 실측으로
+                    # V005(이 두 장 포함, 68장 등록)는 그 코너가 깨끗했고, 11376db 도입 이후
+                    # (66장, 이 두 장 제외)는 같은 코너가 서로 어긋난 두 이미지로 쪼개져
+                    # 깨짐을 확인. DJI_0089/DJI_0131을 다시 넣고 COLMAP을 재실행하니 그
+                    # 코너가 다시 V005 수준으로 복구됨(직접 재현 확인). 이 두 장 자체는 실제
+                    # DJI XMP GimbalRollDegree가 이웃 프레임 대비 딱 한 프레임만 -10도가량
+                    # 튀었다가 바로 복귀하는 순간적 짐벌 흔들림 구간 -- 원래 이 함수가
+                    # 고치려던 문제(그 두 장 자신의 위치에서의 아티팩트)는 여전히 실재할 수
+                    # 있으므로 이 함수 자체는 남겨두되(향후 수동 검토/튜닝용), 자동 실행에서는
+                    # 제외 -- 전역 최적화에 예측 못한 부작용을 주는 자동 규칙을 로컬 안전장치
+                    # 하나만 믿고 파이프라인에 그대로 두는 것이 더 위험하다는 판단.
             except ImportError:
                 log_event(logger, "warning", "pycolmap not installed, skipping CM entirely", facade_id=facade_id)
                 run_colmap_fallback = False
