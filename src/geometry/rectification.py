@@ -43,14 +43,6 @@ class FacadePlane:
     width_m: float  # canvas u-extent — fixed to the real facade span, not auto-derived
     height_m: float  # canvas v-extent
 
-    @property
-    def normal(self) -> np.ndarray:
-        """Outward unit normal, right-handed from (e_u, e_v) -- used by
-        build_plane_offset_grid/lookup_offset to measure how far a real
-        COLMAP-triangulated point sits off the idealized flat plane."""
-        n = np.cross(self.e_u, self.e_v)
-        return n / np.linalg.norm(n)
-
 
 def facade_plane_from_segment(
     segment: FacadeSegment,
@@ -418,348 +410,6 @@ def _camera_to_facade_homography(K: np.ndarray, R: np.ndarray, t: np.ndarray, pl
     return np.linalg.inv(facade_to_image)
 
 
-@dataclass
-class PlaneOffsetGrid:
-    """Coarse canvas-space grid of how far the REAL photographed surface sits
-    off the idealized flat `FacadePlane`, in meters along the plane normal --
-    built directly from COLMAP's own triangulated 3D points (already
-    bundle-adjusted), not guessed. `grid` only has entries for cells that had
-    enough real near-plane points to trust (see build_plane_offset_grid) --
-    a missing cell is not "zero offset", it's "no measurement here", and
-    lookup_offset treats the two differently (a missing cell contributes
-    nothing to the interpolation rather than silently voting for zero)."""
-
-    cell_px: int
-    grid: dict[tuple[int, int], float]  # (cell_x, cell_y) -> median signed offset (m)
-
-
-def build_plane_offset_grid(
-    reconstruction: pycolmap.Reconstruction,
-    plane: FacadePlane,
-    cell_px: int = 200,
-    min_points_per_cell: int = 5,
-    max_offset_m: float = 3.0,
-    smoothing_radius_m: float = 12.0,
-    min_coverage_fraction: float = 0.15,
-    clamp_offset_m: float = 0.6,
-) -> PlaneOffsetGrid:
-    """Bins every triangulated 3D point by which canvas cell its (u, v)
-    projection onto the plane falls into, takes the MEDIAN signed distance
-    along the plane normal per cell (median, not mean, so a minority of
-    stray/mismatched points within one cell can't drag it), then Gaussian-
-    smooths that per-cell median grid over a wide (`smoothing_radius_m`)
-    neighborhood before returning it.
-
-    The smoothing step is not optional polish -- without it this grid is
-    dominated by real small-scale building relief (balcony railings, AC
-    units, window frames: all genuinely NOT coplanar with the idealized flat
-    wall, sticking out anywhere from a few cm to over a meter), not
-    reconstruction error. Confirmed real, 2026-09-14 (BACK facade): per-point
-    offset std was ~0.56m with essentially zero correlation to triangulation
-    track length (-0.006, tested from 2 to 10+ views per point) -- ruling out
-    "more views would fix it" per-point noise as the cause. Using those raw
-    per-cell medians directly (as an earlier version of this function did)
-    rendered visibly WAVY window lines across ordinary, structurally sound
-    interior wall regions that had no problem before any correction was
-    applied at all -- confirmed by direct before/after crop comparison.
-    Applying Gaussian smoothing at increasing radii on the same real grid
-    showed the offset signal decay smoothly toward zero with NO plateau
-    (std 0.56 raw -> 0.14 @ 6m -> 0.06 @ 12m -> 0.015 @ 20m -> 0.002 @ 30m) --
-    the complete absence of a floor means there is no broad, low-frequency
-    "this whole wall section is off the plane" signal being thrown away here,
-    only balcony/fixture-scale detail being averaged out, which is exactly
-    the content this correction was never meant to touch in the first place
-    (see `_warp_image_smooth`'s own docstring: canvas content is meant to
-    read as the flat wall, not each protrusion warped forward by its own
-    depth). `smoothing_radius_m=12.0` sits past the point where that decay
-    curve has already erased essentially all of the balcony-scale noise
-    (0.56 -> 0.06, ~9x) while still being narrow enough to respond to an
-    actual broad deviation if a future facade's reconstruction has a real one.
-
-    `max_offset_m` drops points before binning that are nowhere near the
-    plane at all (sky/terrain incidentally triangulated alongside the real
-    facade -- the same contamination `_filter_points_near_plane` already
-    guards against when fitting the plane itself, reused here with the same
-    default distance `_detect_off_wall_images` uses for its own on-wall
-    check) -- otherwise a handful of background points landing in the same
-    2D cell as real wall points could still bias that cell's median.
-
-    A raw cell with fewer than `min_points_per_cell` surviving points does
-    not contribute to the smoothed grid at all (neither numerator nor
-    denominator), and a smoothed cell whose local Gaussian-weighted coverage
-    fraction (`min_coverage_fraction` -- cv2.GaussianBlur's kernel is
-    normalized, so blurring the 0/1 "has data" field directly gives the
-    fraction of nearby mass that has real data, not a raw count) is too thin
-    is left OUT of the final `grid` entirely (not set to 0) -- this is what
-    lets `lookup_offset` fade
-    smoothly back to the untouched flat-plane behavior in regions with no
-    real nearby measurement (e.g. a building corner viewed edge-on, which
-    isn't on this plane at all and has no business getting a "correction"
-    invented for it) instead of extrapolating into territory the grid was
-    never told anything about. `clamp_offset_m` is a final physical sanity
-    bound on top of the smoothing (real measured deviations seen on this
-    project so far have topped out around 0.5-0.6m) -- a defense-in-depth
-    guard, not the primary mechanism, since smoothing alone already keeps
-    typical values far below it."""
-    normal = plane.normal
-    buckets: dict[tuple[int, int], list[float]] = {}
-    for point in reconstruction.points3D.values():
-        vec = point.xyz - plane.origin
-        offset = float(np.dot(vec, normal))
-        if abs(offset) > max_offset_m:
-            continue
-        u_m = float(np.dot(vec, plane.e_u))
-        v_m = float(np.dot(vec, plane.e_v))
-        canvas_x = u_m * plane.px_per_m
-        canvas_y = v_m * plane.px_per_m
-        cell = (int(np.floor(canvas_x / cell_px)), int(np.floor(canvas_y / cell_px)))
-        buckets.setdefault(cell, []).append(offset)
-
-    raw_cells = {
-        cell: float(np.median(values))
-        for cell, values in buckets.items()
-        if len(values) >= min_points_per_cell
-    }
-    if not raw_cells:
-        return PlaneOffsetGrid(cell_px=cell_px, grid={})
-
-    xs = [c[0] for c in raw_cells]
-    ys = [c[1] for c in raw_cells]
-    x_min, x_max = min(xs), max(xs)
-    y_min, y_max = min(ys), max(ys)
-    value_arr = np.zeros((y_max - y_min + 1, x_max - x_min + 1), dtype=np.float32)
-    weight_arr = np.zeros_like(value_arr)
-    for (cx, cy), v in raw_cells.items():
-        value_arr[cy - y_min, cx - x_min] = v
-        weight_arr[cy - y_min, cx - x_min] = 1.0
-
-    sigma_cells = max(1e-3, (smoothing_radius_m * plane.px_per_m) / cell_px)
-    ksize = int(sigma_cells * 6) | 1  # odd, ~6 sigma so the kernel isn't visibly truncated
-    smoothed_num = cv2.GaussianBlur(value_arr * weight_arr, (ksize, ksize), sigma_cells)
-    smoothed_den = cv2.GaussianBlur(weight_arr, (ksize, ksize), sigma_cells)
-
-    grid: dict[tuple[int, int], float] = {}
-    trusted = smoothed_den >= min_coverage_fraction
-    ys_idx, xs_idx = np.where(trusted)
-    for row, col in zip(ys_idx, xs_idx):
-        value = float(smoothed_num[row, col] / smoothed_den[row, col])
-        value = float(np.clip(value, -clamp_offset_m, clamp_offset_m))
-        grid[(col + x_min, row + y_min)] = value
-
-    return PlaneOffsetGrid(cell_px=cell_px, grid=grid)
-
-
-def lookup_offset(offset_grid: PlaneOffsetGrid, canvas_x: float, canvas_y: float) -> float:
-    """Bilinear interpolation of the plane-offset grid at a canvas-pixel
-    location, TRUST-WEIGHTED so a grid cell with no real measurement (absent
-    from `offset_grid.grid`) contributes zero weight instead of a guessed
-    value -- confirmed real, 2026-09 (BACK facade): an earlier version that
-    filled gaps via nearest-neighbor ring averaging invented plausible-but-
-    arbitrary offsets in genuinely off-plane regions (a building corner
-    viewed edge-on), and those guesses differed inconsistently between
-    neighboring source images, producing a visible zigzag seam that wasn't
-    there before any correction was applied at all. Renormalizing over only
-    the corners that DO have data makes the correction fade smoothly to 0
-    (= the original flat-plane result) as a query point moves away from real
-    measurements, rather than extrapolating into territory the grid was
-    never told anything about. Cell size is `offset_grid.cell_px`; the 4
-    cell CENTERS surrounding (canvas_x, canvas_y) are the interpolation
-    corners."""
-    cell_px = offset_grid.cell_px
-    gx = canvas_x / cell_px - 0.5
-    gy = canvas_y / cell_px - 0.5
-    cx0, cy0 = int(np.floor(gx)), int(np.floor(gy))
-    fx, fy = gx - cx0, gy - cy0
-
-    total_weight = 0.0
-    total_value = 0.0
-    for dx, dy, w in (
-        (0, 0, (1 - fx) * (1 - fy)),
-        (1, 0, fx * (1 - fy)),
-        (0, 1, (1 - fx) * fy),
-        (1, 1, fx * fy),
-    ):
-        value = offset_grid.grid.get((cx0 + dx, cy0 + dy))
-        if value is None:
-            continue
-        total_weight += w
-        total_value += w * value
-
-    if total_weight < 1e-6:
-        return 0.0
-    return total_value / total_weight
-
-
-def _build_trust_mask(
-    img: "pycolmap.Image",
-    reconstruction: pycolmap.Reconstruction,
-    plane: FacadePlane,
-    src_w: int,
-    src_h: int,
-    cell_px: int = 200,
-    min_points_per_cell: int = 3,
-    distrust_offset_m: float = 3.0,
-) -> np.ndarray:
-    """Per-SOURCE-image mask (src_h, src_w), 255 = trusted, 0 = distrusted --
-    NOT a second 3D plane, but a cheap, well-scoped proxy for the same idea:
-    stop a source image's genuinely off-plane content (a building corner
-    viewed edge-on, sky/terrain past the roofline) from ever COMPETING for
-    canvas ownership against a same-region image that actually shows the
-    flat wall there, without needing dense per-pixel depth (not available in
-    this SIFT-sparse pipeline) or a second explicit plane fit.
-
-    Confirmed real, 2026-09 (BACK facade): the drone's corner-orbit pass
-    produced NINE consecutive images (DJI_0048-0056) that each mix real
-    on-wall content with varying amounts of corner/side-wall content in the
-    SAME frame (on-wall vs far-off-plane 2D-3D point fraction ranged
-    continuously from 0.10 to 0.82 across them, no clean few-outliers split)
-    -- confirmed via direct visual inspection that whichever of these images
-    the seam-selection graph-cut happened to pick as owner for a given canvas
-    region determined whether that region rendered flat (good) or distorted/
-    "3D-looking" (bad), alternating floor to floor down the corner column.
-    Excluding whole images (the DJI_0089/0131 rotation-outlier approach) is
-    unsafe here since ALL nine images have SOME real, needed on-wall content
-    -- only each one's own off-plane REGION should be devalued.
-
-    Bins this image's own 2D-3D correspondences (img.points2D, the same SfM
-    data _detect_off_wall_images/build_plane_offset_grid already use) into a
-    coarse SOURCE-PIXEL grid and marks a cell distrusted only when it has
-    enough points (`min_points_per_cell`) AND their median |offset| from the
-    plane exceeds `distrust_offset_m` (same 3.0m convention used elsewhere
-    in this file for "clearly not on this wall"). A cell with too few points
-    to judge defaults to TRUSTED -- sparse SIFT coverage is naturally uneven,
-    and treating "no evidence" as "guilty" would erase large innocent
-    regions purely for lacking feature matches, not for any actual off-plane
-    signal.
-
-    The one-cell erosion of the trusted (255) region below (equivalently, a
-    one-cell dilation of the distrusted region) exists because a cell
-    immediately next to a confidently-distrusted cell can itself have too
-    FEW points to individually clear `min_points_per_cell` -- confirmed real,
-    2026-09 (BACK facade, the building's OTHER/right-side corner-orbit
-    images, e.g. DJI_0164): its sky/background region has visibly fewer SIFT
-    matches than the left-corner images this function was first validated
-    against, so several of its own off-plane cells landed just under
-    `min_points_per_cell` and defaulted to trusted, leaving a thin sliver of
-    untrusted corner content still eligible for seam ownership right at the
-    edge of an otherwise-correctly-distrusted region -- visible as a jagged,
-    flickering canvas seam alternating between several source images down
-    that corner column, not the same ghosting artifact the left corner had
-    (already fixed) but the same root cause. A sparse cell bordering a
-    confidently-distrusted one is overwhelmingly more likely to be more of
-    the same off-plane content than genuinely-independent flat wall, so
-    treating it as distrusted too is the safer assumption right at that
-    boundary -- one cell (200px in source space) is a deliberately small
-    margin so this doesn't eat into unrelated, genuinely-trusted interior
-    regions."""
-    normal = plane.normal
-    buckets: dict[tuple[int, int], list[float]] = {}
-    for p in img.points2D:
-        if not p.has_point3D() or p.point3D_id not in reconstruction.points3D:
-            continue
-        point3d = reconstruction.points3D[p.point3D_id]
-        offset = float(np.dot(point3d.xyz - plane.origin, normal))
-        px, py = p.xy
-        cell = (int(px // cell_px), int(py // cell_px))
-        buckets.setdefault(cell, []).append(offset)
-
-    n_cols = int(np.ceil(src_w / cell_px)) + 1
-    n_rows = int(np.ceil(src_h / cell_px)) + 1
-    trust_small = np.full((n_rows, n_cols), 255, dtype=np.uint8)
-    for (cx, cy), offsets in buckets.items():
-        if len(offsets) < min_points_per_cell:
-            continue
-        if not (0 <= cy < n_rows and 0 <= cx < n_cols):
-            continue
-        if float(np.median(np.abs(offsets))) > distrust_offset_m:
-            trust_small[cy, cx] = 0
-
-    trust_small = cv2.erode(trust_small, np.ones((3, 3), dtype=np.uint8))
-    return cv2.resize(trust_small, (src_w, src_h), interpolation=cv2.INTER_NEAREST)
-
-
-def _warp_image_smooth(
-    raw: np.ndarray,
-    K: np.ndarray,
-    R: np.ndarray,
-    t: np.ndarray,
-    plane: FacadePlane,
-    offset_grid: PlaneOffsetGrid,
-    roi: tuple[int, int, int, int],  # (x0, y0, x1, y1) in full-canvas pixel coords
-    sample_step_px: int = 24,
-    src_trust_mask: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Per-pixel remap warp of one source image into its canvas ROI, using a
-    LOCALLY plane-offset-corrected world point at every sampled canvas
-    location instead of one constant flat-plane homography for the whole
-    image -- world_point(canvas_x, canvas_y) = plane.origin + u_m*e_u +
-    v_m*e_v + lookup_offset(...)*normal, projected into this camera via
-    K/R/t. Where `offset_grid` has no data nearby, lookup_offset returns 0
-    and this reduces to exactly the same point the flat-plane homography
-    (`_camera_to_facade_homography`) would have used.
-
-    Builds the correspondence only on a COARSE `sample_step_px` grid (not
-    once per output pixel -- that would mean one K@(R@X+t) projection per
-    pixel, prohibitively slow) and bilinearly upsamples via cv2.resize to a
-    dense per-pixel map before a single cv2.remap() call. This is
-    deliberately NOT a piecewise hard-paste of per-cell homographies (an
-    earlier, abandoned attempt at 200px and then 64px cells): a hard cell
-    boundary is a real discontinuity in the warp itself and produced a
-    visible torn seam / jagged staircase at the wall/roofline boundary. A
-    dense, smoothly-interpolated remap has no such boundary anywhere by
-    construction, since every output pixel gets its own smoothly-blended
-    correction instead of inheriting one whole cell's single value.
-
-    `src_trust_mask` (see _build_trust_mask), if given, is used as this
-    image's valid-pixel mask INSTEAD of the default all-255 mask -- so a
-    region this specific image's own SfM points flag as off-plane never
-    reaches the seam/blend step as this image's content, without touching
-    `warped_img` at all (other images can still legitimately win that same
-    canvas region if their own content there is trustworthy)."""
-    x0, y0, x1, y1 = roi
-    local_w, local_h = x1 - x0, y1 - y0
-    src_h, src_w = raw.shape[:2]
-
-    n_cols = max(2, int(np.ceil(local_w / sample_step_px)) + 1)
-    n_rows = max(2, int(np.ceil(local_h / sample_step_px)) + 1)
-    xs = np.linspace(x0, x1 - 1, n_cols)
-    ys = np.linspace(y0, y1 - 1, n_rows)
-
-    map_x_coarse = np.zeros((n_rows, n_cols), dtype=np.float32)
-    map_y_coarse = np.zeros((n_rows, n_cols), dtype=np.float32)
-    Rt = R @ plane.origin + t
-    R_eu = R @ plane.e_u
-    R_ev = R @ plane.e_v
-    R_normal = R @ plane.normal
-    for i, canvas_y in enumerate(ys):
-        for j, canvas_x in enumerate(xs):
-            u_m = canvas_x / plane.px_per_m
-            v_m = canvas_y / plane.px_per_m
-            offset_m = lookup_offset(offset_grid, canvas_x, canvas_y)
-            cam_point = Rt + u_m * R_eu + v_m * R_ev + offset_m * R_normal
-            src_h_coord = K @ cam_point
-            if src_h_coord[2] <= 1e-9:
-                map_x_coarse[i, j] = -1.0
-                map_y_coarse[i, j] = -1.0
-            else:
-                map_x_coarse[i, j] = src_h_coord[0] / src_h_coord[2]
-                map_y_coarse[i, j] = src_h_coord[1] / src_h_coord[2]
-
-    map_x = cv2.resize(map_x_coarse, (local_w, local_h), interpolation=cv2.INTER_LINEAR)
-    map_y = cv2.resize(map_y_coarse, (local_w, local_h), interpolation=cv2.INTER_LINEAR)
-
-    warped_img = cv2.remap(
-        raw, map_x, map_y, interpolation=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT, borderValue=0,
-    )
-    src_mask = src_trust_mask if src_trust_mask is not None else np.full((src_h, src_w), 255, dtype=np.uint8)
-    warped_mask = cv2.remap(
-        src_mask, map_x, map_y, interpolation=cv2.INTER_NEAREST,
-        borderMode=cv2.BORDER_CONSTANT, borderValue=0,
-    )
-    return warped_img, warped_mask
-
-
 def rectify_images(
     reconstruction: pycolmap.Reconstruction,
     plane: FacadePlane,
@@ -798,16 +448,6 @@ def rectify_images(
     canvas_w = max(1, int(round(plane.width_m * plane.px_per_m)))
     canvas_h = max(1, int(round(plane.height_m * plane.px_per_m)))
 
-    # Built once from the reconstruction's own triangulated points, reused for
-    # every image below -- see build_plane_offset_grid's docstring for why a
-    # cell needs `min_points_per_cell` real near-plane points to be trusted at
-    # all (an empty/sparse grid makes every lookup_offset() call return 0.0,
-    # which makes _warp_image_smooth reduce to exactly the old flat-plane
-    # warpPerspective result -- this is a strict generalization, not a
-    # behavior change, wherever there isn't enough real 3D data to correct
-    # anything).
-    offset_grid = build_plane_offset_grid(reconstruction, plane)
-
     warped: dict[str, WarpedImage] = {}
     source_transforms: dict[str, SourceTransform] = {}
     for img in reconstruction.images.values():
@@ -828,7 +468,6 @@ def rectify_images(
         H = _camera_to_facade_homography(K, R, t, plane)
 
         src_h, src_w = raw.shape[:2]
-        trust_mask = _build_trust_mask(img, reconstruction, plane, src_w, src_h)
         corners_img = np.array(
             [[0, 0], [src_w, 0], [src_w, src_h], [0, src_h]], dtype=np.float64
         ).reshape(-1, 1, 2)
@@ -840,15 +479,12 @@ def rectify_images(
         if x1 <= x0 or y1 <= y0:
             continue  # this image's footprint doesn't actually land on the canvas
         local_w, local_h = x1 - x0, y1 - y0
+        local_shift = np.array([[1, 0, -x0], [0, 1, -y0], [0, 0, 1]], dtype=np.float64)
+        H_local = local_shift @ H
 
-        # Plane-offset-corrected smooth remap (not warpPerspective(H_local))
-        # for the actual pixel content -- H itself is still what's stored
-        # below in SourceTransform, since crack/pipeline.py's later inversion
-        # back to source-image pixels is out of scope for this pass (visual
-        # mosaic quality only).
-        warped_img, warped_mask = _warp_image_smooth(
-            raw, K, R, t, plane, offset_grid, (x0, y0, x1, y1), src_trust_mask=trust_mask,
-        )
+        warped_img = cv2.warpPerspective(raw, H_local, (local_w, local_h), flags=cv2.INTER_LINEAR)
+        src_mask = np.full((src_h, src_w), 255, dtype=np.uint8)
+        warped_mask = cv2.warpPerspective(src_mask, H_local, (local_w, local_h), flags=cv2.INTER_NEAREST)
 
         warped[image_id] = WarpedImage(image=warped_img, mask=warped_mask, corner=(x0, y0), size=(local_w, local_h))
         source_transforms[image_id] = SourceTransform(H=H, width=src_w, height=src_h)
