@@ -268,6 +268,7 @@ def _run_colmap_mapping_only(
     catalog: list[ImageMetadata],
     utm_epsg: int | None,
     segment: FacadeSegment | None,
+    matcher: TimeoutLoFTRMatcher | None = None,
 ):
     """COLMAP mapping + UTM alignment + facade-plane fit, WITHOUT
     rectify_and_blend (no seam-finding/blending -- the expensive part). Used
@@ -288,6 +289,7 @@ def _run_colmap_mapping_only(
     colmap_result = run_colmap(
         facade_id, colmap_images_dir, colmap_filenames,
         workspace_dir=workspace_dir, logger=logger,
+        catalog=catalog, cfg=cfg, matcher=matcher,
     )
     reconstruction = None
     plane = None
@@ -363,6 +365,7 @@ def _run_colmap_and_rectify_once(
     catalog: list[ImageMetadata],
     utm_epsg: int | None,
     segment: FacadeSegment | None,
+    matcher: TimeoutLoFTRMatcher | None = None,
 ):
     """One COLMAP-mapping + plane-rectification attempt for the given image
     list. Returns (colmap_result, reconstruction, plane, rect_result) -- any
@@ -373,6 +376,7 @@ def _run_colmap_and_rectify_once(
     pycolmap itself isn't installed (caller's concern, same as before)."""
     colmap_result, reconstruction, plane = _run_colmap_mapping_only(
         facade_id, colmap_images_dir, colmap_filenames, workspace_dir, cfg, logger, by_id, catalog, utm_epsg, segment,
+        matcher=matcher,
     )
     rect_result = None
     if reconstruction is not None and plane is not None:
@@ -439,6 +443,7 @@ def _run_facade_pipeline(
                 stage1_colmap_result, stage1_reconstruction, stage1_plane = _run_colmap_mapping_only(
                     facade_id, colmap_images_dir, colmap_filenames,
                     output_dir / "colmap_stage1", cfg, logger, by_id, catalog, utm_epsg, segment,
+                    matcher=matcher,
                 )
                 log_event(
                     logger, "info", "1단계 COLMAP(필터용) 완료",
@@ -667,6 +672,7 @@ def _run_facade_pipeline(
                 colmap_result, reconstruction, plane, rect_result = _run_colmap_and_rectify_once(
                     facade_id, colmap_images_dir, colmap_filenames,
                     output_dir / "colmap", cfg, logger, by_id, catalog, utm_epsg, segment,
+                    matcher=matcher,
                 )
                 log_event(
                     logger, "info", "2단계 COLMAP(최종) 완료",

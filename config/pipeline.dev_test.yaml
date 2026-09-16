@@ -59,6 +59,7 @@ colmap:
   max_drift_px: 10.0
   max_seam_drift_px: 20.0
   max_coverage_gap_ratio: 0.5
+  use_loftr_matching: true  # see config/pipeline.yaml comment -- 2026-09-17 사용자 확정으로 기본 활성화
 
 tiling:
   tile_width: 1024

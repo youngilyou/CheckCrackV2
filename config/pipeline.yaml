@@ -72,6 +72,7 @@ colmap:
   max_drift_px: 10.0
   max_seam_drift_px: 20.0  # single worst seam — a facade can pass the *mean* drift check while one bad seam still produces a visible wavy/misaligned line
   max_coverage_gap_ratio: 0.5
+  use_loftr_matching: true  # SIFT(match_exhaustive)를 LoFTR로 대체 (src/matching/loftr_colmap_bridge.py) -- 반복 패턴(창/환기구) 오정합 근본 해결책, 2026-09-16 구현. BACK facade(121장, 벽면-미노출 68장 필터 후) 실측 검증: LightGlue+DISK 대비 포인트 수/정확도 모두 우수, SIFT와 시각적으로 동급 이상 -- 2026-09-17 사용자 확정으로 기본 활성화.
 
 tiling:
   tile_width: 1024

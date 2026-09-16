@@ -84,13 +84,30 @@ def run_colmap(
     image_filenames: list[str],
     workspace_dir: str | Path,
     logger=None,
+    catalog: list | None = None,
+    cfg=None,
+    matcher=None,
 ) -> ColmapResult:
-    """Run SIFT extraction -> exhaustive matching -> incremental SfM for one
-    facade's image set. `image_filenames` are names within `images_dir`
-    (matches `pycolmap.extract_features`' `image_names` filter — this lets a
-    facade's subset of a shared capture folder be reconstructed without
-    copying files). Requires `pycolmap` (pip install pycolmap); raises
-    ImportError if it's missing rather than faking a result.
+    """Run feature extraction -> matching -> incremental SfM for one facade's
+    image set. `image_filenames` are names within `images_dir` (matches
+    `pycolmap.extract_features`' `image_names` filter — this lets a facade's
+    subset of a shared capture folder be reconstructed without copying
+    files). Requires `pycolmap` (pip install pycolmap); raises ImportError if
+    it's missing rather than faking a result.
+
+    Matching stage: SIFT `pycolmap.match_exhaustive` by default. If `catalog`
+    (the facade's `list[ImageMetadata]`, needed for pair selection + GPS),
+    `cfg` (needed for `cfg.colmap.use_loftr_matching` + LoFTR/pair-selection
+    settings) and `matcher` (a caller-owned `TimeoutLoFTRMatcher`) are all
+    given AND `cfg.colmap.use_loftr_matching` is truthy, matching is done via
+    `src/matching/loftr_colmap_bridge.py` instead — LoFTR is far more robust
+    to the repetitive facade patterns (round vents/holes) that confuse SIFT
+    into triangulating a spurious, visibly duplicated 3D point (root-caused
+    2026-09-16, BACK facade). This is a general, config-driven switch: it
+    applies identically to every facade's COLMAP call, never to one image ID
+    or location specifically. Any caller that omits `catalog`/`cfg`/`matcher`
+    (e.g. `extend_colmap_with_fixed_poses`'s own internal use, or exploratory
+    scripts) gets the original SIFT behavior unchanged.
 
     `logger`, if given, gets phase-boundary events (extraction/matching/
     mapping start) plus a per-image event during incremental mapping via
@@ -134,9 +151,23 @@ def run_colmap(
         extraction_options=extraction_options,
     )
 
-    if logger:
-        log_event(logger, "info", "CM 특징점 매칭 시작", stage="COLMAP_MATCH", facade_id=facade_id)
-    pycolmap.match_exhaustive(database_path=database_path)
+    use_loftr = (
+        catalog is not None and cfg is not None and matcher is not None
+        and "colmap" in cfg and "use_loftr_matching" in cfg.colmap and bool(cfg.colmap.use_loftr_matching)
+    )
+    if use_loftr:
+        if logger:
+            log_event(logger, "info", "CM 매칭 시작 (LoFTR)", stage="COLMAP_MATCH", facade_id=facade_id)
+        from src.matching.loftr_colmap_bridge import match_database_with_loftr
+
+        match_database_with_loftr(
+            database_path, images_dir, image_filenames, catalog, cfg, matcher,
+            workspace_dir=workspace_dir, logger=logger,
+        )
+    else:
+        if logger:
+            log_event(logger, "info", "CM 특징점 매칭 시작 (SIFT)", stage="COLMAP_MATCH", facade_id=facade_id)
+        pycolmap.match_exhaustive(database_path=database_path)
 
     if logger:
         log_event(logger, "info", "CM SfM 재구성 시작", stage="COLMAP_MAPPING", facade_id=facade_id)
@@ -183,3 +214,173 @@ def run_colmap(
         mean_reprojection_error_px=mean_error,
         sparse_dir=str(best_dir),
     )
+
+
+def extend_colmap_with_fixed_poses(
+    facade_id: str,
+    images_dir: str | Path,
+    old_reconstruction,
+    new_filenames: list[str],
+    workspace_dir: str | Path,
+    logger=None,
+):
+    """Register `new_filenames` into `old_reconstruction` WITHOUT letting
+    bundle adjustment touch any already-known pose except the few genuinely
+    close neighbors of the new images -- the general fix for the exclusion-
+    rescue side effect confirmed real 2026-09-16 (see
+    geometry/exclusion_safety.py's docstring and memory/
+    colmap_global_exclusion_risk.md): re-running a full fresh COLMAP
+    reconstruction with images added back (what this function replaces)
+    moved a completely unrelated image (DJI_0118, ~0.6m) because
+    incremental_mapping's periodic GLOBAL bundle adjustment re-optimizes
+    every registered image's pose, not just the ones connected to whatever
+    changed. This function never calls global BA -- only
+    `IncrementalMapper.adjust_local_bundle`, which (per pycolmap's own
+    docs) "only images connected to the reference image are optimized" --
+    validated on BACK: of 68 old images, only 8-10 genuinely nearby ones
+    moved (under 1m, mostly under 10cm) while the rest (including the
+    unrelated DJI_0118) stayed at literally sub-millimeter precision.
+
+    `old_reconstruction` MUST already be aligned to the target real-world
+    frame (align_reconstruction_to_utm) -- this function doesn't touch scale/
+    gauge at all, the new images simply inherit whatever gauge the old
+    reconstruction's own points are already in via ordinary PnP registration
+    against them. It is read for poses only; not mutated.
+
+    Returns (ColmapResult, pycolmap.Reconstruction | None) -- the
+    Reconstruction is the ACTUAL LIVE OBJECT this function built and
+    registered images into (already in the caller's target gauge, ready for
+    facade_plane_from_reconstruction/rectify_images). Confirmed real,
+    2026-09-16: reloading a `.write()`'d copy of this specific kind of
+    hand-assembled reconstruction from disk was observed to be pathologically
+    slow and memory-hungry (tens of GB, root cause not identified -- unlike
+    every OTHER reconstruction this project loads from disk all day, which
+    is fast) even though the saved data itself checked out completely normal
+    (no NaN/outlier points, sane counts). This function still writes a copy
+    to `workspace_dir/sparse_extended` for provenance (#39), but the CALLER
+    MUST use the returned in-memory Reconstruction directly and must NOT
+    reload that saved copy -- until the reload issue is root-caused, treat
+    that file as inspection-only, not a data source."""
+    import pycolmap
+
+    from src.common.logging import log_event
+
+    workspace_dir = Path(workspace_dir)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    database_path = workspace_dir / "database.db"
+    if database_path.exists():
+        database_path.unlink()
+
+    old_filenames = sorted(img.name for img in old_reconstruction.images.values())
+    all_filenames = sorted(set(old_filenames) | set(new_filenames))
+
+    if logger:
+        log_event(
+            logger, "info", "CM 구조 후보 특징점 추출 시작 (포즈 고정 확장)",
+            stage="COLMAP_EXTEND_EXTRACT", facade_id=facade_id,
+            old_count=len(old_filenames), new_count=len(new_filenames),
+        )
+    extraction_options = pycolmap.FeatureExtractionOptions(num_threads=4, max_image_size=3200)
+    pycolmap.extract_features(
+        database_path=database_path, image_path=images_dir,
+        image_names=all_filenames, extraction_options=extraction_options,
+    )
+
+    if logger:
+        log_event(logger, "info", "CM 구조 후보 매칭 시작", stage="COLMAP_EXTEND_MATCH", facade_id=facade_id)
+    pycolmap.match_exhaustive(database_path=database_path)
+
+    db = pycolmap.Database.open(database_path)
+    cache = pycolmap.DatabaseCache.create(db, pycolmap.DatabaseCacheOptions())
+
+    # Assemble a reconstruction whose cameras/rigs/frames/images are all
+    # consistently keyed to THIS database's own ID scheme from the start --
+    # avoids transcribe_image_ids_to_database's frame/image ID mismatch
+    # (confirmed real: it remaps image IDs but not frame IDs, producing
+    # frame-ID collisions between old and new images sharing the same
+    # numeric ID under two different numbering schemes).
+    recon = pycolmap.Reconstruction()
+    for cam in cache.cameras.values():
+        recon.add_camera_with_trivial_rig(cam)
+    for frame in cache.frames.values():
+        recon.add_frame(frame)
+    for image in cache.images.values():
+        recon.add_image(image)
+
+    old_poses_by_name = {img.name: img.cam_from_world() for img in old_reconstruction.images.values()}
+    n_applied = 0
+    for image in recon.images.values():
+        pose = old_poses_by_name.get(image.name)
+        if pose is None:
+            continue
+        recon.frame(image.frame_id).set_cam_from_world(image.camera_id, pose)
+        recon.register_frame(image.frame_id)
+        n_applied += 1
+    if logger:
+        log_event(
+            logger, "info", "기존 포즈 고정 적용 완료", stage="COLMAP_EXTEND_POSES_FIXED",
+            facade_id=facade_id, applied=n_applied, expected=len(old_filenames),
+        )
+
+    mapper_options = pycolmap.IncrementalMapperOptions()
+    ba_options = pycolmap.BundleAdjustmentOptions()
+    tri_options = pycolmap.IncrementalTriangulatorOptions()
+    mapper = pycolmap.IncrementalMapper(cache)
+    mapper.begin_reconstruction(recon)
+
+    # Triangulate the old (already-posed, not-yet-triangulated-in-THIS-
+    # database) images first -- register_next_image needs existing 3D
+    # points to solve PnP against for the new images, and this fresh
+    # reconstruction starts with zero points regardless of the old images'
+    # poses being known.
+    for image in recon.images.values():
+        if image.name in old_poses_by_name:
+            mapper.triangulate_image(tri_options, image.image_id)
+
+    new_name_set = set(new_filenames)
+    registered_new: list[str] = []
+    for image in sorted(recon.images.values(), key=lambda im: im.name):
+        if image.name not in new_name_set:
+            continue
+        ok = mapper.register_next_image(mapper_options, image.image_id)
+        if logger:
+            log_event(
+                logger, "info", "구조 후보 등록 시도",
+                stage="COLMAP_EXTEND_REGISTER", facade_id=facade_id,
+                image_name=image.name, registered=ok,
+            )
+        if not ok:
+            continue
+        mapper.triangulate_image(tri_options, image.image_id)
+        mapper.adjust_local_bundle(mapper_options, ba_options, tri_options, image.image_id, set())
+        registered_new.append(image.name)
+
+    mapper.end_reconstruction(discard=False)
+
+    out_dir = workspace_dir / "sparse_extended"
+    out_dir.mkdir(exist_ok=True)
+    try:
+        recon.write(out_dir)  # provenance only (#39) -- see docstring: do not reload this
+    except Exception as exc:
+        if logger:
+            log_event(logger, "warning", "확장 재구성 저장 실패 (무시하고 계속)", facade_id=facade_id, error=str(exc))
+
+    errors = [p.error for p in recon.points3D.values() if p.has_error]
+    mean_error = sum(errors) / len(errors) if errors else None
+
+    result = ColmapResult(
+        facade_id=facade_id,
+        num_images_requested=len(new_filenames),
+        num_images_registered=len(old_filenames) + len(registered_new),
+        registered_image_names=sorted(old_filenames + registered_new),
+        num_points3d=recon.num_points3D(),
+        mean_reprojection_error_px=mean_error,
+        sparse_dir=str(out_dir),
+    )
+    if logger:
+        log_event(
+            logger, "info", "구조 후보 포즈 고정 확장 완료", stage="COLMAP_EXTEND_DONE",
+            facade_id=facade_id, requested=len(new_filenames), registered=len(registered_new),
+            failed=sorted(new_name_set - set(registered_new)),
+        )
+    return result, recon

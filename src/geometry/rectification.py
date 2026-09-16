@@ -135,7 +135,7 @@ def _principal_direction(points_3d: np.ndarray, k: float = 3.0, max_iters: int =
     axis = None
     for _ in range(max_iters):
         mean = subset.mean(axis=0)
-        _, _, vt = np.linalg.svd(subset - mean)
+        _, _, vt = np.linalg.svd(subset - mean, full_matrices=False)
         axis = vt[0]
         proj = (points_3d - mean) @ axis
         lo, hi = _robust_range(proj, k=k)
@@ -265,7 +265,15 @@ def facade_plane_from_reconstruction(
         raise ValueError(f"too few triangulated points ({points.shape[0]}) to fit a facade plane")
 
     centroid = points.mean(axis=0)
-    _, _, vt = np.linalg.svd(points - centroid)
+    # full_matrices=False: default True computes a full (N,N) U matrix even
+    # though only Vt (3x3) is ever used below -- for a dense point cloud
+    # (confirmed real, 2026-09-17: LoFTR's semi-dense matching produced
+    # 537k facade points on the same 121-image set SIFT reconstructs with
+    # 79k) that means numpy tries to allocate an (N,N) array (2.1 TiB for
+    # N=537303) and crashes outright. The economy SVD gives the identical
+    # Vt/singular-value result for this tall-skinny (N,3) input at a
+    # fraction of the cost.
+    _, _, vt = np.linalg.svd(points - centroid, full_matrices=False)
     normal = vt[2]
 
     # Camera-viewing-direction override for the wall-vs-roof decision below
