@@ -415,6 +415,11 @@ def _run_facade_pipeline(
     output_dir = output_dir_override if output_dir_override is not None else output_root / facade_id / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     by_id = {m.image_id: m for m in catalog}
+    # Full, unfiltered catalog/by_id -- kept aside because `catalog`/`by_id` get
+    # reassigned below as off-wall (and formerly rotation-outlier) exclusion
+    # filters them; geometry/exclusion_safety.py's rescue step needs to pull
+    # a rescued image's metadata back from the ORIGINAL set, not the filtered one.
+    full_catalog = list(catalog)
 
     # === 1단계 COLMAP: 전체 이미지, mapping만, 벽면 미노출 이미지 자동 감지/필터링 ===
     stage1_coverage_estimate: float | None = None
@@ -673,6 +678,56 @@ def _run_facade_pipeline(
                     mean_reprojection_error_px=colmap_result.mean_reprojection_error_px,
                 )
                 atomic_write_json(output_dir / f"{facade_id}_colmap_report.json", asdict(colmap_result))
+
+                # 2026-09-16 사용자 확정("범용적이어야 합니다, 한곳에 특화되면 안됨"): off_wall_ids
+                # 제외가 이 facade의 다른 위치(DJI_0076/78/79/80/120류) 포즈 품질을 실제로
+                # 떨어뜨렸는지 검증 -- src/geometry/exclusion_safety.py 참고(위치/회전/투영
+                # 면적/국소 스케일 왜곡 4가지 시도 실패 후 실측으로 확정한 방식: 실세계 공유
+                # 좌표에서의 커버리지 카운트 감소 + 감소 지점 근처 실제 on-wall 포인트 증거
+                # 기반 구조 후보 선정). off_wall_ids가 비어있으면(제외 자체가 없었으면) 건너뜀.
+                if off_wall_ids and stage1_reconstruction is not None and stage1_plane is not None and reconstruction is not None:
+                    try:
+                        from src.geometry.exclusion_safety import check_exclusion_safety
+
+                        safety = check_exclusion_safety(
+                            stage1_reconstruction, reconstruction, plane, off_wall_ids,
+                        )
+                        log_event(
+                            logger, "info", "제외 안전성 검증 완료",
+                            stage="EXCLUSION_SAFETY_CHECK", facade_id=facade_id,
+                            flagged_point_count=int(safety.flagged_mask.sum()),
+                            total_point_count=len(safety.flagged_mask),
+                            rescued_count=len(safety.rescued_ids),
+                        )
+                        if safety.needs_rerun:
+                            full_by_id = {m.image_id: m for m in full_catalog}
+                            rescued_filenames = [
+                                Path(full_by_id[iid].file_path).name
+                                for iid in safety.rescued_ids if iid in full_by_id
+                            ]
+                            log_event(
+                                logger, "warning",
+                                "벽면 미노출 제외가 다른 위치의 커버리지 중복도를 떨어뜨림 -- "
+                                "구조 후보 재포함 후 2단계 COLMAP 재실행",
+                                stage="EXCLUSION_SAFETY_RERUN", facade_id=facade_id,
+                                rescued_image_ids=sorted(safety.rescued_ids),
+                            )
+                            t_rerun = time.time()
+                            rerun_filenames = sorted(set(colmap_filenames) | set(rescued_filenames))
+                            colmap_result, reconstruction, plane, rect_result = _run_colmap_and_rectify_once(
+                                facade_id, colmap_images_dir, rerun_filenames,
+                                output_dir / "colmap_rescued", cfg, logger, full_by_id, full_catalog, utm_epsg, segment,
+                            )
+                            log_event(
+                                logger, "info", "구조 후보 재포함 COLMAP 재실행 완료",
+                                stage="EXCLUSION_SAFETY_RERUN_DONE", facade_id=facade_id,
+                                elapsed_s=round(time.time() - t_rerun, 2),
+                                num_images_requested=colmap_result.num_images_requested,
+                                num_images_registered=colmap_result.num_images_registered,
+                            )
+                            atomic_write_json(output_dir / f"{facade_id}_colmap_report.json", asdict(colmap_result))
+                    except Exception as exc:
+                        log_event(logger, "warning", "제외 안전성 검증 실패 -- 건너뜀", facade_id=facade_id, error=str(exc))
 
                 if rect_result is not None:
                     # 안전장치 (2026-09-12, 사용자 승인): 1단계(필터 전 전체) coverage 추정치보다
