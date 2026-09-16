@@ -700,32 +700,27 @@ def _run_facade_pipeline(
                             rescued_count=len(safety.rescued_ids),
                         )
                         if safety.needs_rerun:
-                            full_by_id = {m.image_id: m for m in full_catalog}
-                            rescued_filenames = [
-                                Path(full_by_id[iid].file_path).name
-                                for iid in safety.rescued_ids if iid in full_by_id
-                            ]
+                            # 2026-09-16 사용자 확정: 자동 재실행 비활성화. 실측으로 확인된 문제 --
+                            # 구조 후보를 재포함해 COLMAP을 다시 돌리는 것 자체가 번들조정 전체를
+                            # 다시 계산시켜, 이번엔 DJI_0120류가 고쳐지는 대신 무관했던 DJI_0118이
+                            # 새로 어긋나는 부작용이 실제로 발생함(V011에서 확인, 재현 가능).
+                            # 즉 "재실행하면 어디가 새로 깨질지"를 사전에 안전하게 보장할 방법이
+                            # 없어서, 자동으로 고치는 대신 감지·기록만 하고 실제 재실행은 사람이
+                            # 검토 후 수동으로 결정하도록 함(회전 이상치 규칙과 동일한 원칙).
+                            atomic_write_json(
+                                output_dir / f"{facade_id}_exclusion_safety_flags.json",
+                                {"rescued_candidate_ids": sorted(safety.rescued_ids),
+                                 "flagged_point_count": int(safety.flagged_mask.sum()),
+                                 "total_point_count": len(safety.flagged_mask)},
+                            )
                             log_event(
                                 logger, "warning",
                                 "벽면 미노출 제외가 다른 위치의 커버리지 중복도를 떨어뜨림 -- "
-                                "구조 후보 재포함 후 2단계 COLMAP 재실행",
-                                stage="EXCLUSION_SAFETY_RERUN", facade_id=facade_id,
-                                rescued_image_ids=sorted(safety.rescued_ids),
+                                "자동 재실행은 비활성화됨(재실행 자체가 새 부작용을 만들 수 있음 "
+                                "확인됨), 수동 검토 권장",
+                                stage="EXCLUSION_SAFETY_FLAGGED", facade_id=facade_id,
+                                rescue_candidate_ids=sorted(safety.rescued_ids),
                             )
-                            t_rerun = time.time()
-                            rerun_filenames = sorted(set(colmap_filenames) | set(rescued_filenames))
-                            colmap_result, reconstruction, plane, rect_result = _run_colmap_and_rectify_once(
-                                facade_id, colmap_images_dir, rerun_filenames,
-                                output_dir / "colmap_rescued", cfg, logger, full_by_id, full_catalog, utm_epsg, segment,
-                            )
-                            log_event(
-                                logger, "info", "구조 후보 재포함 COLMAP 재실행 완료",
-                                stage="EXCLUSION_SAFETY_RERUN_DONE", facade_id=facade_id,
-                                elapsed_s=round(time.time() - t_rerun, 2),
-                                num_images_requested=colmap_result.num_images_requested,
-                                num_images_registered=colmap_result.num_images_registered,
-                            )
-                            atomic_write_json(output_dir / f"{facade_id}_colmap_report.json", asdict(colmap_result))
                     except Exception as exc:
                         log_event(logger, "warning", "제외 안전성 검증 실패 -- 건너뜀", facade_id=facade_id, error=str(exc))
 
