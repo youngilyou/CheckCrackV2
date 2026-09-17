@@ -59,7 +59,9 @@ public partial class FacadeItemViewModel : ObservableObject
     // 재사용/재업로드하지는 않음, 경로 계산용.
     [ObservableProperty] private string? _remoteZipPath;
 
-    // --- homography-chain stitch (always produced) ---
+    // --- homography-chain stitch (was always produced; since 2026-09-17, skipped
+    // when COLMAP stage-1 already succeeded -- see runner.py's skip_h_chain) ---
+    [ObservableProperty] private bool _hasQualityReport;
     [ObservableProperty] private int _imageCount;
     [ObservableProperty] private double? _coverageRatio;
     [ObservableProperty] private double? _meanInlierRatio;
@@ -140,6 +142,7 @@ public partial class FacadeItemViewModel : ObservableObject
     /// stage by stage.</summary>
     public void ResetForNewRun()
     {
+        HasQualityReport = false;
         ImageCount = 0;
         CoverageRatio = null;
         MeanInlierRatio = null;

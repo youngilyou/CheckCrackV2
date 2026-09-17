@@ -480,7 +480,11 @@
                                         </ItemsControl>
                                     </StackPanel>
 
-                                    <!-- metrics -->
+                                    <!-- metrics: H체인이 실제로 돌았을 때만 표시 (2026-09-17,
+                                         COLMAP 1단계 성공 시 H체인 자체가 생략되므로 이 지표들은
+                                         존재하지 않음, HasQualityReport 없이 보이면 이전 실행의
+                                         낡은 값을 잘못 표시하는 것) -->
+                                    <StackPanel Visibility="{Binding HasQualityReport, Converter={StaticResource TruthyToVisibilityConverter}}">
                                     <TextBlock Text="스티칭 지표 (H 체인)" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
                                     <UniformGrid Columns="4" Margin="0,0,0,20">
                                         <Border Style="{StaticResource CardBorder}" Margin="0,0,8,0">
@@ -509,6 +513,7 @@
                                             </StackPanel>
                                         </Border>
                                     </UniformGrid>
+                                    </StackPanel>
 
                                     <!-- COLMAP section -->
                                     <StackPanel Visibility="{Binding HasColmapReport, Converter={StaticResource TruthyToVisibilityConverter}}">

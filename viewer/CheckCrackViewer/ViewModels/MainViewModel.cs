@@ -2074,23 +2074,12 @@ public partial class MainViewModel : ObservableObject
     {
         if (snap.Quality != null)
         {
+            facade.HasQualityReport = true;
             facade.ImageCount = snap.Quality.ImageCount;
             facade.CoverageRatio = snap.Quality.CoverageRatio;
             facade.MeanInlierRatio = snap.Quality.MeanInlierRatio;
             facade.GlobalDriftScorePx = snap.Quality.GlobalDriftScorePx;
             facade.NeedsColmapFallback = snap.Quality.NeedsColmapFallback;
-
-            // Status/stage label used to come only from replaying the log's
-            // history on every launch (removed — it made old runs flash by
-            // as if happening live). Deriving "완료" straight from the
-            // output files on disk is the actually-correct source of truth
-            // for a facade the app didn't watch complete live.
-            facade.OverallStatus = snap.Quality.NeedsColmapFallback == true && snap.QualityColmap == null
-                ? FacadeOverallStatus.NeedsManualReview
-                : FacadeOverallStatus.Done;
-            facade.CurrentStageLabel = facade.OverallStatus == FacadeOverallStatus.NeedsManualReview
-                ? "검토 필요 (Drift 감지)"
-                : "완료";
         }
         if (snap.Colmap != null)
         {
@@ -2103,6 +2092,23 @@ public partial class MainViewModel : ObservableObject
         {
             facade.HasRectifiedMosaic = true;
             facade.CoverageRatioColmap = snap.QualityColmap.CoverageRatio;
+        }
+
+        // Status/stage label used to come only from replaying the log's history on
+        // every launch (removed — it made old runs flash by as if happening live).
+        // Deriving "완료" straight from the output files on disk is the actually-
+        // correct source of truth for a facade the app didn't watch complete live.
+        // 2026-09-17 확정: 이 판정을 snap.Quality(H체인) 하나에만 의존하면 안 된다 --
+        // COLMAP 1단계가 성공하면 H체인 자체를 생략하므로(_quality_report.json이
+        // 아예 안 만들어짐) H체인 결과만 보던 이전 코드는 COLMAP만으로 정상 완료된
+        // facade를 영원히 "완료"로 못 띄우는 실제 버그였음(2초 주기 RescanFacadeOutputs가
+        // 라이브 경로가 방금 올바르게 세팅한 "완료" 상태까지 되돌릴 수 있어 더 심각).
+        // H체인/COLMAP 둘 중 하나라도 결과가 있으면 완료로 판정한다.
+        if (snap.Quality != null || snap.QualityColmap != null)
+        {
+            var needsReview = snap.Quality?.NeedsColmapFallback == true && snap.QualityColmap == null;
+            facade.OverallStatus = needsReview ? FacadeOverallStatus.NeedsManualReview : FacadeOverallStatus.Done;
+            facade.CurrentStageLabel = needsReview ? "검토 필요 (Drift 감지)" : "완료";
         }
         // 2026-09-13: DisplayCracks (2차 우선, 없으면 1차 fallback) -- 화면/카운트 배지는
         // 이제 2차("구조물 오탐 제외") 결과를 기본으로 보여준다. FacadeSnapshot.DisplayCracks의

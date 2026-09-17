@@ -561,119 +561,147 @@ def _run_facade_pipeline(
                     stage="COLMAP_STAGE1_FAILED", facade_id=facade_id, error=str(exc),
                 )
 
-    t0 = time.time()
-    pairs = select_pairs(catalog, cfg)
-    log_event(
-        logger, "info", "pair graph built",
-        stage="PAIR_GRAPH_BUILT", facade_id=facade_id, pair_count=len(pairs),
-        elapsed_s=round(time.time() - t0, 2),
-    )
-
-    geometry_results: list[GeometryResult] = []
-    t0 = time.time()
-    for i, pair in enumerate(pairs):
-        path_a = by_id[pair.image_a].file_path
-        path_b = by_id[pair.image_b].file_path
-        try:
-            match = matcher.match(path_a, path_b)
-        except MatchTimeoutError as exc:
-            geom = GeometryResult(
-                image_a=pair.image_a, image_b=pair.image_b,
-                status=GeometryFailureCode.MATCH_TIMEOUT.value,
-            )
-            geometry_results.append(geom)
-            log_event(
-                logger, "warning", "pair match timed out, skipping",
-                stage="MATCH_GEOMETRY", facade_id=facade_id,
-                image_a=pair.image_a, image_b=pair.image_b,
-                status=geom.status, progress=f"{i + 1}/{len(pairs)}", error=str(exc),
-            )
-            continue
-
-        if match.num_matches < int(cfg.geometry.min_matches):
-            geom = GeometryResult(
-                image_a=pair.image_a, image_b=pair.image_b,
-                status=GeometryFailureCode.LOW_MATCH.value, num_matches=match.num_matches,
-            )
-        else:
-            geom = estimate_homography(match, inl_th_px=float(cfg.geometry.ransac_reproj_threshold_px))
-            geom = apply_quality_gate(geom, cfg)
-        geometry_results.append(geom)
-
-        log_event(
-            logger, "info", "pair processed",
-            stage="MATCH_GEOMETRY", facade_id=facade_id,
-            image_a=pair.image_a, image_b=pair.image_b,
-            matches=geom.num_matches, inliers=geom.num_inliers,
-            inlier_ratio=round(geom.inlier_ratio, 4),
-            median_reproj_px=(
-                round(geom.median_reprojection_error_px, 3)
-                if geom.median_reprojection_error_px is not None
-                else None
-            ),
-            status=geom.status,
-            progress=f"{i + 1}/{len(pairs)}",
-        )
-    log_event(
-        logger, "info", "matching + geometry complete",
-        stage="GEOMETRY_SOLVED", facade_id=facade_id,
-        ok_count=sum(1 for g in geometry_results if g.status == "OK"),
-        failed_count=sum(1 for g in geometry_results if g.status != "OK"),
-        elapsed_s=round(time.time() - t0, 2),
-    )
-
-    t0 = time.time()
-    needed_ids = {g.image_a for g in geometry_results if g.status == "OK"} | {
-        g.image_b for g in geometry_results if g.status == "OK"
-    }
-    if not needed_ids:
-        log_event(
-            logger, "warning", "facade has no geometry edge passing the quality gate, skipping stitch",
-            stage="FAILED_GEOMETRY", facade_id=facade_id,
-        )
-        return None
-
-    images = {}
-    for image_id in needed_ids:
-        img = imread_unicode(by_id[image_id].file_path, cv2.IMREAD_COLOR)
-        if img is None:
-            log_event(logger, "warning", "failed to read image", image_id=image_id)
-            continue
-        images[image_id] = img
+    # 2026-09-17 확정 (사용자 승인, 실측 검증 완료 -- test_e2e_sift_stage1_loftr_stage2.py:
+    # H체인 없이 SIFT 1단계 -> 오프월 필터 -> LoFTR 2단계만으로 68장 정상 재구성,
+    # coverage 92.3%, 에러 없음): COLMAP 1단계가 성공하면 H체인(전체 쌍 LoFTR 매칭 +
+    # 품질 게이트 + 그래프 스티칭)을 아예 건너뛴다. COLMAP이 모든 facade에서 항상
+    # 도는 필수 단계가 된 이상(2026-09-12 재구조화) H체인의 "품질 게이트 실패시
+    # 폴백" 역할은 이미 없어졌고, 남은 유일한 역할이었던 "2단계에 넘길 이미지 목록
+    # 제공"(기존엔 needed_ids = H체인 품질 게이트 통과 이미지)도 COLMAP 1단계
+    # 자체의 벽면-미노출 판정(catalog, 위에서 이미 필터링됨)으로 그대로 대체된다 --
+    # H체인은 COLMAP 전체 쌍 매칭이라 시간이 오래 걸리는데(1단계 COLMAP보다 오래
+    # 걸리는 경우도 실측 확인됨) 이제 그 결과를 쓰는 곳이 없으므로 계산 자체가
+    # 낭비. COLMAP 1단계가 실패한 경우(아래 skip_h_chain=False)는 H체인이 유일한
+    # 산출물이 되므로 기존 그대로 전체 실행 -- 원래의 폴백 역할은 그대로 유지된다.
+    skip_h_chain = bool(run_colmap_fallback) and stage1_reconstruction is not None and stage1_plane is not None
 
     preview_state = {"prev_path": None}
+    geometry_results: list[GeometryResult] = []
+    result = None
 
-    def _on_preview(canvas, i: int, total: int) -> None:
-        new_path = output_dir / f"{facade_id}_live_preview_{i:03d}.jpg"
-        imwrite_unicode(new_path, canvas, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        prev_path = preview_state["prev_path"]
-        if prev_path is not None and prev_path.exists():
+    if skip_h_chain:
+        images = {}
+        for m in catalog:
+            img = imread_unicode(m.file_path, cv2.IMREAD_COLOR)
+            if img is None:
+                log_event(logger, "warning", "failed to read image", image_id=m.image_id)
+                continue
+            images[m.image_id] = img
+        log_event(
+            logger, "info", "COLMAP 1단계 성공 -- H체인 매칭 생략",
+            stage="H_CHAIN_SKIPPED", facade_id=facade_id, image_count=len(images),
+        )
+    else:
+        t0 = time.time()
+        pairs = select_pairs(catalog, cfg)
+        log_event(
+            logger, "info", "pair graph built",
+            stage="PAIR_GRAPH_BUILT", facade_id=facade_id, pair_count=len(pairs),
+            elapsed_s=round(time.time() - t0, 2),
+        )
+
+        t0 = time.time()
+        for i, pair in enumerate(pairs):
+            path_a = by_id[pair.image_a].file_path
+            path_b = by_id[pair.image_b].file_path
             try:
-                prev_path.unlink()
-            except OSError:
-                pass
-        preview_state["prev_path"] = new_path
+                match = matcher.match(path_a, path_b)
+            except MatchTimeoutError as exc:
+                geom = GeometryResult(
+                    image_a=pair.image_a, image_b=pair.image_b,
+                    status=GeometryFailureCode.MATCH_TIMEOUT.value,
+                )
+                geometry_results.append(geom)
+                log_event(
+                    logger, "warning", "pair match timed out, skipping",
+                    stage="MATCH_GEOMETRY", facade_id=facade_id,
+                    image_a=pair.image_a, image_b=pair.image_b,
+                    status=geom.status, progress=f"{i + 1}/{len(pairs)}", error=str(exc),
+                )
+                continue
+
+            if match.num_matches < int(cfg.geometry.min_matches):
+                geom = GeometryResult(
+                    image_a=pair.image_a, image_b=pair.image_b,
+                    status=GeometryFailureCode.LOW_MATCH.value, num_matches=match.num_matches,
+                )
+            else:
+                geom = estimate_homography(match, inl_th_px=float(cfg.geometry.ransac_reproj_threshold_px))
+                geom = apply_quality_gate(geom, cfg)
+            geometry_results.append(geom)
+
+            log_event(
+                logger, "info", "pair processed",
+                stage="MATCH_GEOMETRY", facade_id=facade_id,
+                image_a=pair.image_a, image_b=pair.image_b,
+                matches=geom.num_matches, inliers=geom.num_inliers,
+                inlier_ratio=round(geom.inlier_ratio, 4),
+                median_reproj_px=(
+                    round(geom.median_reprojection_error_px, 3)
+                    if geom.median_reprojection_error_px is not None
+                    else None
+                ),
+                status=geom.status,
+                progress=f"{i + 1}/{len(pairs)}",
+            )
         log_event(
-            logger, "info", "미리보기 갱신",
-            stage="PREVIEW_UPDATED", facade_id=facade_id,
-            progress=f"{i}/{total}", preview_path=str(new_path),
+            logger, "info", "matching + geometry complete",
+            stage="GEOMETRY_SOLVED", facade_id=facade_id,
+            ok_count=sum(1 for g in geometry_results if g.status == "OK"),
+            failed_count=sum(1 for g in geometry_results if g.status != "OK"),
+            elapsed_s=round(time.time() - t0, 2),
         )
 
-    result = stitch_facade(facade_id, images, geometry_results, cfg, on_preview=_on_preview)
-    log_event(
-        logger, "info", "facade stitched",
-        stage="STITCHED",
-        elapsed_s=round(time.time() - t0, 2), **asdict(result.quality),
-    )
-    if result.quality.needs_colmap_fallback:
-        # 2026-09-12부터 이 값은 더 이상 COLMAP 실행 여부의 게이트가 아니다(2단계
-        # COLMAP은 run_colmap_fallback인 한 항상 실행됨) -- H체인 자체 품질이
-        # 부족했다는 진단 정보로만 남겨둔다.
+        t0 = time.time()
+        needed_ids = {g.image_a for g in geometry_results if g.status == "OK"} | {
+            g.image_b for g in geometry_results if g.status == "OK"
+        }
+        if not needed_ids:
+            log_event(
+                logger, "warning", "facade has no geometry edge passing the quality gate, skipping stitch",
+                stage="FAILED_GEOMETRY", facade_id=facade_id,
+            )
+            return None
+
+        images = {}
+        for image_id in needed_ids:
+            img = imread_unicode(by_id[image_id].file_path, cv2.IMREAD_COLOR)
+            if img is None:
+                log_event(logger, "warning", "failed to read image", image_id=image_id)
+                continue
+            images[image_id] = img
+
+        def _on_preview(canvas, i: int, total: int) -> None:
+            new_path = output_dir / f"{facade_id}_live_preview_{i:03d}.jpg"
+            imwrite_unicode(new_path, canvas, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            prev_path = preview_state["prev_path"]
+            if prev_path is not None and prev_path.exists():
+                try:
+                    prev_path.unlink()
+                except OSError:
+                    pass
+            preview_state["prev_path"] = new_path
+            log_event(
+                logger, "info", "미리보기 갱신",
+                stage="PREVIEW_UPDATED", facade_id=facade_id,
+                progress=f"{i}/{total}", preview_path=str(new_path),
+            )
+
+        result = stitch_facade(facade_id, images, geometry_results, cfg, on_preview=_on_preview)
         log_event(
-            logger, "warning", "H체인 자체로는 품질 기준 미달 (COLMAP 2단계는 별도로 항상 실행됨)",
-            stage="NEEDS_MANUAL_REVIEW", facade_id=facade_id,
-            reasons=result.quality.colmap_fallback_reasons,
+            logger, "info", "facade stitched",
+            stage="STITCHED",
+            elapsed_s=round(time.time() - t0, 2), **asdict(result.quality),
         )
+        if result.quality.needs_colmap_fallback:
+            # 2026-09-12부터 이 값은 더 이상 COLMAP 실행 여부의 게이트가 아니다(2단계
+            # COLMAP은 run_colmap_fallback인 한 항상 실행됨) -- H체인 자체 품질이
+            # 부족했다는 진단 정보로만 남겨둔다.
+            log_event(
+                logger, "warning", "H체인 자체로는 품질 기준 미달 (COLMAP 2단계는 별도로 항상 실행됨)",
+                stage="NEEDS_MANUAL_REVIEW", facade_id=facade_id,
+                reasons=result.quality.colmap_fallback_reasons,
+            )
 
     # === 2단계 COLMAP: 필터링된 이미지로 완전히 새로 실행(mapping+rectify), H체인
     # 품질 판정과 무관하게 항상 실행, 결과는 H체인 결과와 함께 항상 저장 ===
@@ -823,14 +851,20 @@ def _run_facade_pipeline(
                     stage="COLMAP_STAGE2_FAILED", facade_id=facade_id, error=str(exc),
                 )
 
-    if result.analysis_image is not None:
-        imwrite_unicode(output_dir / f"{facade_id}_analysis.tif", result.analysis_image)
-    if result.visual_image is not None:
-        imwrite_unicode(output_dir / f"{facade_id}_visual.tif", result.visual_image)
-    imwrite_unicode(output_dir / f"{facade_id}_observed_mask.tif", result.observed_mask)
+    # H체인이 생략된 경우(skip_h_chain) result는 None -- H체인 전용 산출물
+    # (_analysis.tif/_visual.tif/_observed_mask.tif/_quality_report.json/
+    # source-transform)은 만들 근거 자체가 없으므로 쓰지 않는다. CheckCrackViewer
+    # 쪽에서 이 파일들이 없을 때의 표시를 별도로 점검해야 함 -- 지금까지는 H체인이
+    # 항상 돌아서 한 번도 없었던 적이 없었다.
+    if result is not None:
+        if result.analysis_image is not None:
+            imwrite_unicode(output_dir / f"{facade_id}_analysis.tif", result.analysis_image)
+        if result.visual_image is not None:
+            imwrite_unicode(output_dir / f"{facade_id}_visual.tif", result.visual_image)
+        imwrite_unicode(output_dir / f"{facade_id}_observed_mask.tif", result.observed_mask)
 
-    atomic_write_json(output_dir / f"{facade_id}_quality_report.json", asdict(result.quality))
-    _write_source_transform_artifacts(output_dir, facade_id, "", result)
+        atomic_write_json(output_dir / f"{facade_id}_quality_report.json", asdict(result.quality))
+        _write_source_transform_artifacts(output_dir, facade_id, "", result)
 
     failed_pairs = [_asdict_pair(g) for g in geometry_results if g.status != "OK"]
     atomic_write_json(output_dir / f"{facade_id}_failed_pairs.json", failed_pairs)
