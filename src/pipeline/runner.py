@@ -115,9 +115,28 @@ def _detect_off_wall_images(
             best_gap_ratio = ratio
             best_cut_idx = i
 
-    if best_gap_ratio < min_gap_ratio or best_cut_idx == 0:
-        return set()
-    return {image_id for image_id, _ in sorted_items[:best_cut_idx]}
+    excluded = set()
+    if best_gap_ratio >= min_gap_ratio and best_cut_idx > 0:
+        excluded = {image_id for image_id, _ in sorted_items[:best_cut_idx]}
+
+    # Absolute floor, independent of the relative-gap search above: an image
+    # with exactly 0 on-wall points needs no ratio reasoning at all -- it is
+    # definitionally not showing the wall. Confirmed real, 2026-09-17 (BACK
+    # facade, LoFTR matching): the relative-gap search alone missed a clean
+    # 29-image cluster of EXACT ZEROS, because LoFTR's much smaller overall
+    # point budget (capped to stay COLMAP-tractable, see
+    # loftr_colmap_bridge.py) turned what used to be a sharp cliff (SIFT:
+    # ~250 vs 775+, a >3x jump) into a smooth 0->419 ramp with no single gap
+    # clearing `min_gap_ratio` anywhere -- every adjacent-rank ratio near the
+    # zeros stayed under threshold (2.0 at best) even though "zero" itself is
+    # an unambiguous signal no ratio should be needed to see. Still respects
+    # `max_exclude_fraction` (a facade whose images are ALL near-zero -- e.g.
+    # a broken reconstruction -- shouldn't lose every image to this rule).
+    zero_ids = {image_id for image_id, count in sorted_items if count == 0}
+    if zero_ids and len(zero_ids) <= max_cut:
+        excluded |= zero_ids
+
+    return excluded
 
 
 def _in_plane_roll_deg(img: "pycolmap.Image", plane) -> float:
@@ -440,10 +459,19 @@ def _run_facade_pipeline(
             colmap_filenames = [Path(m.file_path).name for m in catalog]
             try:
                 t_stage1 = time.time()
+                # 1단계는 의도적으로 SIFT 그대로 유지 -- LoFTR로 바꾸면 배경(먼 산/지형)을
+                # SIFT보다 훨씬 잘 매칭해서(2026-09-17 실측: 같은 121장 기준 캐노니컬 포인트가
+                # SIFT 79k -> LoFTR 99만개) 필터링 전 평면 피팅이 심하게 부풀고(109m -> 330m+),
+                # 그 왜곡된 평면 때문에 벽을 정상적으로 찍은 이미지(DJI_0117 등)까지
+                # _detect_off_wall_images가 "벽 아님"으로 오판하는 문제를 실측으로 확인
+                # (키포인트 개수 상한/공간균등 샘플링 둘 다 시도했지만 근본 원인은 매칭 자체가
+                # 아니라 배경 콘텐츠 자체를 SIFT보다 더 많이 정확하게 잡아내는 것이라 해결 안 됨).
+                # SIFT는 배경을 이만큼 안 잡아서 1단계(필터링 판단용) 평면은 항상 정상 범위였음
+                # -- 1단계는 SIFT로 필터링만 담당하고, LoFTR은 이미 필터링된 이미지로 도는
+                # 2단계(_run_colmap_and_rectify_once)에만 적용한다.
                 stage1_colmap_result, stage1_reconstruction, stage1_plane = _run_colmap_mapping_only(
                     facade_id, colmap_images_dir, colmap_filenames,
                     output_dir / "colmap_stage1", cfg, logger, by_id, catalog, utm_epsg, segment,
-                    matcher=matcher,
                 )
                 log_event(
                     logger, "info", "1단계 COLMAP(필터용) 완료",

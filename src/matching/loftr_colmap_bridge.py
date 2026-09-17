@@ -64,16 +64,18 @@ class _UnionFind:
 
 def _consolidate_image_keypoints(
     raw_points: np.ndarray, merge_radius_px: float
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """raw_points: (M,2) pixel coords, possibly containing near-duplicates
     from different pairs. Returns (canonical_keypoints (K,2) float32,
     raw_to_canonical (M,) int64 -- raw_to_canonical[i] is the row in
-    canonical_keypoints that raw_points[i] was merged into)."""
+    canonical_keypoints that raw_points[i] was merged into -- and support
+    (K,) int64, how many raw points merged into each canonical point, used
+    by the caller to cap runaway keypoint counts (see _cap_keypoints_per_image)."""
     from scipy.spatial import cKDTree
 
     n = len(raw_points)
     if n == 0:
-        return np.zeros((0, 2), dtype=np.float32), np.zeros((0,), dtype=np.int64)
+        return np.zeros((0, 2), dtype=np.float32), np.zeros((0,), dtype=np.int64), np.zeros((0,), dtype=np.int64)
 
     uf = _UnionFind(n)
     tree = cKDTree(raw_points)
@@ -88,7 +90,66 @@ def _consolidate_image_keypoints(
     np.add.at(canonical, inverse, raw_points)
     np.add.at(counts, inverse, 1)
     canonical /= counts[:, None]
-    return canonical.astype(np.float32), inverse.astype(np.int64)
+    return canonical.astype(np.float32), inverse.astype(np.int64), counts
+
+
+def _cap_keypoints_per_image(
+    canonical: np.ndarray, support: np.ndarray, max_keypoints: int, grid_cells: int = 16
+) -> tuple[np.ndarray, np.ndarray]:
+    """Keep up to `max_keypoints` canonical points, spread evenly across a
+    `grid_cells` x `grid_cells` grid over this image's own point bounding
+    box (support only breaks ties WITHIN a cell). Returns (kept_points,
+    old_to_new) where old_to_new[i] is the new row for canonical[i], or -1
+    if dropped -- the caller uses this to filter/remap every pair's matches
+    so no match ever references a dropped index.
+
+    Picking purely by highest cross-pair support (the first version of this
+    function) was confirmed wrong, 2026-09-17 (BACK facade stage-1, all 121
+    images): distant background (sky, far terrain) has much lower parallax
+    between nearby drone viewpoints than the close-range wall does, so its
+    points spuriously look MORE cross-pair-consistent than real wall points
+    -- support-ranking systematically kept background and threw away the
+    wall. Confirmed directly: DJI_0117's capped keypoints (all hitting the
+    8192 cap) had literally zero points in the image's top ~40% (y < 1567
+    of 3956px), and its on-wall-point count in `_detect_off_wall_images`
+    came out to exactly 0 -- despite the image genuinely showing the wall.
+    Grid-based spreading guarantees every image region keeps some budget
+    regardless of how skewed its support distribution is."""
+    k = len(canonical)
+    if k <= max_keypoints:
+        return canonical, np.arange(k, dtype=np.int64)
+
+    lo = canonical.min(axis=0)
+    span = np.maximum(canonical.max(axis=0) - lo, 1e-6)
+    cell = np.clip(((canonical - lo) / span * grid_cells).astype(np.int64), 0, grid_cells - 1)
+    cell_id = cell[:, 0] * grid_cells + cell[:, 1]
+
+    budget_per_cell = max(1, max_keypoints // (grid_cells * grid_cells))
+    order = np.lexsort((-support, cell_id))  # group by cell, highest support first within each
+
+    keep_mask = np.zeros(k, dtype=bool)
+    taken_per_cell: dict[int, int] = {}
+    for idx in order:
+        c = int(cell_id[idx])
+        n_taken = taken_per_cell.get(c, 0)
+        if n_taken < budget_per_cell:
+            keep_mask[idx] = True
+            taken_per_cell[c] = n_taken + 1
+    kept_so_far = int(keep_mask.sum())
+
+    # Fill any leftover budget (cells with fewer points than their share)
+    # from the highest-support remaining points overall, so the total still
+    # reaches max_keypoints when enough points exist somewhere.
+    remaining_budget = max_keypoints - kept_so_far
+    if remaining_budget > 0:
+        leftover_order = order[~keep_mask[order]]
+        fill_idx = leftover_order[:remaining_budget]
+        keep_mask[fill_idx] = True
+
+    keep_idx = np.nonzero(keep_mask)[0]
+    old_to_new = np.full(k, -1, dtype=np.int64)
+    old_to_new[keep_idx] = np.arange(len(keep_idx), dtype=np.int64)
+    return canonical[keep_idx], old_to_new
 
 
 def match_database_with_loftr(
@@ -101,6 +162,7 @@ def match_database_with_loftr(
     workspace_dir: str | Path,
     logger=None,
     merge_radius_px: float = 3.0,
+    max_keypoints_per_image: int = 8192,
 ) -> dict:
     """Replace whatever keypoints/matches a prior `pycolmap.extract_features`
     call wrote into `database_path` with LoFTR-derived ones, then run COLMAP's
@@ -114,12 +176,25 @@ def match_database_with_loftr(
     already has one running for its H-chain path reuses the same GPU worker
     instead of spawning a second one).
 
+    `max_keypoints_per_image` caps each image's CONSOLIDATED keypoint count
+    (default 8192, COLMAP's own SIFT `max_num_features` default -- picked so
+    COLMAP's mapper sees a comparably-sized problem regardless of which
+    matcher fed it). Confirmed real, 2026-09-17: on the FULL unfiltered
+    121-image BACK catalog (stage-1 mapping, before off-wall filtering),
+    uncapped LoFTR produced ~46,000 canonical keypoints/image (5.5M total) --
+    4-6x SIFT's typical per-image count -- and COLMAP's incremental mapper
+    ran for 2+ hours climbing past 30GB before being killed, never finishing.
+    The keypoints kept are the ones with the highest cross-pair support
+    (appeared consolidated from the most raw matches) -- both the most
+    reliable points to keep and a simple, defensible criterion, rather than
+    a random or purely spatial subsample.
+
     Returns a small stats dict (`pairs_attempted`, `pairs_matched`,
     `pairs_timed_out`, `pairs_failed`, `total_raw_points`,
-    `total_canonical_points`) for logging/diagnostics -- never fabricates
-    success if LoFTR matching produced nothing usable (mapper.begin_reconstruction
-    just won't find any two-view geometry, same as it would for a database with
-    no matches at all)."""
+    `total_canonical_points`, `capped_image_count`) for logging/diagnostics --
+    never fabricates success if LoFTR matching produced nothing usable
+    (mapper.begin_reconstruction just won't find any two-view geometry, same
+    as it would for a database with no matches at all)."""
     import pycolmap
 
     from src.common.logging import log_event
@@ -195,19 +270,27 @@ def match_database_with_loftr(
         pair_records.append((name_a, name_b, idx_a, idx_b))
         stats["pairs_matched"] += 1
 
-    # --- consolidate per-image keypoints ---
+    # --- consolidate per-image keypoints, capped so a very dense image
+    # can't blow up COLMAP's own mapper regardless of matcher (see docstring) ---
     canonical_kps: dict[str, np.ndarray] = {}
     raw_to_canon: dict[str, np.ndarray] = {}
-    total_raw = total_canon = 0
+    total_raw = total_canon = capped_image_count = 0
     for name in name_set:
         raw = np.concatenate(raw_points[name], axis=0) if raw_points[name] else np.zeros((0, 2))
-        canon, mapping = _consolidate_image_keypoints(raw, merge_radius_px)
-        canonical_kps[name] = canon
-        raw_to_canon[name] = mapping
+        canon, raw_to_old, support = _consolidate_image_keypoints(raw, merge_radius_px)
+        kept, old_to_new = _cap_keypoints_per_image(canon, support, max_keypoints_per_image)
+        if len(kept) < len(canon):
+            capped_image_count += 1
+        canonical_kps[name] = kept
+        # compose raw -> old canonical -> new (capped) canonical; -1 (dropped
+        # by the cap) propagates through so those raw points' matches get
+        # filtered out below rather than pointing at a wrong/missing index.
+        raw_to_canon[name] = old_to_new[raw_to_old]
         total_raw += len(raw)
-        total_canon += len(canon)
+        total_canon += len(kept)
     stats["total_raw_points"] = total_raw
     stats["total_canonical_points"] = total_canon
+    stats["capped_image_count"] = capped_image_count
 
     # --- overwrite the SIFT keypoints/descriptors/matches this database had ---
     db.clear_keypoints()
@@ -225,7 +308,10 @@ def match_database_with_loftr(
     for name_a, name_b, idx_a, idx_b in pair_records:
         canon_a = raw_to_canon[name_a][idx_a]
         canon_b = raw_to_canon[name_b][idx_b]
-        match_arr = np.stack([canon_a, canon_b], axis=1)
+        keep = (canon_a >= 0) & (canon_b >= 0)  # drop raw points the per-image cap removed
+        if not keep.any():
+            continue
+        match_arr = np.stack([canon_a[keep], canon_b[keep]], axis=1)
         match_arr = np.unique(match_arr, axis=0)  # de-dupe pairs merged onto the same canonical points
         if len(match_arr) == 0:
             continue

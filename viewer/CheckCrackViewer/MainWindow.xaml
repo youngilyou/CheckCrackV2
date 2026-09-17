@@ -214,8 +214,12 @@
                                         Command="{Binding DataContext.RunFacadeCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                         CommandParameter="{Binding}"
                                         Visibility="{Binding IsRunning, Converter={StaticResource FalsyToVisibilityConverter}}"/>
-                                <TextBlock Text="실행 중…" FontSize="10.5" Foreground="{StaticResource Accent}" VerticalAlignment="Center"
-                                           Visibility="{Binding IsRunning, Converter={StaticResource TruthyToVisibilityConverter}}"/>
+                                <StackPanel Orientation="Horizontal"
+                                            Visibility="{Binding IsRunning, Converter={StaticResource TruthyToVisibilityConverter}}">
+                                    <TextBlock Text="실행 중…" FontSize="10.5" Foreground="{StaticResource Accent}" VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding ElapsedLabel}" FontSize="10.5" FontFamily="Consolas"
+                                               Foreground="{StaticResource Accent}" VerticalAlignment="Center" Margin="5,0,0,0"/>
+                                </StackPanel>
                             </StackPanel>
                             <Button Content="분류 변경" Padding="8,2" FontSize="10.5" Margin="6,0,0,0"
                                     Command="{Binding DataContext.ReclassifyFacadeCommand, RelativeSource={RelativeSource AncestorType=Window}}"

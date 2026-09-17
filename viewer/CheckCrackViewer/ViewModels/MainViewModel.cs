@@ -187,6 +187,7 @@ public partial class MainViewModel : ObservableObject
 
     private readonly AnalysisBridgeService _analysisBridge = new();
     private readonly DispatcherTimer _heartbeatTimer;
+    private readonly DispatcherTimer _elapsedTimer;
 
     /// <summary>Drives the automatic remote-analysis pipeline (FacadePreviewer dispatch ->
     /// SFTP download -> extract -> auto-register on the left FACADES list -> run), entirely in
@@ -237,6 +238,28 @@ public partial class MainViewModel : ObservableObject
         _heartbeatTimer.Tick += (_, _) => _analysisBridge.SendHeartbeat(
             _concurrency.MaxConcurrent, (uint)Math.Max(0, _concurrency.RunningCount), (uint)_concurrency.QueuedCount);
         _heartbeatTimer.Start();
+
+        // 실행 중인 facade의 "실행 중…" 라벨 옆에 경과 시간을 표시하기 위한 1초 틱 --
+        // RescanFacadeOutputs(2초 주기)와 별개로 둔 이유는 그쪽은 디스크 I/O(리포트 JSON
+        // 재스캔)가 있어 1초로 당기면 불필요한 부하가 생기고, 이 타이머는 문자열 포맷팅만
+        // 하는 가벼운 작업이라 매초 갱신해도 부담이 없다.
+        _elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _elapsedTimer.Tick += (_, _) => UpdateElapsedLabels();
+        _elapsedTimer.Start();
+    }
+
+    private void UpdateElapsedLabels()
+    {
+        var now = DateTime.Now;
+        foreach (var facade in Facades)
+        {
+            if (!facade.IsRunning || facade.RunStartTime is not { } start)
+                continue;
+            var elapsed = now - start;
+            facade.ElapsedLabel = elapsed.TotalHours >= 1
+                ? $"{(int)elapsed.TotalHours}:{elapsed.Minutes:00}:{elapsed.Seconds:00}"
+                : $"{elapsed.Minutes}:{elapsed.Seconds:00}";
+        }
     }
 
     private async Task InitializeGpuDetectionAsync()
@@ -1242,6 +1265,8 @@ public partial class MainViewModel : ObservableObject
             return;
 
         facade.IsRunning = true;
+        facade.RunStartTime = DateTime.Now;
+        facade.ElapsedLabel = "0:00";
         facade.LivePreviewImagePath = null;
         // 2026-08-29: 이전 실행의 크랙 검사/보고서 결과가 새 실행 동안에도 그대로 남아있어서
         // "크랙 검사 실행"/"보고서 생성"/"PDF 열기" 버튼이 (실제로는 아직 이번 실행에서 아무것도
@@ -1315,6 +1340,8 @@ public partial class MainViewModel : ObservableObject
         finally
         {
             facade.IsRunning = false;
+            facade.RunStartTime = null;
+            facade.ElapsedLabel = "";
             facade.LivePreviewImagePath = null;
             _concurrency.Release();
 

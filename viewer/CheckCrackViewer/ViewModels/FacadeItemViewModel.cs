@@ -38,6 +38,12 @@ public partial class FacadeItemViewModel : ObservableObject
     [ObservableProperty] private string? _sourceFolderPath;
     [ObservableProperty] private bool _isRunning;
     [ObservableProperty] private string? _livePreviewImagePath;
+    /// <summary>RunFacade가 IsRunning=true로 세팅하는 순간 같이 기록 -- MainViewModel의
+    /// 1초 타이머가 이 값과 DateTime.Now의 차이로 ElapsedLabel을 매초 갱신한다(사용자
+    /// 요청, 2026-09-17: "실행중 옆에 진행 시간이 표시되었으면 함"). 실행이 끝나면(finally)
+    /// null로 되돌아가고 ElapsedLabel도 같이 비워짐.</summary>
+    [ObservableProperty] private DateTime? _runStartTime;
+    [ObservableProperty] private string _elapsedLabel = "";
 
     // 2026-08-28: 원격/수동 CrackVisionDB 경로로 등록된 facade만 채워짐(RegisterExtractedArchive의
     // archiveId 인자, MainViewModel.AddRunnableCandidate가 전달) -- 순수 Browse로 추가된 facade는
