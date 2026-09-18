@@ -20,6 +20,10 @@
                      element's actual layout size equal to what's genuinely visible. -->
                 <Image x:Name="TheImage" RenderOptions.BitmapScalingMode="HighQuality" Stretch="Fill"/>
             </Canvas>
+            <!-- 층수 라벨(입면도 스타일, 왼쪽에 표시). BuildingMetadataStore에 총 층수/층고가
+                 입력돼 있고 이 facade의 px_per_m이 calibrated=true일 때만 채워짐(FloorLabels_Redraw).
+                 IsHitTestVisible=False라 줌/드래그 조작을 가로채지 않음. -->
+            <Canvas x:Name="FloorLabelCanvas" IsHitTestVisible="False"/>
         </Grid>
 
         <!-- toolbar -->

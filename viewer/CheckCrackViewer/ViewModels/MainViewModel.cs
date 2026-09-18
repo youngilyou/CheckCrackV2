@@ -826,6 +826,34 @@ public partial class MainViewModel : ObservableObject
         BrowseAndAddFacades(buildingNode.ComplexName, buildingNode.BuildingName);
     }
 
+    /// <summary>FACADES 트리의 동(BuildingNode) 헤더 우클릭 → "건물 정보" -- 입면도 스타일
+    /// 층수 표시(왼쪽에 층 라벨)에 필요한 총 층수/층고를 사용자가 직접 입력 (2026-09-17
+    /// 사용자 확정: 정확한 값은 BIM/설계 도면이 있어야 하는데 지금은 없어서, 그때까지의
+    /// 임시 방안. memory/floor_labeling_needs_bim.md 참고). BuildingMetadataStore가
+    /// RootPath 밑 building_metadata.json에 저장 -- 나중에 DB로 바뀌어도 이 커맨드는 그대로.</summary>
+    [RelayCommand]
+    private void EditBuildingInfo(BuildingNode buildingNode)
+    {
+        if (buildingNode is null)
+            return;
+        var existing = BuildingMetadataStore.Get(RootPath, buildingNode.ComplexId, buildingNode.BuildingId);
+        var dialog = new BuildingInfoDialog(
+            buildingNode.ComplexName, buildingNode.BuildingName,
+            existing?.TotalFloors, existing?.FloorHeightM)
+        { Owner = System.Windows.Application.Current.MainWindow };
+        if (dialog.ShowDialog() != true)
+            return;
+
+        BuildingMetadataStore.Upsert(RootPath, new BuildingMetadataEntry
+        {
+            ComplexId = buildingNode.ComplexId,
+            BuildingId = buildingNode.BuildingId,
+            TotalFloors = dialog.ViewModel.ResultTotalFloors,
+            FloorHeightM = dialog.ViewModel.ResultFloorHeightM,
+        });
+        StatusText = $"{buildingNode.BuildingName}: 건물 정보 저장됨.";
+    }
+
     /// <summary>이미지 폴더 선택 → (하위 폴더가 있으면 각각 별도 facade로) → FacadeClassifyDialog로
     /// 단지/동(선택)/방위 확인 → 등록. fixedComplexName/fixedBuildingName이 주어지면 그 값을
     /// 다이얼로그의 기본 제안값으로 미리 채운다(트리에서 특정 단지/동에 "추가"로 진입한 경우) --

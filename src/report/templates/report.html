@@ -518,18 +518,12 @@
 <section class="page" id="sec-04">
   <div class="section-heading"><span class="badge">04</span><span class="title">균열 상세 결과{% if report_kind == "building" %} (상위 항목){% endif %}</span></div>
 
-  {% if not cracks and not crack_map_uri %}
+  {% if not cracks %}
     <div class="placeholder-box">탐지된 크랙이 없습니다.</div>
   {% elif report_kind == "facade" %}
     {% if crack_map_uri %}
     <div class="sub-heading">전체 위치도 (번호는 아래 상세 카드와 동일)</div>
     <div class="crack-map-photo"><img src="{{ crack_map_uri }}" alt="전체 균열 위치도"></div>
-    {% if excluded_structural_count %}
-    <div class="caption">
-      회색 윤곽선({{ excluded_structural_count }}건)은 창틀·판넬 이음새 등 구조물로 판정되어
-      집계에서 제외된 항목입니다. 번호가 매겨진 빨강/파랑 마커만 아래 상세 결과에 포함됩니다.
-    </div>
-    {% endif %}
     {% endif %}
     <div class="crack-grid">
       {% for c in cracks %}

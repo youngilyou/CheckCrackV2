@@ -133,37 +133,6 @@ class FacadeSnapshot:
     analysis_path: Path | None
     used_colmap: bool
     crack_mask_path: Path | None
-    # 2026-09-13: 1차에는 있었지만 2차(구조물 오탐 제외 모델)가 걸러낸 크랙들 --
-    # generate_crack_map이 "전체 표시, 구조물은 비활성화" 요청(사용자)을 구현하는 데만
-    # 쓰고, 집계/카드에는 절대 섞이지 않는다(cracks가 이미 2차 기준으로 고정됨).
-    excluded_structural_cracks: list[dict]
-
-
-def _bboxes_overlap(a: list[float], b: list[float], pad: float = 15.0) -> bool:
-    """1차/2차는 서로 다른 두 번의 독립적인 모델 추론이라 같은 실제 크랙이라도
-    crack_id가 안 맞고(둘 다 그냥 0부터 순번을 다시 매김) bbox_px도 픽셀 단위로 완전히
-    똑같지는 않다 -- 그래서 IoU 대신, 같은 모자이크 좌표계(bbox_px) 위에서 두 bbox가
-    pad px 여유를 두고도 겹치는지만 본다. 크랙 bbox는 가늘고 길쭉해서(때로는 폭/높이가
-    거의 0) 엄격한 IoU는 진짜 같은 크랙도 못 맞힐 수 있어 이 쪽이 더 안전하다."""
-    ax0, ay0, ax1, ay1 = a
-    bx0, by0, bx1, by1 = b
-    return not (ax1 + pad < bx0 or bx1 + pad < ax0 or ay1 + pad < by0 or by1 + pad < ay0)
-
-
-def _find_structural_exclusions(v1_cracks: list[dict], v2_cracks: list[dict]) -> list[dict]:
-    """v1(1차, 모든 크랙 표시)에는 있지만 v2(2차, 구조물 오탐 제외)의 어떤 크랙과도
-    겹치지 않는 v1 크랙 -- 즉 2차 모델이 "창틀/판넬 이음새 등 구조물"로 판단해 걸러낸
-    항목. bbox_px가 없는 항목은 매칭 불가로 보고 그대로 제외 목록에 넣지 않는다(안전
-    측: 좌표를 모르면 지도 위에 잘못 그리느니 안 그리는 쪽)."""
-    v2_bboxes = [c["bbox_px"] for c in v2_cracks if c.get("bbox_px")]
-    excluded = []
-    for c in v1_cracks:
-        bbox1 = c.get("bbox_px")
-        if not bbox1:
-            continue
-        if not any(_bboxes_overlap(bbox1, bbox2) for bbox2 in v2_bboxes):
-            excluded.append(c)
-    return excluded
 
 
 def load_facade_snapshot(output_dir: str | Path, facade_id: str) -> FacadeSnapshot:
@@ -176,28 +145,8 @@ def load_facade_snapshot(output_dir: str | Path, facade_id: str) -> FacadeSnapsh
     quality = _read_json(output_dir / f"{facade_id}_quality_report.json")
     quality_colmap = _read_json(output_dir / f"{facade_id}_quality_report_colmap.json")
     colmap = _read_json(output_dir / f"{facade_id}_colmap_report.json")
-    # 2026-09-13: 2차(구조물 오탐 제외) 결과가 있으면 그걸 우선 사용 -- 뷰어의
-    # FacadeSnapshot.DisplayCracks(CracksV2 ?? Cracks)와 동일한 우선순위. 이걸 안 하면
-    # 보고서가 계속 1차(모든 크랙 표시, 창틀/판넬 이음새 등 구조물 오탐 포함) 원본으로
-    # 만들어져서 총 균열 수/평균 폭 등이 실제보다 크게 부풀려짐(실측: 오탐 다수 포함된
-    # 1차 기준 평균 폭 605mm처럼 비정상적인 값이 나옴 -- 사용자가 실제 리포트에서 확인).
-    cracks_v2_path = output_dir / f"{facade_id}_cracks_v2.json"
-    has_v2 = cracks_v2_path.exists()
-    cracks_path = cracks_v2_path if has_v2 else output_dir / f"{facade_id}_cracks.json"
-    raw_cracks = _read_json(cracks_path) or []
+    raw_cracks = _read_json(output_dir / f"{facade_id}_cracks.json") or []
     raw_cracks = raw_cracks if isinstance(raw_cracks, list) else []
-
-    # 2026-09-13 (사용자 요청): 리포트 본문/집계는 2차 기준(위 raw_cracks)이 맞지만,
-    # 첨부 크랙 위치도(전체 지도 이미지)에는 1차에서 걸러진 구조물(창틀/판넬 이음새 등)도
-    # 전부 그리되 비활성화(회색) 스타일로 구분 표시해야 한다 -- "여기 후보가 있었다"는
-    # 사실 자체는 지도에서 사라지지 않게. v2가 없는(구버전) facade는 이미 raw_cracks
-    # 자체가 1차라서 걸러진 게 없으므로 빈 리스트.
-    excluded_structural_cracks: list[dict] = []
-    if has_v2:
-        v1_cracks = _read_json(output_dir / f"{facade_id}_cracks.json") or []
-        v1_cracks = v1_cracks if isinstance(v1_cracks, list) else []
-        excluded_structural_cracks = _find_structural_exclusions(v1_cracks, raw_cracks)
-
     # {facade_id}_crack_review.json (written by the viewer's review UI) is
     # entirely optional -- a facade nobody has reviewed yet just renders every
     # AI detection unchanged, exactly like before this feature existed.
@@ -221,7 +170,6 @@ def load_facade_snapshot(output_dir: str | Path, facade_id: str) -> FacadeSnapsh
         analysis_path=analysis_path,
         used_colmap=used_colmap,
         crack_mask_path=crack_mask_path,
-        excluded_structural_cracks=excluded_structural_cracks,
     )
 
 
@@ -317,11 +265,7 @@ def _mosaic_section_data(snapshot: FacadeSnapshot, numbered_cracks: list[dict]) 
     ok, buf = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 88])
     thumb_uri = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii") if ok else None
 
-    crack_map_uri = (
-        generate_crack_map(img, numbered_cracks, disabled_cracks=snapshot.excluded_structural_cracks)
-        if numbered_cracks or snapshot.excluded_structural_cracks
-        else None
-    )
+    crack_map_uri = generate_crack_map(img, numbered_cracks) if numbered_cracks else None
     crops = generate_crack_crops(img, snapshot.cracks)
     return thumb_uri, crack_map_uri, crops
 
@@ -428,7 +372,6 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
         "mosaic_uri": mosaic_uri,
         "used_colmap": snapshot.used_colmap,
         "crack_map_uri": crack_map_uri,
-        "excluded_structural_count": len(snapshot.excluded_structural_cracks),
         "cracks": cracks_sorted,
         "raw_crack_count": snapshot.raw_crack_count,
         "reviewed_by": snapshot.reviewed_by,
@@ -451,14 +394,11 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
 def _facade_deliverables(snapshot: FacadeSnapshot) -> list[tuple[str, bool, str]]:
     analysis_name = snapshot.analysis_path.name if snapshot.analysis_path else ""
     visual_path = _pick(snapshot.output_dir, snapshot.facade_id, "_visual_colmap.tif", "_visual.tif")
-    # load_facade_snapshot과 동일한 2차 우선 규칙 -- 실제로 읽은 파일명을 그대로 표시한다.
-    cracks_v2_path = snapshot.output_dir / f"{snapshot.facade_id}_cracks_v2.json"
-    cracks_file_name = cracks_v2_path.name if cracks_v2_path.exists() else f"{snapshot.facade_id}_cracks.json"
     return [
         ("외벽 스티칭 결과 (분석용)", snapshot.analysis_path is not None, analysis_name),
         ("외벽 스티칭 결과 (열람용)", visual_path is not None, visual_path.name if visual_path else ""),
         ("크랙 위치도", snapshot.crack_mask_path is not None, f"{snapshot.facade_id}_crack_mask.tif"),
-        ("크랙 데이터 (JSON)", bool(snapshot.cracks), cracks_file_name),
+        ("크랙 데이터 (JSON)", bool(snapshot.cracks), f"{snapshot.facade_id}_cracks.json"),
         ("스티칭 품질 리포트 (JSON)", snapshot.quality is not None, f"{snapshot.facade_id}_quality_report.json"),
         ("정밀 보정 리포트 (JSON)", snapshot.colmap is not None, f"{snapshot.facade_id}_colmap_report.json"),
         ("본 PDF 보고서", True, f"{snapshot.facade_id}_report.pdf"),

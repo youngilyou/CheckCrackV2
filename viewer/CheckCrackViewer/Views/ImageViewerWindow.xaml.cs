@@ -1,9 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using CheckCrackViewer.Services;
 using CheckCrackViewer.ViewModels;
 
 namespace CheckCrackViewer.Views;
@@ -31,10 +34,30 @@ public partial class ImageViewerWindow : Window
     private bool _userHasZoomedOrPanned;
     private readonly FacadeItemViewModel? _liveFacade;
 
+    // 층수 라벨(2026-09-17, 사용자 요청) -- 둘 다 있어야 그릴 수 있음: 건물의 총 층수/층고
+    // (BuildingMetadataStore, 사용자 수동 입력) + 이 facade의 px_per_m(스케일 보정 여부 포함).
+    // rootPath가 없으면(예: ResultsCompareView 쪽 호출 경로) 조용히 생략 -- 플로어 라벨은
+    // "있으면 보너스" 기능이지 필수 경로가 아니라서, 이 정보 없이도 뷰어 자체는 항상 정상 동작해야 함.
+    private FacadeItemViewModel? _facadeContext;
+    private string? _rootPath;
+    private List<FloorRow> _floorRows = new();
+
     public ImageViewerWindow(string imagePath)
     {
         InitializeComponent();
         InitWindowBounds();
+        LoadImage(imagePath);
+        KeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
+    }
+
+    /// <summary>이미지 경로 + facade 컨텍스트(층수 라벨 계산용) 둘 다 아는 경우 -- 완료된
+    /// 모자이크를 메인 화면 썸네일에서 더블클릭했을 때 쓰는 경로(MainWindow.Image_MouseLeftButtonDown).</summary>
+    public ImageViewerWindow(string imagePath, FacadeItemViewModel facade, string? rootPath)
+    {
+        InitializeComponent();
+        InitWindowBounds();
+        _facadeContext = facade;
+        _rootPath = rootPath;
         LoadImage(imagePath);
         KeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
     }
@@ -45,11 +68,13 @@ public partial class ImageViewerWindow : Window
     /// the real final mosaic once the run finishes and one becomes available —
     /// matching CLAUDE.local.md's "don't show it until it's genuinely done"
     /// requirement for the *final* image, while still growing live in between.</summary>
-    public ImageViewerWindow(FacadeItemViewModel facade)
+    public ImageViewerWindow(FacadeItemViewModel facade, string? rootPath = null)
     {
         InitializeComponent();
         InitWindowBounds();
         _liveFacade = facade;
+        _facadeContext = facade;
+        _rootPath = rootPath;
         _liveFacade.PropertyChanged += Facade_PropertyChanged;
         Closed += (_, _) => _liveFacade.PropertyChanged -= Facade_PropertyChanged;
 
@@ -139,6 +164,7 @@ public partial class ImageViewerWindow : Window
         TheImage.Source = bitmap;
         _pixelWidth = bitmap.PixelWidth;
         _pixelHeight = bitmap.PixelHeight;
+        TryLoadFloorRows();
 
         if (!_userHasZoomedOrPanned && Viewport.ActualWidth > 0 && Viewport.ActualHeight > 0)
         {
@@ -180,6 +206,79 @@ public partial class ImageViewerWindow : Window
         Canvas.SetLeft(TheImage, left);
         Canvas.SetTop(TheImage, top);
         ZoomText.Text = $"{_scale * 100:0}%";
+        RedrawFloorLabels(left, top);
+    }
+
+    /// <summary>총 층수/층고(BuildingMetadataStore, 사용자 수동 입력) + 이 facade의
+    /// px_per_m(scale_colmap.json, calibrated=true일 때만)이 둘 다 있어야 층수를 계산할 수
+    /// 있음 -- 하나라도 없으면 _floorRows가 빈 채로 남고(RedrawFloorLabels가 아무것도 안 그림),
+    /// 뷰어 자체는 평소처럼 동작한다(floor_labeling_needs_bim.md: 이 값들이 없는 게 정상적인
+    /// 기본 상태, 에러 아님).</summary>
+    private void TryLoadFloorRows()
+    {
+        _floorRows = new List<FloorRow>();
+        var facade = _facadeContext;
+        if (facade is null || string.IsNullOrEmpty(_rootPath) || string.IsNullOrEmpty(facade.OutputDir)
+            || string.IsNullOrEmpty(facade.ComplexId) || string.IsNullOrEmpty(facade.BuildingId) || _pixelHeight <= 0)
+            return;
+
+        var building = BuildingMetadataStore.Get(_rootPath, facade.ComplexId, facade.BuildingId);
+        if (building?.TotalFloors is not int totalFloors || building.FloorHeightM is not double floorHeightM)
+            return;
+
+        var scale = FloorLabelCalculator.LoadScale(facade.OutputDir, facade.FacadeId);
+        if (scale is null)
+            return;
+
+        _floorRows = FloorLabelCalculator.ComputeFloorRows(totalFloors, floorHeightM, scale.PxPerM, _pixelHeight);
+    }
+
+    /// <summary>_floorRows(이미지 자체의 픽셀 좌표)를 현재 줌/팬(left/top/_scale)에 맞춰
+    /// 화면 좌표로 다시 그림 -- ApplyTransform이 호출될 때마다(줌/드래그/최초 로드) 같이 불림.
+    /// 눈금선은 이미지 왼쪽 바깥으로 살짝 튀어나오게(실제 크랙 내용을 가리지 않도록), 층수
+    /// 라벨은 그 옆에.</summary>
+    private void RedrawFloorLabels(double left, double top)
+    {
+        FloorLabelCanvas.Children.Clear();
+        if (_floorRows.Count == 0)
+            return;
+
+        foreach (var row in _floorRows)
+        {
+            double midScreenY = top + (row.TopPx + row.BottomPx) / 2.0 * _scale;
+            if (midScreenY < -20 || midScreenY > Viewport.ActualHeight + 20)
+                continue; // 화면 밖 -- 그릴 필요 없음
+
+            var tick = new System.Windows.Shapes.Line
+            {
+                X1 = left - 14, X2 = left, Y1 = midScreenY, Y2 = midScreenY,
+                Stroke = Brushes.Orange, StrokeThickness = 2,
+            };
+            FloorLabelCanvas.Children.Add(tick);
+
+            var label = new TextBlock
+            {
+                Text = $"{row.FloorNumber}층",
+                Foreground = Brushes.Orange, FontFamily = new FontFamily("Consolas"), FontSize = 12, FontWeight = FontWeights.Bold,
+                Background = new SolidColorBrush(Color.FromArgb(160, 11, 13, 14)),
+            };
+            Canvas.SetLeft(label, left - 60);
+            Canvas.SetTop(label, midScreenY - 9);
+            FloorLabelCanvas.Children.Add(label);
+        }
+
+        if (_floorRows.Count > 0)
+        {
+            var caption = new TextBlock
+            {
+                Text = "층수 추정치 (BIM/설계도면 없음, 사용자 입력 기준)",
+                Foreground = Brushes.Orange, FontSize = 10.5,
+                Background = new SolidColorBrush(Color.FromArgb(160, 11, 13, 14)), Padding = new Thickness(4, 2, 4, 2),
+            };
+            Canvas.SetLeft(caption, 14);
+            Canvas.SetTop(caption, Viewport.ActualHeight - 30);
+            FloorLabelCanvas.Children.Add(caption);
+        }
     }
 
     private void Canvas_MouseWheel(object sender, MouseWheelEventArgs e)

@@ -1,0 +1,33 @@
+<Window x:Class="CheckCrackViewer.Views.BuildingInfoDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:CheckCrackViewer.ViewModels"
+        d:DataContext="{d:DesignInstance Type=vm:BuildingInfoDialogViewModel}"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008/design"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="건물 정보" SizeToContent="Height" Width="420"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Background="{StaticResource Bg}">
+    <StackPanel Margin="24">
+        <TextBlock Text="건물 정보 (총 층수 / 층고)" Style="{StaticResource Kicker}" Margin="0,0,0,4"/>
+        <TextBlock Foreground="{StaticResource Text2}" FontSize="12" Margin="0,0,0,4" TextWrapping="Wrap">
+            <Run Text="{Binding ComplexName, Mode=OneWay}"/><Run Text=" / "/><Run Text="{Binding BuildingName, Mode=OneWay}"/>
+        </TextBlock>
+        <TextBlock Text="정확한 층수 표시(입면도 스타일)는 BIM/설계 도면이 있어야 가능합니다. 도면이 없는 지금은 아래 값을 직접 입력해주세요 -- 비워두면 층수 표시 기능이 꺼진 채로 동작합니다."
+                   Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,18" TextWrapping="Wrap"/>
+
+        <TextBlock Text="총 층수" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+        <TextBox Text="{Binding TotalFloorsText, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,14"
+                  Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+
+        <TextBlock Text="층고 (m)" Foreground="{StaticResource Text2}" FontSize="11" Margin="0,0,0,3"/>
+        <TextBox Text="{Binding FloorHeightText, UpdateSourceTrigger=PropertyChanged}" Padding="8,5" Margin="0,0,0,20"
+                  Background="{StaticResource Surface2}" Foreground="{StaticResource Text}" BorderBrush="{StaticResource Border}"/>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="취소" Command="{Binding CancelCommand}" IsCancel="True" Padding="14,8" Margin="0,0,8,0"/>
+            <Button Content="저장" Command="{Binding ConfirmCommand}" IsDefault="True" Padding="14,8"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

@@ -31,11 +31,6 @@ MASK_COLOR_BGR = (40, 40, 235)  # crack red — matches the color used elsewhere
 MASK_ALPHA = 0.45
 BOX_COLOR_BGR = (40, 220, 60)  # green ROI box, matches the reference UI's location marker
 MANUAL_MARKER_COLOR_BGR = (196, 86, 26)  # blue — distinguishes reviewer-added cracks from AI red on the crack map
-# 2026-09-13: 1차에는 있었지만 2차(구조물 오탐 제외)가 걸러낸 항목을 지도에서 "비활성화"
-# 스타일로 표시할 때 쓰는 회색 -- 뷰어의 균열 검토 캔버스가 "제외" 상태를 회색 계열
-# 점선으로 그리는 것과 같은 취지(사라진 게 아니라 "후보였지만 구조물로 판정됨"임을 계속
-# 보여줌). 번호 배지 없이 윤곽선만 그린다.
-DISABLED_MARKER_COLOR_BGR = (150, 150, 150)
 
 
 @dataclass
@@ -139,12 +134,7 @@ def generate_crack_crops(
     return out
 
 
-def generate_crack_map(
-    analysis_image: np.ndarray,
-    numbered_cracks: list[dict],
-    max_dim_px: int = 2800,
-    disabled_cracks: list[dict] | None = None,
-) -> str | None:
+def generate_crack_map(analysis_image: np.ndarray, numbered_cracks: list[dict], max_dim_px: int = 2800) -> str | None:
     """Whole-facade mosaic with every crack outlined and numbered (matching
     the operator's own reference screen: a full elevation photo with numbered
     markers, cross-referenced against a detail list below it) — the "확대"
@@ -158,13 +148,7 @@ def generate_crack_map(
     full-resolution mosaic first — a 1-2px outline drawn at full res on a
     tens-of-thousands-of-px-wide image would just get smoothed away by the
     resize's area-averaging, and drawing directly on the shrunk canvas is
-    far cheaper anyway.
-
-    `disabled_cracks` (2026-09-13, 사용자 요청): 1차에는 있었지만 2차가 구조물
-    (창틀/판넬 이음새 등)로 판정해 걸러낸 크랙들 -- 리포트 집계/카드에는 안 들어가지만
-    이 지도에서는 "후보가 있었다"는 사실 자체는 지우지 않고 회색 윤곽선(번호 배지
-    없음)으로 남긴다. 활성(빨강/파랑) 마커보다 먼저 그려서, 겹치는 자리에서는 항상
-    활성 마커가 위로 보이게 한다."""
+    far cheaper anyway."""
     h, w = analysis_image.shape[:2]
     scale = min(1.0, max_dim_px / max(w, h))
     canvas = cv2.resize(analysis_image, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA) if scale < 1.0 else analysis_image.copy()
@@ -183,14 +167,6 @@ def generate_crack_map(
     font_scale = radius / 26.0
     text_thickness = max(1, round(radius / 16))
     outline_thickness = max(2, round(base_dim / 1400))
-
-    disabled_outline_thickness = max(1, outline_thickness - 1)
-    for crack in (disabled_cracks or []):
-        polygon = crack.get("polygon_px")
-        if not polygon:
-            continue
-        pts = (np.array(polygon, dtype=np.float64) * scale).round().astype(np.int32).reshape(-1, 1, 2)
-        cv2.polylines(canvas, [pts], isClosed=True, color=DISABLED_MARKER_COLOR_BGR, thickness=disabled_outline_thickness)
 
     for crack in numbered_cracks:
         no = crack.get("_no")

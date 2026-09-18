@@ -197,12 +197,6 @@ def blend_visual(
     # ROI here can already approach the full canvas size (oblique homography
     # perspective stretches a source image's ROI well past its own
     # resolution), which blew that system up to hundreds of GB in practice.
-    # CHANNELS (per-channel gain) was tried 2026-09-17 to fix a pink/yellow-
-    # tinted seam panel, but confirmed real on direct user comparison: it
-    # made the render visibly WORSE, not better (with sparse overlap in some
-    # regions, per-channel gain estimation is noisier than one shared
-    # scalar and can overcorrect into a stronger color cast). Reverted --
-    # the seam color-mismatch issue is still open, needs a different fix.
     compensator = cv2.detail.ExposureCompensator_createDefault(cv2.detail.ExposureCompensator_GAIN)
     compensator.feed(corners, images, valid_masks)
 

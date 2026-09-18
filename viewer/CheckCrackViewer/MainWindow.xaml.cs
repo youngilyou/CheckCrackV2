@@ -46,11 +46,19 @@ public partial class MainWindow : Window
     {
         if (e.ClickCount != 2)
             return;
-        if (sender is not Image { Tag: string path } || string.IsNullOrEmpty(path))
+        if (sender is not Image { Tag: string path } image || string.IsNullOrEmpty(path))
             return;
 
         _currentViewer?.Close();
-        _currentViewer = new ImageViewerWindow(path) { Owner = this };
+        // 층수 라벨(2026-09-17)을 그리려면 facade 컨텍스트 + RootPath가 필요 -- 이 Image의
+        // DataContext는 이 썸네일을 소유한 FacadeItemViewModel(Tag는 그중 이미지 경로 하나만
+        // 따로 뽑아 쓴 것)이라 둘 다 여기서 바로 구할 수 있음. 둘 중 하나라도 없으면(예:
+        // DataContext 타입이 다른 화면) 기존처럼 경로만으로 열림 -- 층수 라벨만 조용히 생략.
+        var facade = image.DataContext as FacadeItemViewModel;
+        var rootPath = DataContext is MainViewModel mvm ? mvm.RootPath : null;
+        _currentViewer = facade != null
+            ? new ImageViewerWindow(path, facade, rootPath) { Owner = this }
+            : new ImageViewerWindow(path) { Owner = this };
         _currentViewer.Closed += (_, _) => _currentViewer = null;
         _currentViewer.Show();
     }
@@ -63,7 +71,8 @@ public partial class MainWindow : Window
             return;
 
         _currentViewer?.Close();
-        _currentViewer = new ImageViewerWindow(facade) { Owner = this };
+        var rootPath = DataContext is MainViewModel mvm ? mvm.RootPath : null;
+        _currentViewer = new ImageViewerWindow(facade, rootPath) { Owner = this };
         _currentViewer.Closed += (_, _) => _currentViewer = null;
         _currentViewer.Show();
     }
