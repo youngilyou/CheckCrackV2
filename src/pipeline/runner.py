@@ -114,9 +114,20 @@ def _detect_off_wall_images(
             best_gap_ratio = ratio
             best_cut_idx = i
 
-    if best_gap_ratio < min_gap_ratio or best_cut_idx == 0:
-        return set()
-    return {image_id for image_id, _ in sorted_items[:best_cut_idx]}
+    excluded = set()
+    if best_gap_ratio >= min_gap_ratio and best_cut_idx > 0:
+        excluded = {image_id for image_id, _ in sorted_items[:best_cut_idx]}
+
+    # Absolute floor, independent of the relative-gap search above: an image
+    # with exactly 0 on-wall points needs no ratio reasoning at all -- it is
+    # definitionally not showing the wall. Still respects `max_exclude_fraction`
+    # (a facade whose images are ALL near-zero -- e.g. a broken reconstruction --
+    # shouldn't lose every image to this rule).
+    zero_ids = {image_id for image_id, count in sorted_items if count == 0}
+    if zero_ids and len(zero_ids) <= max_cut:
+        excluded |= zero_ids
+
+    return excluded
 
 
 def _run_colmap_mapping_only(
