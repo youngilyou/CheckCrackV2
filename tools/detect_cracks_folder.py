@@ -101,6 +101,7 @@ from src.common.logging import get_logger, log_event  # noqa: E402
 from src.crack.measurement import ScaleInfo  # noqa: E402
 from src.crack.pipeline import detect_cracks  # noqa: E402
 from src.crack.raw_pipeline import detect_cracks_from_raw_images  # noqa: E402
+from src.geometry.manual_region import load_manual_region_mask  # noqa: E402
 
 
 def _pick(output_dir: Path, facade_id: str, *suffixes: str) -> Path | None:
@@ -173,6 +174,28 @@ def main() -> None:
     seam_owner_index: list[str] | None = None
     if seam_owner_index_path is not None:
         seam_owner_index = json.loads(seam_owner_index_path.read_text(encoding="utf-8"))
+
+    # 2026-09-18, 사용자 요청("건물 밖에서 나오는 크랙 표시 항목은 삭제"): 같은
+    # COLMAP-preferred picking -- 이 파일이 없는 오래된 facade(또는 COLMAP이
+    # 아예 안 돈 H체인 전용 facade)는 그냥 필터 없이 기존대로 동작(#9/#26 "없으면
+    # 안 만든다" 원칙, 배경 필터도 예외 아님).
+    wall_region_mask_path = _pick(output_dir, facade_id, "_wall_region_mask_colmap.png", "_wall_region_mask.png")
+    wall_region_mask = None
+    if wall_region_mask_path is not None:
+        wall_region_mask = imread_unicode(wall_region_mask_path, cv2.IMREAD_UNCHANGED)
+
+    # 2026-09-19, 사용자 요청("다각형 그리기로 정면만 선택"): 운영자가 뷰어에서
+    # 직접 그린 영역이 있으면, 그게 자동 벽면 마스크보다 우선한다(기본은 여전히
+    # 자동 마스크 -- 이건 "필요할 때만 보정하는" 선택적 오버라이드). 캔버스 크기가
+    # 다르면(재스티칭으로 모자이크가 바뀐 경우) load_manual_region_mask가 None을
+    # 반환해서 자동으로 자동 마스크로 폴백함 -- 낡은 좌표를 잘못된 캔버스에 그대로
+    # 쓰지 않는다.
+    manual_region_path = output_dir / f"{facade_id}_manual_region.json"
+    manual_region_mask = load_manual_region_mask(
+        manual_region_path, (analysis_image.shape[1], analysis_image.shape[0])
+    )
+    if manual_region_mask is not None:
+        wall_region_mask = manual_region_mask
 
     model_path_v1 = args.model or str(cfg.crack.model)
     if not Path(model_path_v1).exists():
@@ -255,6 +278,7 @@ def main() -> None:
                 model_path=model_path,
                 device=args.device,
                 previous_cracks=previous_cracks,
+                wall_region_mask=wall_region_mask,
             )
         else:
             cracks = detect_cracks(
@@ -271,6 +295,7 @@ def main() -> None:
                 seam_owner_map=seam_owner_map,
                 seam_owner_index=seam_owner_index,
                 source_transforms=source_transforms,
+                wall_region_mask=wall_region_mask,
             )
 
         log_event(

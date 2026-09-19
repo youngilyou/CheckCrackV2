@@ -31,6 +31,9 @@ import cv2
 import jinja2
 import numpy as np
 
+# 2026-09-18, 사용자 요청: 보고서엔 신뢰도(confidence) 60% 이상인 크랙만 포함.
+REPORT_MIN_CONFIDENCE = 0.6
+
 
 def _ensure_native_libs() -> None:
     if sys.platform != "win32":
@@ -153,6 +156,12 @@ def load_facade_snapshot(output_dir: str | Path, facade_id: str) -> FacadeSnapsh
     review = _read_json(output_dir / f"{facade_id}_crack_review.json")
     review = review if isinstance(review, dict) else None
     cracks = apply_review(raw_cracks, review)
+    # 2026-09-18, 사용자 요청: 보고서엔 신뢰도(confidence) 60% 이상인 크랙만 포함 --
+    # 낮은 신뢰도 오탐이 본문/집계(평균 폭 등)에 섞여 왜곡시키는 걸 막는다(위 2차/구조물
+    # 오탐 필터와 같은 취지, 별도 축의 필터). 리뷰어가 수동으로 승인/추가한 크랙은
+    # confidence 필드가 아예 없을 수 있어(CrackReviewStatus.Manual) .get 기본값 1.0으로
+    # 항상 통과시킨다 -- 사람이 직접 확인한 것까지 자동 임계치로 거르지 않는다.
+    cracks = [c for c in cracks if c.get("confidence", 1.0) >= REPORT_MIN_CONFIDENCE]
     source_images = _read_json(output_dir / f"{facade_id}_source_images.json") or []
     crack_mask_path = _pick(output_dir, facade_id, "_crack_mask.tif")
 

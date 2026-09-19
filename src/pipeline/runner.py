@@ -35,6 +35,7 @@ from src.geometry.homography import estimate_homography
 from src.geometry.quality import apply_quality_gate
 from src.geometry.rectification import (
     align_reconstruction_to_utm,
+    compute_wall_region_canvas_mask,
     estimate_utm_epsg,
     facade_plane_from_reconstruction,
     facade_plane_from_segment,
@@ -538,6 +539,24 @@ def _run_facade_pipeline(
                         },
                     )
                     _write_source_transform_artifacts(output_dir, facade_id, "_colmap", rect_result)
+                    # 2026-09-18, 사용자 요청("건물 밖에서 나오는 크랙 표시 항목은 삭제"):
+                    # crack/pipeline.py가 각 크랙의 캔버스 폴리곤을 이 마스크와 대조해
+                    # 벽이 아닌 배경(산/지형)에 찍힌 오탐을 걸러낸다. rect_result.
+                    # source_transforms는 이미 계산된 값을 재사용할 뿐이라 rectify_images/
+                    # seam/blend를 다시 돌리지 않음 -- 오늘 겪은 렌더링 경로 마스킹 회귀와
+                    # 무관한, 순수 후처리 필터용 산출물.
+                    if rect_result.source_transforms is not None:
+                        try:
+                            wall_region_mask = compute_wall_region_canvas_mask(
+                                reconstruction, plane, rect_result.source_transforms,
+                                (rect_result.observed_mask.shape[1], rect_result.observed_mask.shape[0]),
+                            )
+                            imwrite_unicode(output_dir / f"{facade_id}_wall_region_mask_colmap.png", wall_region_mask)
+                        except Exception as exc:
+                            log_event(
+                                logger, "warning", "wall_region_mask 계산 실패 -- 건너뜀 (크랙 배경 필터 비활성화됨)",
+                                facade_id=facade_id, error=str(exc),
+                            )
                     log_event(
                         logger, "info", "CM-rectified mosaic complete",
                         stage="RECTIFIED_COLMAP", facade_id=facade_id,

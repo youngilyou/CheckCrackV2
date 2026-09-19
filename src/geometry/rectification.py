@@ -577,6 +577,149 @@ def _apply_canvas_crop(
     return new_warped, new_transforms, (x1 - x0, y1 - y0)
 
 
+def _build_wall_region_mask(
+    img: pycolmap.Image,
+    reconstruction: pycolmap.Reconstruction,
+    normal: np.ndarray,
+    plane_origin: np.ndarray,
+    src_h: int,
+    src_w: int,
+    plane_distance_m: float,
+    min_points: int,
+    dilate_frac: float,
+) -> np.ndarray | None:
+    """One source image's own "this pixel is probably the wall, not sky/
+    terrain/a neighboring building" mask, for CRACK-FILTERING ONLY (see
+    compute_wall_region_canvas_mask below) -- not fed into rectify_images'
+    per-image src_mask/warp path. An earlier 2026-09-17 attempt did wire an
+    equivalent mask directly into the rendering path to crop background out
+    of the mosaic itself, and that caused a real regression (tightening each
+    image's own contribution forced far more seam transitions near the
+    roofline, which exposed pre-existing per-image homography misalignment as
+    a jagged/broken roofline -- confirmed via direct user report + revert).
+    That rendering-path use was reverted; this function survives only as a
+    building block for a purely-additive, post-hoc filter that decides
+    whether an already-detected crack's polygon lands on real wall content,
+    never which pixels the mosaic itself is built from.
+
+    Reuses the same "on-wall" signal `_detect_off_wall_images`
+    (pipeline/runner.py) already computes (a 2D-3D observation's 3D point
+    lands within `plane_distance_m` of the fitted plane) but at PER-PIXEL
+    granularity within one image instead of a single whole-image verdict.
+
+    Sparse evidence only (COLMAP's own triangulated points, not every pixel),
+    so a plain convex hull of the on-wall points would cut off real wall
+    content between/around the sampled points -- dilated outward by
+    `dilate_frac` of the image's own diagonal to compensate. Returns None
+    (meaning "not enough evidence, don't mask" -- keep the image fully valid,
+    the safer default) when fewer than `min_points` on-wall observations
+    exist; a convex hull from a handful of points would be an unreliable,
+    overconfident region estimate.
+
+    plane_distance_m=0.8/dilate_frac=0.01 (compute_wall_region_canvas_mask's
+    defaults) came from direct visual sweeps on the BACK facade (2026-09-17):
+    3.0m/0.05 barely masked anything (background still covered most of the
+    canvas margin, since the large dilation re-expanded the hull back out
+    almost to its pre-trim size); 0.5m went too far the other way (several
+    images then had fewer than `min_points` on-wall observations and fell
+    back to "fully valid", re-introducing a large solid block of background).
+    0.8m/0.01 was the tightest setting that still kept every image above
+    `min_points` in that sweep."""
+    pts = []
+    for p in img.points2D:
+        if not p.has_point3D() or p.point3D_id not in reconstruction.points3D:
+            continue
+        point3d = reconstruction.points3D[p.point3D_id]
+        if abs(float(np.dot(point3d.xyz - plane_origin, normal))) < plane_distance_m:
+            pts.append(p.xy)
+
+    if len(pts) < min_points:
+        return None
+
+    # A convex hull is only as good as its input points -- a handful of
+    # points that pass the plane_distance_m test but are still spatially far
+    # from the main on-wall cluster (a near-miss triangulation, or a
+    # genuinely spurious match that happened to land close to the plane)
+    # stretch the hull out to swallow whatever sky/terrain sits between them
+    # and the real wall cluster, since a hull is convex by definition. Same
+    # IQR outlier-trim philosophy as `_robust_range` applied per-axis here to
+    # drop those stragglers before the hull ever sees them.
+    pts_arr_full = np.asarray(pts, dtype=np.float32)
+    x_lo, x_hi = _robust_range(pts_arr_full[:, 0])
+    y_lo, y_hi = _robust_range(pts_arr_full[:, 1])
+    keep = (
+        (pts_arr_full[:, 0] >= x_lo) & (pts_arr_full[:, 0] <= x_hi)
+        & (pts_arr_full[:, 1] >= y_lo) & (pts_arr_full[:, 1] <= y_hi)
+    )
+    pts_arr_full = pts_arr_full[keep]
+    if len(pts_arr_full) < min_points:
+        return None
+
+    # Fill+dilate at a downsampled working resolution, then upscale the mask
+    # back -- at full DJI resolution (~5280x3956) the dilate kernel (dilate_frac
+    # of the image diagonal) is large enough to make a single dilate() call
+    # slow across dozens of images. The mask only needs to be roughly right
+    # (it only ever gates a coarse keep/drop decision per crack), so working
+    # at ~800px on the long side is both far cheaper and visually
+    # indistinguishable after the upscale.
+    work_scale = min(1.0, 800.0 / max(src_w, src_h))
+    work_w, work_h = max(1, int(round(src_w * work_scale))), max(1, int(round(src_h * work_scale)))
+
+    pts_arr = (pts_arr_full * work_scale).reshape(-1, 1, 2)
+    hull = cv2.convexHull(pts_arr)
+
+    small_mask = np.zeros((work_h, work_w), dtype=np.uint8)
+    cv2.fillConvexPoly(small_mask, hull.astype(np.int32), 255)
+
+    dilate_px = max(1, int(round(dilate_frac * float(np.hypot(work_w, work_h)))))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_px * 2 + 1, dilate_px * 2 + 1))
+    small_mask = cv2.dilate(small_mask, kernel)
+
+    return cv2.resize(small_mask, (src_w, src_h), interpolation=cv2.INTER_NEAREST)
+
+
+def compute_wall_region_canvas_mask(
+    reconstruction: pycolmap.Reconstruction,
+    plane: FacadePlane,
+    source_transforms: dict[str, SourceTransform],
+    canvas_size: tuple[int, int],
+    plane_distance_m: float = 0.8,
+    min_points: int = 20,
+    dilate_frac: float = 0.01,
+) -> np.ndarray:
+    """Canvas-space union of every registered image's own on-wall convex hull
+    (_build_wall_region_mask), warped through the ALREADY-COMPUTED per-image
+    homography `rectify_and_blend` persisted in `source_transforms` -- no
+    second warp/blend pass, no touching any WarpedImage's own mask/pixels.
+    crack/pipeline.py uses the result purely to score whether an
+    already-merged crack polygon lands on real wall content (2026-09-18,
+    user request: "건물 밖에서 나오는 크랙 표시 항목은 삭제") -- a crack whose
+    polygon falls mostly outside this region is background/off-building and
+    gets dropped there, never here. This function never mutates the mosaic,
+    seam ownership, or any rendering artifact, so it carries none of the
+    seam-misalignment regression risk the earlier (reverted) rendering-path
+    version of this mask had -- see _build_wall_region_mask's docstring."""
+    canvas_w, canvas_h = canvas_size
+    normal = np.cross(plane.e_u, plane.e_v)
+    normal = normal / np.linalg.norm(normal)
+
+    union = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
+    for img in reconstruction.images.values():
+        image_id = Path(img.name).stem
+        st = source_transforms.get(image_id)
+        if st is None:
+            continue
+        wall_mask = _build_wall_region_mask(
+            img, reconstruction, normal, plane.origin, st.height, st.width,
+            plane_distance_m, min_points, dilate_frac,
+        )
+        if wall_mask is None:
+            continue
+        warped = cv2.warpPerspective(wall_mask, st.H, (canvas_w, canvas_h), flags=cv2.INTER_NEAREST)
+        union = cv2.bitwise_or(union, warped)
+    return union
+
+
 def rectify_and_blend(
     facade_id: str,
     reconstruction: pycolmap.Reconstruction,

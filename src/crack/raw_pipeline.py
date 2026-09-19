@@ -30,8 +30,9 @@ from shapely.ops import unary_union
 from src.common.config import Config
 from src.common.types import Crack, SourceObservation
 from src.crack.detector import CrackDetection, CrackDetector
-from src.crack.measurement import ScaleInfo, to_mm, to_mm2
+from src.crack.measurement import ScaleInfo, to_mm, to_mm2, view_orthogonality
 from src.crack.merge_tiles import CrackPolygon, group_overlapping_polygons, match_crack_ids, merge_detections
+from src.crack.pipeline import _on_wall_fraction
 from src.crack.skeleton import measure_polygon
 from src.crack.tiler import tile_mosaic
 
@@ -145,6 +146,8 @@ def detect_cracks_from_raw_images(
     device: str | None = None,
     previous_cracks: list[dict] | None = None,
     cross_image_iou_threshold: float | None = None,
+    wall_region_mask: np.ndarray | None = None,
+    min_on_wall_fraction: float = 0.5,
 ) -> list[Crack]:
     """Full raw-photo-first pipeline: `image_paths`(image_id -> file path,
     already filtered to the surviving/good image set -- see
@@ -246,6 +249,7 @@ def detect_cracks_from_raw_images(
         width_mm_values: list[float] = []
         area_mm2_values: list[float] = []
         source_observations: list[SourceObservation] = []
+        obs_orthogonality: list[float] = []
         for i in idxs:
             image_id, polygon_raw_px = item_meta[i]
             raw_measurement = measure_polygon(polygon_raw_px)
@@ -253,7 +257,8 @@ def detect_cracks_from_raw_images(
                 continue
             H = np.asarray(source_transforms[image_id]["H"], dtype=np.float64)
             centroid_raw = polygon_raw_px.mean(axis=0)
-            scale = local_scale_info(H, canvas_px_per_m, (float(centroid_raw[0]), float(centroid_raw[1])))
+            centroid_raw_xy = (float(centroid_raw[0]), float(centroid_raw[1]))
+            scale = local_scale_info(H, canvas_px_per_m, centroid_raw_xy)
             l_mm = to_mm(raw_measurement.length_px, scale)
             w_mm = to_mm(raw_measurement.max_width_px, scale)
             a_mm2 = to_mm2(cv2_contour_area(polygon_raw_px), scale)
@@ -278,7 +283,18 @@ def detect_cracks_from_raw_images(
                     owned_pixel_count=int(round(cv2_contour_area(polygon_raw_px))),
                 )
             )
-        source_observations.sort(key=lambda o: o.owned_pixel_count, reverse=True)
+            obs_orthogonality.append(view_orthogonality(H, centroid_raw_xy))
+        # 정면(정사)에 가까운 사진을 우선 -- pixel area만으로는 기울어진(oblique)
+        # 사진의 크랙이 원근으로 늘어나 보여 더 큰 값을 가질 수 있어 오히려 나쁜
+        # 사진이 1순위로 뽑히던 문제(2026-09-18 사용자 실사례: DJI_0089(회전됨)가
+        # DJI_0094/95(정사)보다 우선 선택됨) -- orthogonality를 1순위, 동률일 때만
+        # 기존 pixel area를 tiebreak으로 사용.
+        order = sorted(
+            range(len(source_observations)),
+            key=lambda i: (obs_orthogonality[i], source_observations[i].owned_pixel_count),
+            reverse=True,
+        )
+        source_observations = [source_observations[i] for i in order]
 
         length_mm = sum(length_mm_values) / len(length_mm_values) if length_mm_values else None
         max_width_mm = sum(width_mm_values) / len(width_mm_values) if width_mm_values else None
@@ -290,6 +306,20 @@ def detect_cracks_from_raw_images(
 
         x0, y0 = merged_poly.polygon_px.min(axis=0)
         x1, y1 = merged_poly.polygon_px.max(axis=0)
+        # Defensive sanity check + off-wall filter (2026-09-18, 사용자 요청:
+        # "건물 밖에서 나오는 크랙 표시 항목은 삭제") -- same reasoning as
+        # crack/pipeline.py::detect_cracks' identical checks: a merged canvas
+        # polygon outside the mosaic's own bounds is invalid regardless of
+        # cause (root cause not yet found for this pipeline, flagged for
+        # follow-up), and wall_region_mask (compute_wall_region_canvas_mask,
+        # crack-filtering only, never touches rendering) separates real wall
+        # content from background/off-building false positives.
+        if wall_region_mask is not None:
+            mh, mw = wall_region_mask.shape[:2]
+            if x0 < 0 or y0 < 0 or x1 > mw or y1 > mh:
+                continue
+            if _on_wall_fraction(merged_poly.polygon_px, wall_region_mask) < min_on_wall_fraction:
+                continue
         cracks.append(
             Crack(
                 crack_id=merged_poly.crack_id,

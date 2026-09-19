@@ -73,6 +73,7 @@ def _compute_source_observations(
     labels, counts = np.unique(owned, return_counts=True)
 
     observations: list[SourceObservation] = []
+    obs_orthogonality: list[float] = []
     for label, count in zip(labels, counts):
         if label == 0 or int(count) < min_overlap_px:
             continue
@@ -87,8 +88,31 @@ def _compute_source_observations(
         except np.linalg.LinAlgError:
             continue
 
+        # Reproject only the CONTOUR of this image's own owned region within
+        # the crack (not the crack's full polygon) -- confirmed real bug,
+        # 2026-09-18 (user report + direct data inspection, BACK facade crack
+        # BACK_C000044): a crack straddling a seam boundary is only partly
+        # "owned" (seam_owner_map) by any single image, but transforming the
+        # crack's WHOLE polygon through one owner's H_inv regardless still
+        # projects the portion some *other* image actually owns -- which can
+        # legitimately fall outside this image's own real frame (that's
+        # exactly why the seam gave that portion to a different owner). The
+        # result was a bbox_px_in_source silently clamped to the image edge
+        # (e.g. y0=0), showing a misleadingly cropped/wrong-looking view in
+        # "원본 보기" even though the reported coordinates were self-consistent.
+        # Restricting to this label's own owned-pixel mask before transforming
+        # means only real, actually-captured content ever contributes to this
+        # image's bbox.
+        label_mask = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
+        label_mask[(owner_crop == label) & (local_mask > 0)] = 255
+        contours, _ = cv2.findContours(label_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+        owned_poly_local = np.concatenate(contours, axis=0).reshape(-1, 2).astype(np.float64)
+        owned_poly_mosaic = owned_poly_local + np.array([x0, y0], dtype=np.float64)
+
         pts_src = cv2.perspectiveTransform(
-            polygon_px.astype(np.float64).reshape(-1, 1, 2), H_inv
+            owned_poly_mosaic.reshape(-1, 1, 2), H_inv
         ).reshape(-1, 2)
         pts_src[:, 0] = np.clip(pts_src[:, 0], 0, width - 1)
         pts_src[:, 1] = np.clip(pts_src[:, 1], 0, height - 1)
@@ -103,9 +127,42 @@ def _compute_source_observations(
                 owned_pixel_count=int(count),
             )
         )
+        centroid_mosaic = owned_poly_mosaic.mean(axis=0)
+        obs_orthogonality.append(view_orthogonality(H_inv, (float(centroid_mosaic[0]), float(centroid_mosaic[1]))))
 
-    observations.sort(key=lambda o: o.owned_pixel_count, reverse=True)
-    return observations
+    # 정면(정사)에 가까운 사진을 1순위로 -- raw_pipeline.py::detect_cracks_from_raw_images와
+    # 동일한 이유/수식(view_orthogonality), 2026-09-18 사용자 요청. H_inv를 넣는 이유:
+    # 여기서의 "이 이미지가 이 지점을 보는 로컬 야코비안"은 mosaic-pixel -> source-pixel
+    # 방향(H_inv)의 국소 선형 근사이며, raw_pipeline.py가 쓰는 source-pixel -> canvas-pixel
+    # 방향(H)과 반대이지만 s2/s1 비율(등방성)은 정방행렬의 역행렬을 취해도 보존되므로
+    # (둘 다 같은 국소 왜곡의 척도) 결과는 동일하게 해석 가능하다.
+    order = sorted(
+        range(len(observations)),
+        key=lambda i: (obs_orthogonality[i], observations[i].owned_pixel_count),
+        reverse=True,
+    )
+    return [observations[i] for i in order]
+
+
+def _on_wall_fraction(polygon_px: np.ndarray, wall_region_mask: np.ndarray) -> float:
+    """Fraction of `polygon_px`'s own rasterized area that falls inside
+    `wall_region_mask` -- see compute_wall_region_canvas_mask's docstring for
+    why this is safe to use as a post-hoc filter (never touches rendering)."""
+    canvas_h, canvas_w = wall_region_mask.shape[:2]
+    x0f, y0f = polygon_px.min(axis=0)
+    x1f, y1f = polygon_px.max(axis=0)
+    x0, y0 = max(0, int(np.floor(x0f))), max(0, int(np.floor(y0f)))
+    x1, y1 = min(canvas_w, int(np.ceil(x1f)) + 1), min(canvas_h, int(np.ceil(y1f)) + 1)
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    local_mask = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
+    local_poly = np.round(polygon_px - np.array([x0, y0])).astype(np.int32).reshape(-1, 1, 2)
+    cv2.fillPoly(local_mask, [local_poly], 255)
+    total = int(np.count_nonzero(local_mask))
+    if total == 0:
+        return 0.0
+    inside = int(np.count_nonzero(cv2.bitwise_and(local_mask, wall_region_mask[y0:y1, x0:x1])))
+    return inside / total
 
 
 def detect_cracks(
@@ -122,6 +179,8 @@ def detect_cracks(
     seam_owner_map: np.ndarray | None = None,
     seam_owner_index: list[str] | None = None,
     source_transforms: dict[str, dict] | None = None,
+    wall_region_mask: np.ndarray | None = None,
+    min_on_wall_fraction: float = 0.5,
 ) -> list[Crack]:
     tiles = tile_mosaic(facade_id, analysis_image, observed_mask, cfg)
     if not tiles:
@@ -144,6 +203,8 @@ def detect_cracks(
     width_threshold_mm = float(cfg.measurement.crack_width_threshold_mm)
     min_overlap_px = int(getattr(cfg.measurement, "source_observation_min_overlap_px", 20))
 
+    canvas_h, canvas_w = analysis_image.shape[:2]
+
     cracks: list[Crack] = []
     for poly in merged_polygons:
         measurement = measure_polygon(poly.polygon_px)
@@ -151,6 +212,16 @@ def detect_cracks(
             continue
         x0, y0 = poly.polygon_px.min(axis=0)
         x1, y1 = poly.polygon_px.max(axis=0)
+        # Defensive sanity check, independent of wall_region_mask (2026-09-18):
+        # a crack polygon that extends outside the mosaic's own canvas bounds
+        # is definitionally invalid regardless of cause -- confirmed real on
+        # the BACK facade (some tile/merge-produced polygons landed up to
+        # ~600px past the canvas edge; root cause not yet found, flagged for
+        # follow-up) -- never emitted, not just filtered downstream.
+        if x0 < 0 or y0 < 0 or x1 > canvas_w or y1 > canvas_h:
+            continue
+        if wall_region_mask is not None and _on_wall_fraction(poly.polygon_px, wall_region_mask) < min_on_wall_fraction:
+            continue
         max_width_mm = to_mm(measurement.max_width_px, scale)
         # Calibration-gated severity (건설 크랙검사 기준 0.3mm) -- never graded
         # from px alone, matching to_mm's own "no calibration, no mm" rule.

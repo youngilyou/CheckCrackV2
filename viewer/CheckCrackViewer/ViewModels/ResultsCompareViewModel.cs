@@ -820,6 +820,11 @@ public partial class ResultsCompareViewModel : ObservableObject
             Status = status,
             CanvasPoints = canvasPoints,
             SourceObservations = sourceObservations ?? new List<SourceObservationModel>(),
+            // 2026-09-18, 사용자 요청: 신뢰도 60% 미만은 기본적으로 이미 있는 "숨김"
+            // 상태(IsHighlightVisible)로 시작 -- 새 회색 스타일을 따로 만들 필요 없이
+            // 기존 토글(클릭하면 다시 보임) 그대로 재사용. 이 값과 pdf_report.py의
+            // REPORT_MIN_CONFIDENCE는 반드시 같은 0.6 기준이어야 한다.
+            IsHighlightVisible = confidence >= 0.6,
         };
     }
 

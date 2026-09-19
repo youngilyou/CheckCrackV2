@@ -1,11 +1,19 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Shapes;
 using CheckCrackViewer.Services;
 using CheckCrackViewer.ViewModels;
 
@@ -42,6 +50,15 @@ public partial class ImageViewerWindow : Window
     private string? _rootPath;
     private List<FloorRow> _floorRows = new();
 
+    // 2026-09-19: 정면 영역 지정(다각형 그리기) 상태. 좌표는 전부 "이미지 자신의 픽셀 공간"
+    // (파이썬 쪽 manual_region.json이 읽는 것과 같은 좌표계) -- 화면 좌표는 줌/팬마다 바뀌므로
+    // 절대 여기에 저장하지 않고, RedrawRegionOverlay가 그릴 때마다 현재 _scale/left/top으로
+    // 다시 변환한다.
+    private bool _isDrawingRegion;
+    private readonly List<List<Point>> _completedPolygons = new();
+    private List<Point> _currentPolygon = new();
+    private bool _isRegionBusy;
+
     public ImageViewerWindow(string imagePath)
     {
         InitializeComponent();
@@ -59,6 +76,7 @@ public partial class ImageViewerWindow : Window
         _facadeContext = facade;
         _rootPath = rootPath;
         LoadImage(imagePath);
+        RegionTool_UpdateVisibility();
         KeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
     }
 
@@ -82,6 +100,7 @@ public partial class ImageViewerWindow : Window
             LoadImage(facade.LivePreviewImagePath, facade.FacadeId + " (실시간 미리보기)");
         else
             Tag = facade.FacadeId + " (실시간 미리보기 대기 중)";
+        RegionTool_UpdateVisibility();
 
         KeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
     }
@@ -207,6 +226,7 @@ public partial class ImageViewerWindow : Window
         Canvas.SetTop(TheImage, top);
         ZoomText.Text = $"{_scale * 100:0}%";
         RedrawFloorLabels(left, top);
+        RedrawRegionOverlay(left, top);
     }
 
     /// <summary>총 층수/층고(BuildingMetadataStore, 사용자 수동 입력) + 이 facade의
@@ -303,6 +323,12 @@ public partial class ImageViewerWindow : Window
 
     private void Canvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        if (_isDrawingRegion)
+        {
+            RegionCanvas_MouseLeftButtonDown(e);
+            return;
+        }
+
         _userHasZoomedOrPanned = true;
         _isDragging = true;
         _dragStart = e.GetPosition(Viewport);
@@ -326,5 +352,255 @@ public partial class ImageViewerWindow : Window
     {
         _isDragging = false;
         Viewport.ReleaseMouseCapture();
+    }
+
+    // =====================================================================
+    // 2026-09-19: 정면 영역 지정 (다각형 그리기 -> 재검출 -> 재보고서)
+    // =====================================================================
+    // 설계 검토(사용자 확정): 기본은 자동 벽면 마스크가 계속 담당하고, 이건 "필요할 때만
+    // 쓰는 선택적 보정"이다 -- 배치 자동 실행 경로에는 이 UI 자체가 없으므로 자동화를
+    // 막지 않는다. 원본 모자이크 TIFF는 절대 잘라내지 않음(#11 provenance 원칙) -- 다각형은
+    // {facade_id}_manual_region.json으로 저장되어 크랙 검출 단계의 필터로만 쓰인다
+    // (src/geometry/manual_region.py, tools/detect_cracks_folder.py).
+
+    private bool RegionToolAvailable =>
+        _facadeContext is { } f && !string.IsNullOrEmpty(f.OutputDir) && !string.IsNullOrEmpty(f.FacadeId)
+        && !string.IsNullOrEmpty(_rootPath) && (_liveFacade is null || !_liveFacade.IsRunning);
+
+    private void RegionTool_UpdateVisibility()
+    {
+        RegionToolPanel.Visibility = RegionToolAvailable ? Visibility.Visible : Visibility.Collapsed;
+        RegionStatusText.Text = "";
+    }
+
+    private void RegionDrawToggle_Click(object sender, RoutedEventArgs e)
+    {
+        _isDrawingRegion = RegionDrawToggle.IsChecked == true;
+        HintText.Text = _isDrawingRegion
+            ? "클릭: 꼭짓점 추가 · 더블클릭: 다각형 완료 · Esc: 닫기"
+            : "휠: 확대/축소 · 드래그: 이동 · Esc: 닫기";
+        if (!_isDrawingRegion && _currentPolygon.Count >= 3)
+        {
+            _completedPolygons.Add(_currentPolygon);
+            _currentPolygon = new List<Point>();
+        }
+        RegionApplyButton.IsEnabled = _completedPolygons.Count > 0 && !_isRegionBusy;
+        RedrawRegionOverlay(Canvas.GetLeft(TheImage), Canvas.GetTop(TheImage));
+    }
+
+    private void RegionClearButton_Click(object sender, RoutedEventArgs e)
+    {
+        _completedPolygons.Clear();
+        _currentPolygon = new List<Point>();
+        RegionApplyButton.IsEnabled = false;
+        RegionStatusText.Text = "";
+        RedrawRegionOverlay(Canvas.GetLeft(TheImage), Canvas.GetTop(TheImage));
+    }
+
+    /// <summary>화면(스크린) 좌표를 "이미지 자신의 픽셀 좌표"로 환산 -- 지금 줌/팬(_scale,
+    /// TheImage의 Canvas.Left/Top)을 역으로 풀면 된다. manual_region.json은 항상 이
+    /// 좌표계로 저장되므로, 나중에 다른 줌 배율로 다시 열어도 같은 자리를 가리킨다.</summary>
+    private Point ScreenToImagePoint(Point screen)
+    {
+        double left = Canvas.GetLeft(TheImage);
+        double top = Canvas.GetTop(TheImage);
+        return new Point((screen.X - left) / _scale, (screen.Y - top) / _scale);
+    }
+
+    private void RegionCanvas_MouseLeftButtonDown(MouseButtonEventArgs e)
+    {
+        var screenPoint = e.GetPosition(Viewport);
+        var imagePoint = ScreenToImagePoint(screenPoint);
+
+        if (e.ClickCount >= 2)
+        {
+            // 더블클릭: 지금 그리던 다각형을 닫는다. 마지막 클릭에서 방금 추가된
+            // 꼭짓점(더블클릭의 첫 클릭분)은 이미 아래 단일-클릭 처리에서 들어갔으므로,
+            // 여기서는 다각형을 완료 처리만 한다.
+            if (_currentPolygon.Count >= 3)
+            {
+                _completedPolygons.Add(_currentPolygon);
+                _currentPolygon = new List<Point>();
+                RegionApplyButton.IsEnabled = true;
+                RegionStatusText.Text = $"다각형 {_completedPolygons.Count}개 완료";
+            }
+            else
+            {
+                RegionStatusText.Text = "꼭짓점 3개 이상 찍어야 다각형이 됩니다";
+            }
+            e.Handled = true;
+            RedrawRegionOverlay(Canvas.GetLeft(TheImage), Canvas.GetTop(TheImage));
+            return;
+        }
+
+        _currentPolygon.Add(imagePoint);
+        e.Handled = true;
+        RedrawRegionOverlay(Canvas.GetLeft(TheImage), Canvas.GetTop(TheImage));
+    }
+
+    /// <summary>_completedPolygons + 그리는 중인 _currentPolygon을 지금 줌/팬 기준
+    /// 화면 좌표로 다시 그림 -- ApplyTransform(줌/팬)마다, 그리고 꼭짓점을 찍을 때마다 호출.</summary>
+    private void RedrawRegionOverlay(double left, double top)
+    {
+        RegionDrawCanvas.Children.Clear();
+        if (!RegionToolAvailable)
+            return;
+
+        Point ToScreen(Point imagePt) => new(left + imagePt.X * _scale, top + imagePt.Y * _scale);
+
+        void DrawPolygon(List<Point> polyImagePts, bool closed, Brush stroke, Brush fill)
+        {
+            if (polyImagePts.Count == 0)
+                return;
+            var poly = new Polygon
+            {
+                Stroke = stroke,
+                StrokeThickness = 2,
+                Fill = closed ? fill : Brushes.Transparent,
+            };
+            foreach (var p in polyImagePts)
+                poly.Points.Add(ToScreen(p));
+            RegionDrawCanvas.Children.Add(poly);
+
+            foreach (var p in polyImagePts)
+            {
+                var screenP = ToScreen(p);
+                var dot = new Ellipse
+                {
+                    Width = 8, Height = 8, Fill = stroke,
+                };
+                Canvas.SetLeft(dot, screenP.X - 4);
+                Canvas.SetTop(dot, screenP.Y - 4);
+                RegionDrawCanvas.Children.Add(dot);
+            }
+        }
+
+        var doneStroke = new SolidColorBrush(Color.FromRgb(0x4C, 0xAF, 0x50));
+        var doneFill = new SolidColorBrush(Color.FromArgb(0x33, 0x4C, 0xAF, 0x50));
+        foreach (var poly in _completedPolygons)
+            DrawPolygon(poly, closed: true, doneStroke, doneFill);
+
+        if (_currentPolygon.Count > 0)
+        {
+            var activeStroke = new SolidColorBrush(Color.FromRgb(0xF1, 0xC4, 0x0F));
+            DrawPolygon(_currentPolygon, closed: false, activeStroke, Brushes.Transparent);
+        }
+    }
+
+    private async void RegionApplyButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isRegionBusy || _facadeContext is not { } facade || string.IsNullOrEmpty(_rootPath))
+            return;
+        if (_currentPolygon.Count >= 3)
+        {
+            _completedPolygons.Add(_currentPolygon);
+            _currentPolygon = new List<Point>();
+        }
+        if (_completedPolygons.Count == 0 || string.IsNullOrEmpty(facade.OutputDir))
+            return;
+
+        _isRegionBusy = true;
+        RegionApplyButton.IsEnabled = false;
+        RegionDrawToggle.IsEnabled = false;
+        RegionClearButton.IsEnabled = false;
+        try
+        {
+            RegionStatusText.Text = "영역 저장 중...";
+            var regionPath = System.IO.Path.Combine(facade.OutputDir, $"{facade.FacadeId}_manual_region.json");
+            SaveManualRegionJson(regionPath, _pixelWidth, _pixelHeight, _completedPolygons);
+
+            RegionStatusText.Text = "크랙 재검출 중... (몇 분 소요될 수 있습니다)";
+            var detectOk = await RunPythonScriptAsync(
+                System.IO.Path.Combine("tools", "detect_cracks_folder.py"), facade.OutputDir, facade.FacadeId);
+            if (!detectOk.Success)
+            {
+                RegionStatusText.Text = $"크랙 재검출 실패: {detectOk.ErrorSummary}";
+                return;
+            }
+
+            RegionStatusText.Text = "보고서 재생성 중...";
+            var reportOk = await RunPythonScriptAsync(
+                System.IO.Path.Combine("tools", "generate_report.py"), "facade", facade.OutputDir, facade.FacadeId);
+            if (!reportOk.Success)
+            {
+                RegionStatusText.Text = $"보고서 생성 실패: {reportOk.ErrorSummary}";
+                return;
+            }
+
+            RegionStatusText.Text = "완료 -- 정면 영역 기준으로 재검출/보고서 갱신됨";
+            MessageBox.Show("정면 영역 기준으로 크랙 재검출 + 보고서 재생성을 완료했습니다.", "완료",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            RegionStatusText.Text = $"실패: {ex.Message}";
+        }
+        finally
+        {
+            _isRegionBusy = false;
+            RegionDrawToggle.IsEnabled = true;
+            RegionClearButton.IsEnabled = true;
+            RegionApplyButton.IsEnabled = _completedPolygons.Count > 0;
+        }
+    }
+
+    /// <summary>src/geometry/manual_region.py::save_manual_region이 읽는 것과 정확히 같은
+    /// 스키마 -- 파이썬 쪽을 다시 안 부르고 여기서 직접 쓴다(단순 JSON이라 왕복 호출이
+    /// 과함). 좌표는 이미 ScreenToImagePoint로 이미지 픽셀 공간으로 저장돼 있음.</summary>
+    private static void SaveManualRegionJson(string path, int canvasWidth, int canvasHeight, List<List<Point>> polygons)
+    {
+        var payload = new
+        {
+            canvas_width = canvasWidth,
+            canvas_height = canvasHeight,
+            polygons = polygons.Select(poly => poly.Select(p => new[] { Math.Round(p.X, 1), Math.Round(p.Y, 1) })).ToList(),
+        };
+        var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+        var tmp = path + ".tmp";
+        File.WriteAllText(tmp, json, Encoding.UTF8);
+        File.Delete(path);
+        File.Move(tmp, path);
+    }
+
+    /// <summary>MainViewModel.RunFacade / ResultsCompareViewModel.RegenerateFinalReportCore와
+    /// 동일한 서브프로세스 실행 패턴 -- 이 창은 독립 코드비하인드라 그 ViewModel들을 직접
+    /// 재사용하지 않고 같은 패턴만 그대로 따른다.</summary>
+    private async Task<(bool Success, string ErrorSummary)> RunPythonScriptAsync(string scriptRelativePath, params string[] args)
+    {
+        var scriptPath = System.IO.Path.Combine(_rootPath!, scriptRelativePath);
+        var psi = new ProcessStartInfo
+        {
+            FileName = PythonEnvironment.DiscoverPythonExe(),
+            WorkingDirectory = _rootPath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        psi.ArgumentList.Add(scriptPath);
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        process.Start();
+        ChildProcessRegistry.Register(process);
+        try
+        {
+            var stderrTask = process.StandardError.ReadToEndAsync();
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            if (process.ExitCode != 0)
+            {
+                var stderr = await stderrTask;
+                var lines = stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var summary = lines.Length > 0 ? lines[^1] : $"exit code {process.ExitCode}";
+                return (false, summary);
+            }
+            return (true, "");
+        }
+        finally
+        {
+            ChildProcessRegistry.Unregister(process);
+        }
     }
 }

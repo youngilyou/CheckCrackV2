@@ -24,6 +24,12 @@
                  입력돼 있고 이 facade의 px_per_m이 calibrated=true일 때만 채워짐(FloorLabels_Redraw).
                  IsHitTestVisible=False라 줌/드래그 조작을 가로채지 않음. -->
             <Canvas x:Name="FloorLabelCanvas" IsHitTestVisible="False"/>
+
+            <!-- 2026-09-19 사용자 요청("다각형 그리기로 정면만 선택"): 운영자가 정면 벽에
+                 해당하는 영역만 자유 다각형(N개 꼭짓점, 클릭으로 찍음)으로 그려서 크랙 검출
+                 범위를 수동으로 보정하는 오버레이. IsHitTestVisible=False. 실제 클릭은
+                 Viewport의 MouseLeftButtonDown이 받고, 여기는 그리기 결과만 표시. -->
+            <Canvas x:Name="RegionDrawCanvas" IsHitTestVisible="False"/>
         </Grid>
 
         <!-- toolbar -->
@@ -31,7 +37,22 @@
             <StackPanel Orientation="Horizontal">
                 <TextBlock x:Name="FileNameText" Foreground="#E7E9E4" FontFamily="Consolas" FontSize="12" VerticalAlignment="Center" Margin="0,0,16,0"/>
                 <TextBlock x:Name="ZoomText" Foreground="#9AA39C" FontFamily="Consolas" FontSize="12" VerticalAlignment="Center" Margin="0,0,16,0"/>
-                <TextBlock Text="휠: 확대/축소 · 드래그: 이동 · Esc: 닫기" Foreground="#C7CDC8" FontSize="11" VerticalAlignment="Center"/>
+                <TextBlock x:Name="HintText" Text="휠: 확대/축소 · 드래그: 이동 · Esc: 닫기" Foreground="#C7CDC8" FontSize="11" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Border>
+
+        <!-- 2026-09-19: 정면 영역 지정 도구. facade 컨텍스트(OutputDir/FacadeId)가 있을 때만
+             표시(RegionTool_UpdateVisibility). 배치 자동 실행 안에서는 절대 안 뜨는 순수
+             선택적 수동 보정. 이 창을 사람이 직접 열어서 눌러야만 시작됨. -->
+        <Border x:Name="RegionToolPanel" VerticalAlignment="Top" HorizontalAlignment="Right" Background="#CC1C2124"
+                CornerRadius="0,0,0,10" Padding="14,10" Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="RegionStatusText" Foreground="#9AA39C" FontSize="11" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                <ToggleButton x:Name="RegionDrawToggle" Content="정면 영역 그리기" Padding="8,4" Margin="0,0,8,0"
+                              Click="RegionDrawToggle_Click"/>
+                <Button x:Name="RegionApplyButton" Content="적용 (재검출)" Padding="8,4" Margin="0,0,8,0"
+                        IsEnabled="False" Click="RegionApplyButton_Click"/>
+                <Button x:Name="RegionClearButton" Content="초기화" Padding="8,4" Click="RegionClearButton_Click"/>
             </StackPanel>
         </Border>
     </Grid>
