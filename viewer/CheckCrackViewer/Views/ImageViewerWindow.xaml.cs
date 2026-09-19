@@ -475,6 +475,40 @@ public partial class ImageViewerWindow : Window
             }
         }
 
+        // 2026-09-19 사용자 요청("이외 지역은 어둡게"): 완성된 다각형이 하나라도 있으면
+        // 그 다각형들의 합집합 밖(=크랙 검출에서 제외될 영역)을 반투명 검정으로 덮어서
+        // "이 부분은 범위 밖"이라는 걸 그리는 즉시 눈으로 바로 알 수 있게 함. 전체 이미지
+        // 사각형과 각 다각형을 한 PathGeometry에 FillRule=EvenOdd로 같이 넣으면, 사각형과
+        // 다각형이 겹치는 부분(=다각형 내부)만 짝수 겹침이라 안 채워지고 나머지가 채워짐 --
+        // 별도 마스킹/클리핑 계산 없이 다중 다각형(구멍 여러 개)도 그대로 처리됨.
+        if (_completedPolygons.Count > 0)
+        {
+            var dimGeometry = new PathGeometry { FillRule = FillRule.EvenOdd };
+            var fullRectFigure = new PathFigure { IsClosed = true, StartPoint = ToScreen(new Point(0, 0)) };
+            fullRectFigure.Segments.Add(new PolyLineSegment(new[]
+            {
+                ToScreen(new Point(_pixelWidth, 0)),
+                ToScreen(new Point(_pixelWidth, _pixelHeight)),
+                ToScreen(new Point(0, _pixelHeight)),
+            }, isStroked: false));
+            dimGeometry.Figures.Add(fullRectFigure);
+
+            foreach (var poly in _completedPolygons)
+            {
+                if (poly.Count < 3)
+                    continue;
+                var holeFigure = new PathFigure { IsClosed = true, StartPoint = ToScreen(poly[0]) };
+                holeFigure.Segments.Add(new PolyLineSegment(poly.Skip(1).Select(ToScreen), isStroked: false));
+                dimGeometry.Figures.Add(holeFigure);
+            }
+
+            RegionDrawCanvas.Children.Add(new System.Windows.Shapes.Path
+            {
+                Data = dimGeometry,
+                Fill = new SolidColorBrush(Color.FromArgb(0x99, 0x00, 0x00, 0x00)),
+            });
+        }
+
         var doneStroke = new SolidColorBrush(Color.FromRgb(0x4C, 0xAF, 0x50));
         var doneFill = new SolidColorBrush(Color.FromArgb(0x33, 0x4C, 0xAF, 0x50));
         foreach (var poly in _completedPolygons)
@@ -557,7 +591,13 @@ public partial class ImageViewerWindow : Window
         };
         var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
         var tmp = path + ".tmp";
-        File.WriteAllText(tmp, json, Encoding.UTF8);
+        // new UTF8Encoding(false): plain Encoding.UTF8 writes a leading BOM, which
+        // Python's json.loads(text) rejects outright (JSONDecodeError) -- confirmed
+        // real, 2026-09-19: every manual_region.json this method had ever written
+        // silently failed to load on the Python side (load_manual_region_mask's
+        // except clause swallowed the error), so the dim overlay/crack filter never
+        // actually activated despite the file existing and looking fine on disk.
+        File.WriteAllText(tmp, json, new UTF8Encoding(false));
         File.Delete(path);
         File.Move(tmp, path);
     }

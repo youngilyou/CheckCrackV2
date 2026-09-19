@@ -53,7 +53,10 @@ public partial class ComparePanelState : ObservableObject
     public string OriginalImageLabel => HasOriginalImageList ? $"{OriginalImageIndex + 1} / {OriginalImageList.Count}" : "";
 
     // --- 스티칭: 마우스 줌/이동 + 더블클릭 전체화면(StitchImagePath를 ImageViewerWindow에 전달) ---
-    [ObservableProperty] private BitmapImage? _stitchDisplayBitmap;
+    // BitmapSource(BitmapImage보다 넓은 타입) -- 수동 정면 영역이 저장돼 있으면
+    // ResultsCompareViewModel.LoadStitchImage가 RenderTargetBitmap으로 어둡게 처리된
+    // 버전을 만들어 넣는데, RenderTargetBitmap은 BitmapImage의 하위 타입이 아니다.
+    [ObservableProperty] private BitmapSource? _stitchDisplayBitmap;
     [ObservableProperty] private double _stitchDisplayWidth;
     [ObservableProperty] private double _stitchDisplayHeight;
     [ObservableProperty] private string _stitchImagePath = "";

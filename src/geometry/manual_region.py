@@ -43,7 +43,15 @@ def load_manual_region_mask(
     if not path.exists():
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        # "utf-8-sig", not "utf-8": the C# side (ImageViewerWindow.SaveManualRegionJson)
+        # writes via .NET's Encoding.UTF8, which emits a leading BOM by default --
+        # confirmed real, 2026-09-19 (json.loads raised JSONDecodeError on every
+        # manual_region.json the viewer had ever saved, silently swallowed by the
+        # except below, so the dim overlay/crack filter never actually activated
+        # even though the file existed and looked fine on disk). utf-8-sig strips
+        # a BOM if present and is a no-op otherwise, so it's safe for files from
+        # either writer (this module's own save_manual_region never adds one).
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, OSError):
         return None
 

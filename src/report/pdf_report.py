@@ -63,6 +63,7 @@ except OSError as exc:  # native libs still missing -- fail with an actionable K
 from src.common.atomic_io import atomic_write_json  # noqa: E402 (import order: native-lib bootstrap must run first)
 from src.common.imageio import imread_unicode  # noqa: E402
 from src.crack.review import apply_review  # noqa: E402
+from src.geometry.manual_region import load_manual_region_mask  # noqa: E402
 from src.report.crack_crops import generate_crack_crops, generate_crack_map  # noqa: E402
 from src.report.svg_charts import ChartSlice, donut_or_pie_svg, legend_rows  # noqa: E402
 
@@ -235,6 +236,28 @@ def build_confidence_tiers(cracks: list[dict]) -> list[ChartSlice]:
     ]
 
 
+def _apply_manual_region_dim(img: np.ndarray, snapshot: FacadeSnapshot) -> np.ndarray:
+    """Darkens everything outside the operator-drawn front-face polygon(s)
+    (ImageViewerWindow's "정면 영역 그리기" -> {facade_id}_manual_region.json)
+    to 40% brightness, matching the viewer's own dim overlay exactly (WPF
+    side draws 0x99/255=60%-opacity black over it, i.e. result=orig*0.4 --
+    same math here) so the PDF report and the 결과 보기 screen never show two
+    different pictures of "what was in scope" (2026-09-19 user request: "보고서,
+    결과 뷰에도 반영 되어야함"). No manual_region.json, or one whose
+    canvas_width/height no longer matches this mosaic (re-stitched since it was
+    drawn) -> returns `img` unchanged, same fallback rule as the viewer and
+    detect_cracks_folder.py."""
+    mask = load_manual_region_mask(
+        snapshot.output_dir / f"{snapshot.facade_id}_manual_region.json", (img.shape[1], img.shape[0])
+    )
+    if mask is None:
+        return img
+    outside = mask == 0
+    dimmed = img.copy()
+    dimmed[outside] = (dimmed[outside].astype(np.float32) * 0.4).astype(np.uint8)
+    return dimmed
+
+
 def _mosaic_thumbnail_only(snapshot: FacadeSnapshot) -> str | None:
     """Downscaled mosaic thumbnail with no crack-crop work -- used by the
     building report's side-group grid, which only ever shows one small
@@ -247,6 +270,7 @@ def _mosaic_thumbnail_only(snapshot: FacadeSnapshot) -> str | None:
     img = imread_unicode(str(snapshot.analysis_path), cv2.IMREAD_COLOR)
     if img is None:
         return None
+    img = _apply_manual_region_dim(img, snapshot)
     h, w = img.shape[:2]
     scale = min(1.0, 1200 / max(h, w))
     thumb = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA) if scale < 1.0 else img
@@ -267,6 +291,7 @@ def _mosaic_section_data(snapshot: FacadeSnapshot, numbered_cracks: list[dict]) 
     img = imread_unicode(str(snapshot.analysis_path), cv2.IMREAD_COLOR)
     if img is None:
         return None, None, {}
+    img = _apply_manual_region_dim(img, snapshot)
 
     h, w = img.shape[:2]
     scale = min(1.0, 1600 / max(h, w))

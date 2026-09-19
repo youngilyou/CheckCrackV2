@@ -340,13 +340,10 @@ public partial class ResultsCompareViewModel : ObservableObject
 
         panel.StitchImagePath = path;
         panel.StitchIsColmapRectified = facade?.AnalysisColmapImagePath != null;
-        var bitmap = LoadScaledBitmap(path);
-        panel.StitchDisplayBitmap = bitmap;
-        panel.StitchDisplayWidth = bitmap?.PixelWidth ?? 0;
-        panel.StitchDisplayHeight = bitmap?.PixelHeight ?? 0;
 
         // 클릭 좌표 -> 실제 모자이크 픽셀 환산에 필요한 원본 크기 (header-only, LoadReviewCanvas와
-        // 동일한 DelayCreation 패턴 -- 픽셀 디코드 없이 크기만 읽음).
+        // 동일한 DelayCreation 패턴 -- 픽셀 디코드 없이 크기만 읽음). manual_region.json의
+        // canvas_width/height 대조에도 이 값을 그대로 재사용한다.
         try
         {
             using var stream = File.OpenRead(path);
@@ -361,8 +358,85 @@ public partial class ResultsCompareViewModel : ObservableObject
             panel.StitchOrigHeight = 0;
         }
 
+        var bitmap = LoadScaledBitmap(path);
+        var outputDir = Path.GetDirectoryName(path);
+        panel.StitchDisplayBitmap = (bitmap != null && facade != null && outputDir != null && panel.StitchOrigWidth > 0)
+            ? ApplyManualRegionDimIfPresent(bitmap, outputDir, facade.FacadeId, panel.StitchOrigWidth, panel.StitchOrigHeight)
+            : bitmap;
+        panel.StitchDisplayWidth = bitmap?.PixelWidth ?? 0;
+        panel.StitchDisplayHeight = bitmap?.PixelHeight ?? 0;
+
         if (facade != null)
             EnsureStitchSeamArtifacts(facade);
+    }
+
+    /// <summary>정면 영역 다각형(ImageViewerWindow의 "정면 영역 그리기" 도구,
+    /// {facade_id}_manual_region.json -- src/geometry/manual_region.py가 읽는 것과 같은
+    /// 스키마)이 저장돼 있으면 다각형 밖을 반투명 검정으로 어둡게 덮어서 결과 보기 패널에도
+    /// 반영한다(2026-09-19 사용자 요청: "보고서, 결과 뷰에도 반영 되어야함"). 파일이 없거나,
+    /// 있어도 canvas_width/height가 지금 이 모자이크의 실제 원본 크기와 안 맞으면(재스티칭으로
+    /// 캔버스가 바뀐 경우) 원본 비트맵을 그대로 반환 -- load_manual_region_mask와 동일한
+    /// "낡은 좌표를 잘못된 캔버스에 그대로 쓰지 않는다" 원칙.</summary>
+    private static BitmapSource ApplyManualRegionDimIfPresent(
+        BitmapImage bitmap, string outputDir, string facadeId, int origWidth, int origHeight)
+    {
+        var regionPath = Path.Combine(outputDir, $"{facadeId}_manual_region.json");
+        if (!File.Exists(regionPath))
+            return bitmap;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(regionPath));
+            var root = doc.RootElement;
+            if (root.GetProperty("canvas_width").GetInt32() != origWidth
+                || root.GetProperty("canvas_height").GetInt32() != origHeight)
+                return bitmap;
+
+            var polygons = new List<List<Point>>();
+            foreach (var poly in root.GetProperty("polygons").EnumerateArray())
+            {
+                var pts = poly.EnumerateArray()
+                    .Select(v => { var xy = v.EnumerateArray().ToArray(); return new Point(xy[0].GetDouble(), xy[1].GetDouble()); })
+                    .ToList();
+                if (pts.Count >= 3)
+                    polygons.Add(pts);
+            }
+            if (polygons.Count == 0)
+                return bitmap;
+
+            double scale = (double)bitmap.PixelWidth / origWidth;
+            var dimGeometry = new PathGeometry { FillRule = FillRule.EvenOdd };
+            var fullRect = new PathFigure { IsClosed = true, StartPoint = new Point(0, 0) };
+            fullRect.Segments.Add(new PolyLineSegment(new[]
+            {
+                new Point(bitmap.PixelWidth, 0),
+                new Point(bitmap.PixelWidth, bitmap.PixelHeight),
+                new Point(0, bitmap.PixelHeight),
+            }, isStroked: false));
+            dimGeometry.Figures.Add(fullRect);
+
+            foreach (var poly in polygons)
+            {
+                var scaled = poly.Select(p => new Point(p.X * scale, p.Y * scale)).ToList();
+                var figure = new PathFigure { IsClosed = true, StartPoint = scaled[0] };
+                figure.Segments.Add(new PolyLineSegment(scaled.Skip(1), isStroked: false));
+                dimGeometry.Figures.Add(figure);
+            }
+
+            var visual = new DrawingVisual();
+            using (var dc = visual.RenderOpen())
+            {
+                dc.DrawImage(bitmap, new Rect(0, 0, bitmap.PixelWidth, bitmap.PixelHeight));
+                dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(0x99, 0x00, 0x00, 0x00)), null, dimGeometry);
+            }
+            var rtb = new RenderTargetBitmap(bitmap.PixelWidth, bitmap.PixelHeight, 96, 96, PixelFormats.Pbgra32);
+            rtb.Render(visual);
+            rtb.Freeze();
+            return rtb;
+        }
+        catch
+        {
+            return bitmap; // 손상된/쓰는 중인 json -- 화면이 죽는 것보다 원본 그대로 보여주는 게 낫다
+        }
     }
 
     /// <summary>스티칭 이미지를 마우스로 클릭했을 때(ResultsCompareView.
