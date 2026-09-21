@@ -59,6 +59,16 @@ public partial class ImageViewerWindow : Window
     private List<Point> _currentPolygon = new();
     private bool _isRegionBusy;
 
+    // 2026-09-21 사용자 요청("점을 선택해서 위치 이동이 되게"): 잘못 찍은 꼭짓점 하나 고치자고
+    // 다각형을 처음부터 다시 그릴 필요 없이, 기존 점을 클릭&드래그로 옮길 수 있게.
+    // _draggingVertexPolygon: NotDraggingVertex(드래그 중 아님) / CurrentPolygonMarker(그리는
+    // 중인 다각형) / 0 이상(그 인덱스의 완성된 다각형).
+    private const int NotDraggingVertex = -2;
+    private const int CurrentPolygonMarker = -1;
+    private const double VertexHitRadiusPx = 10;
+    private int _draggingVertexPolygon = NotDraggingVertex;
+    private int _draggingVertexIndex = -1;
+
     public ImageViewerWindow(string imagePath)
     {
         InitializeComponent();
@@ -339,6 +349,17 @@ public partial class ImageViewerWindow : Window
 
     private void Canvas_MouseMove(object sender, MouseEventArgs e)
     {
+        if (_draggingVertexPolygon != NotDraggingVertex)
+        {
+            var imagePoint = ScreenToImagePoint(e.GetPosition(Viewport));
+            if (_draggingVertexPolygon == CurrentPolygonMarker)
+                _currentPolygon[_draggingVertexIndex] = imagePoint;
+            else
+                _completedPolygons[_draggingVertexPolygon][_draggingVertexIndex] = imagePoint;
+            RedrawRegionOverlay(Canvas.GetLeft(TheImage), Canvas.GetTop(TheImage));
+            return;
+        }
+
         if (!_isDragging)
             return;
         var pos = e.GetPosition(Viewport);
@@ -350,6 +371,13 @@ public partial class ImageViewerWindow : Window
 
     private void Canvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (_draggingVertexPolygon != NotDraggingVertex)
+        {
+            _draggingVertexPolygon = NotDraggingVertex;
+            _draggingVertexIndex = -1;
+            Viewport.ReleaseMouseCapture();
+            return;
+        }
         _isDragging = false;
         Viewport.ReleaseMouseCapture();
     }
@@ -407,9 +435,58 @@ public partial class ImageViewerWindow : Window
         return new Point((screen.X - left) / _scale, (screen.Y - top) / _scale);
     }
 
+    private Point ImageToScreenPoint(Point imagePoint)
+    {
+        double left = Canvas.GetLeft(TheImage);
+        double top = Canvas.GetTop(TheImage);
+        return new Point(left + imagePoint.X * _scale, top + imagePoint.Y * _scale);
+    }
+
+    /// <summary>화면 클릭 지점 근처(<see cref="VertexHitRadiusPx"/> 이내)에 이미 찍힌 꼭짓점이
+    /// 있는지 검사 -- 완성된 다각형들을 먼저, 그리는 중인 다각형을 나중에 본다(그리는 중인
+    /// 다각형의 꼭짓점이 화면상 겹쳐 보일 때 방금 찍은 점이 우선권을 갖도록).</summary>
+    private bool TryHitTestVertex(Point screenPoint, out int polygonIndex, out int vertexIndex)
+    {
+        for (int i = 0; i < _completedPolygons.Count; i++)
+        {
+            var poly = _completedPolygons[i];
+            for (int v = 0; v < poly.Count; v++)
+            {
+                if ((ImageToScreenPoint(poly[v]) - screenPoint).Length <= VertexHitRadiusPx)
+                {
+                    polygonIndex = i;
+                    vertexIndex = v;
+                    return true;
+                }
+            }
+        }
+        for (int v = 0; v < _currentPolygon.Count; v++)
+        {
+            if ((ImageToScreenPoint(_currentPolygon[v]) - screenPoint).Length <= VertexHitRadiusPx)
+            {
+                polygonIndex = CurrentPolygonMarker;
+                vertexIndex = v;
+                return true;
+            }
+        }
+        polygonIndex = NotDraggingVertex;
+        vertexIndex = -1;
+        return false;
+    }
+
     private void RegionCanvas_MouseLeftButtonDown(MouseButtonEventArgs e)
     {
         var screenPoint = e.GetPosition(Viewport);
+
+        if (e.ClickCount == 1 && TryHitTestVertex(screenPoint, out int hitPoly, out int hitVertex))
+        {
+            _draggingVertexPolygon = hitPoly;
+            _draggingVertexIndex = hitVertex;
+            Viewport.CaptureMouse();
+            e.Handled = true;
+            return;
+        }
+
         var imagePoint = ScreenToImagePoint(screenPoint);
 
         if (e.ClickCount >= 2)
