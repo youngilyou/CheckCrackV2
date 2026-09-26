@@ -59,6 +59,7 @@ colmap:
   max_drift_px: 10.0
   max_seam_drift_px: 20.0
   max_coverage_gap_ratio: 0.5
+  use_loftr_matching: true
 
 tiling:
   tile_width: 1024

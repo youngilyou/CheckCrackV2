@@ -52,12 +52,34 @@ def main() -> None:
         output_dir_arg = argv[idx + 1]
         argv = argv[:idx] + argv[idx + 2 :]
 
+    # 2026-09-24: Viewer Settings 화면(매칭 알고리즘)과 단지 종합보고서 옆 콤보박스
+    # (구조물 유형)에서 각각 넘기는 선택값 — 둘 다 생략 시 기존 동작(config의
+    # matcher_backend/use_loftr_matching, structure_type=APARTMENT) 그대로.
+    matcher_backend_arg: str | None = None
+    if "--matcher-backend" in argv:
+        idx = argv.index("--matcher-backend")
+        if idx + 1 >= len(argv):
+            print("--matcher-backend requires a value (sift|loftr|hloc)")
+            sys.exit(1)
+        matcher_backend_arg = argv[idx + 1]
+        argv = argv[:idx] + argv[idx + 2 :]
+
+    structure_type_arg: str | None = None
+    if "--structure-type" in argv:
+        idx = argv.index("--structure-type")
+        if idx + 1 >= len(argv):
+            print("--structure-type requires a value (APARTMENT|DAM|FACTORY)")
+            sys.exit(1)
+        structure_type_arg = argv[idx + 1]
+        argv = argv[:idx] + argv[idx + 2 :]
+
     args = [a for a in argv if a != "--in-place"]
 
     if len(args) < 1:
         print(
             "usage: python tools/stitch_folder.py <images_folder> [facade_name] "
-            "[--in-place] [--output-dir PATH]"
+            "[--in-place] [--output-dir PATH] [--matcher-backend sift|loftr|hloc] "
+            "[--structure-type APARTMENT|DAM|FACTORY]"
         )
         sys.exit(1)
 
@@ -90,9 +112,11 @@ def main() -> None:
         output_root="facades",
         config_path="config/pipeline.yaml",
         output_dir=output_dir,
+        matcher_backend=matcher_backend_arg,
+        structure_type=structure_type_arg,
     )
     if out is None:
-        print("failed: no image pair passed the geometry quality gate — check logs/pipeline.log")
+        print("failed: no usable result (geometry quality gate, or the dense-only track could not prepare) — check logs/pipeline.log")
         sys.exit(1)
 
     print(f"done: {out}")

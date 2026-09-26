@@ -42,6 +42,7 @@ class FacadePlane:
     px_per_m: float
     width_m: float  # canvas u-extent — fixed to the real facade span, not auto-derived
     height_m: float  # canvas v-extent
+    scale_source: str = "gps_colmap_alignment"  # provenance of the metric scale, written to *_scale_colmap.json
 
 
 def facade_plane_from_segment(
@@ -135,7 +136,7 @@ def _principal_direction(points_3d: np.ndarray, k: float = 3.0, max_iters: int =
     axis = None
     for _ in range(max_iters):
         mean = subset.mean(axis=0)
-        _, _, vt = np.linalg.svd(subset - mean)
+        _, _, vt = np.linalg.svd(subset - mean, full_matrices=False)
         axis = vt[0]
         proj = (points_3d - mean) @ axis
         lo, hi = _robust_range(proj, k=k)
@@ -265,7 +266,7 @@ def facade_plane_from_reconstruction(
         raise ValueError(f"too few triangulated points ({points.shape[0]}) to fit a facade plane")
 
     centroid = points.mean(axis=0)
-    _, _, vt = np.linalg.svd(points - centroid)
+    _, _, vt = np.linalg.svd(points - centroid, full_matrices=False)
     normal = vt[2]
 
     # Camera-viewing-direction override for the wall-vs-roof decision below
@@ -298,12 +299,37 @@ def facade_plane_from_reconstruction(
     # background points are exactly what corrupts both.
     points, centroid = _filter_points_near_plane(points, centroid, normal)
 
+    world_up = np.array([0.0, 0.0, 1.0])
+    is_wall = abs(float(np.dot(normal, world_up))) < 0.5
+
     centers = np.array([_camera_center(img) for img in reconstruction.images.values()])
     track = _principal_direction(centers) if centers.shape[0] >= 2 else vt[0]
     e_u = track - np.dot(track, normal) * normal
     if np.linalg.norm(e_u) < 1e-6:
         e_u = vt[0] - np.dot(vt[0], normal) * normal
     e_u = e_u / np.linalg.norm(e_u)
+
+    # Degenerate flight track (confirmed real, 2026-09-21, LEFT facade): a
+    # narrow wall segment left too little room for a lateral sweep, so the
+    # drone instead flew mostly straight up/down while its horizontal motion
+    # was dominated by standing off/closing on the wall (along the normal)
+    # rather than moving along it. Projecting that track onto the plane
+    # (removing the normal component) left e_u 98% parallel to true up
+    # (dot(e_u, world_up) = -0.98, measured directly on this reconstruction)
+    # -- i.e. almost no "along the wall" signal survived, and the rendered
+    # canvas came out rotated ~90 deg off true horizontal (confirmed via
+    # direct render: recognizable building detail, but tilted). Only the
+    # wall case has a well-defined fallback with no such ambiguity: e_v is
+    # already fixed to true world-up below regardless of the flight, so the
+    # one horizontal direction perpendicular to both that and the wall's own
+    # outward normal is always "along the wall" no matter how degenerate the
+    # track was. The roof/plan-view case has no such anchor (that's exactly
+    # why it trusts the track at all), so it's left untouched.
+    if is_wall:
+        e_v_provisional = np.array([0.0, 0.0, -1.0])
+        if abs(float(np.dot(e_u, e_v_provisional))) > 0.7:
+            fallback_u = np.cross(e_v_provisional, normal)
+            e_u = fallback_u / np.linalg.norm(fallback_u)
 
     # Fix e_u's sign to a deterministic, run-independent convention -- SVD
     # (both `_principal_direction`'s and the vt[0] fallback) fits a LINE, not
@@ -333,8 +359,7 @@ def facade_plane_from_reconstruction(
         if covariance < 0:
             e_u = -e_u
 
-    world_up = np.array([0.0, 0.0, 1.0])
-    if abs(float(np.dot(normal, world_up))) < 0.5:
+    if is_wall:
         # vertical wall -- v is true world-up (matches facade_plane_from_segment's
         # own convention exactly), so "up" always renders up regardless of which
         # way the flight track happened to point.
@@ -361,13 +386,27 @@ def align_reconstruction_to_utm(
     by_id: dict[str, ImageMetadata],
     utm_epsg: int,
     min_common_images: int = 3,
-) -> bool:
+) -> "pycolmap.Sim3d | None":
     """Align COLMAP's arbitrary-frame reconstruction to real-world UTM+altitude
     meters using each registered image's own GPS as a location prior.
-    Mutates `reconstruction` in place. Returns False (reconstruction is left
+    Mutates `reconstruction` in place. Returns `None` (reconstruction is left
     untouched) if there isn't enough GPS coverage or alignment fails — never
     proceeds with an unaligned/unscaled reconstruction, since every downstream
     plane-projection distance would silently be wrong.
+
+    2026-09-25: returns the `Sim3d` transform itself (was a plain `bool`) so a
+    caller that needs to align something ELSE by the exact same transform
+    later can do so without recomputing GPS alignment from scratch -- see
+    `src/geometry/dense_stereo.py`'s own docstring for why dense stereo needs
+    this (its point cloud must be run on the reconstruction's NATIVE, pre-UTM
+    scale, then aligned with this same `sim3d` afterward, matching the
+    gsplat3d exploration scripts that this behavior was ported from
+    verbatim after production's own UTM-first ordering was found to produce
+    unusable dense stereo -- confirmed real, FRONT facade, 2026-09-24/25: 100%
+    of 228k fused points landed 50-380m from the facade plane when dense
+    stereo ran AFTER alignment). Existing callers that only checked truthiness
+    (`if not aligned:` / `if aligned:`) keep working unchanged since a `Sim3d`
+    object is truthy and `None` is falsy.
     """
     transformer = pyproj.Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}", always_xy=True)
     names: list[str] = []
@@ -381,15 +420,45 @@ def align_reconstruction_to_utm(
         locations.append([x, y, meta.gps.altitude_m])
 
     if len(names) < min_common_images:
-        return False
+        return None
 
     sim3d = pycolmap.align_reconstruction_to_locations(
         reconstruction, names, np.array(locations), min_common_images, pycolmap.RANSACOptions()
     )
     if sim3d is None:
-        return False
+        return None
     reconstruction.transform(sim3d)
-    return True
+    return sim3d
+
+
+MAX_GPS_ALIGN_MEAN_RESIDUAL_M = 2.0
+MAX_GPS_ALIGN_MAX_RESIDUAL_M = 3.0
+
+
+def gps_alignment_residuals_m(
+    reconstruction: pycolmap.Reconstruction,
+    by_id: dict[str, ImageMetadata],
+    utm_epsg: int,
+) -> tuple[float, float] | None:
+    """(mean, max) distance in metres between each registered camera centre and
+    its own GPS position, for a reconstruction already passed through
+    align_reconstruction_to_utm. None if no image has GPS. Measured 2026-09-21:
+    FRONT/BACK reconstructions land at mean<=0.5 / max<=1.5 m, while a
+    narrow-wall, near-collinear capture (LEFT) whose SfM geometry disagreed
+    with GPS landed at mean 7.6 / max 25 m -- a wrong alignment there yields a
+    collapsed, camera-facing-down reconstruction, so callers use this to
+    reject it instead of rectifying garbage."""
+    transformer = pyproj.Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}", always_xy=True)
+    residuals: list[float] = []
+    for img in reconstruction.images.values():
+        meta = by_id.get(Path(img.name).stem)
+        if meta is None or meta.gps.latitude is None or meta.gps.altitude_m is None:
+            continue
+        x, y = transformer.transform(meta.gps.longitude, meta.gps.latitude)
+        residuals.append(float(np.linalg.norm(_camera_center(img) - np.array([x, y, meta.gps.altitude_m]))))
+    if not residuals:
+        return None
+    return float(np.mean(residuals)), float(np.max(residuals))
 
 
 def _camera_to_facade_homography(K: np.ndarray, R: np.ndarray, t: np.ndarray, plane: FacadePlane) -> np.ndarray:
@@ -727,6 +796,7 @@ def rectify_and_blend(
     images_dir: str | Path,
     cfg,
     colmap_mean_reprojection_error_px: float | None = None,
+    offset_map: np.ndarray | None = None,
 ) -> MosaicResult:
     """Full COLMAP-pose-rectified facade mosaic: plane-project -> seam ->
     blend (#13/#14), reusing the same seam/blend code the homography-chain
@@ -736,16 +806,63 @@ def rectify_and_blend(
     footprint-based (facade_plane_from_segment, Phase 2/3) or fitted straight
     from the COLMAP reconstruction itself (facade_plane_from_reconstruction,
     Phase 1) — this function doesn't care which.
-    """
-    warped, canvas_size, source_transforms = rectify_images(reconstruction, plane, images_dir)
 
+    `offset_map` (geometry/height_field.build_offset_map's output) is optional:
+    when given, each image is depth-corrected against the wall's own local
+    surface instead of the one flat plane -- confirmed real, 2026-09-22, 10 m
+    standoff: balcony recesses ~1.2 m behind the wall face tore into disjoint
+    fragments under pure flat-plane projection (parallax scales with standoff
+    distance, so this gets worse at a closer standoff), height-field correction
+    renders them as one coherent surface instead. `source_transforms` still
+    comes out keyed to the flat-plane homography either way (see
+    rectify_images_height_field) -- crack detection's raw-photo-to-canvas
+    mapping is unaffected by this choice.
+    """
+    if offset_map is not None:
+        from src.geometry.height_field import rectify_images_height_field
+
+        warped, canvas_size, source_transforms = rectify_images_height_field(
+            reconstruction, plane, images_dir, offset_map
+        )
+    else:
+        warped, canvas_size, source_transforms = rectify_images(reconstruction, plane, images_dir)
+    return blend_rectified_images(
+        facade_id, warped, canvas_size, source_transforms, plane, cfg, colmap_mean_reprojection_error_px
+    )
+
+
+def blend_rectified_images(
+    facade_id: str,
+    warped: dict[str, WarpedImage],
+    canvas_size: tuple[int, int],
+    source_transforms: dict[str, SourceTransform],
+    plane: FacadePlane,
+    cfg,
+    colmap_mean_reprojection_error_px: float | None = None,
+    crop_to_coverage: bool = True,
+) -> MosaicResult:
+    """Crop -> seam -> blend for images already placed on the facade canvas
+    (shared by the COLMAP-pose path and the GPS/gimbal pose-prior path).
+
+    `crop_to_coverage=False` (2026-09-25, the dense-stereo "reference" track)
+    skips the coverage crop below so the returned canvas stays in EXACTLY the
+    plane's own frame (canvas = round(plane.width_m/height_m * px_per_m), origin
+    = plane.origin). The crop re-expresses everything in a smaller, shifted
+    canvas without touching `plane`, which is fine for a flat-only mosaic but
+    would silently misregister it against anything rendered straight from
+    `plane` (the dense-stereo point cloud) -- gsplat3d's finish_loftr_pipeline.py,
+    the procedure this track reproduces, never cropped."""
     # Confirmed real, 2026-09-11: even after facade_plane_from_reconstruction's
     # own background-point filtering keeps the *canvas* sized to the real
     # facade, individual oblique photos still frame sky/terrain past the
     # roofline/ground within that canvas, and that off-plane content still
     # gets projected onto it (see _crop_to_dense_coverage). Tightening to
     # where multiple photos actually agree removes most of that margin.
-    bbox = _crop_to_dense_coverage(warped, canvas_size, min_coverage_count=2, margin_px=int(0.5 * plane.px_per_m))
+    bbox = (
+        _crop_to_dense_coverage(warped, canvas_size, min_coverage_count=2, margin_px=int(0.5 * plane.px_per_m))
+        if crop_to_coverage
+        else None
+    )
     if bbox is not None:
         warped, source_transforms, canvas_size = _apply_canvas_crop(warped, source_transforms, bbox)
 

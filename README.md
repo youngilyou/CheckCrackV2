@@ -16,6 +16,49 @@ DJI 드론 촬영 이미지를 Facade 단위로 자동 분리·스티칭하고, 
 
 ---
 
+## 0. 다른(새) 컴퓨터에서 실행하기 — 처음부터 순서대로
+
+요약: **설치 → `check_env.bat`로 확인 → `run_stitch.bat`/`run_detect.bat` 또는 `run_viewer.bat`.**
+아래 `.bat` 파일은 모두 저장소 루트에 있고 더블클릭 또는 cmd에서 실행합니다(Python은 자동으로 찾습니다 — 아래 "Python 지정" 참고).
+
+### 필요한 것
+- Windows 10/11 + **NVIDIA GPU**(RTX 4080 SUPER에서 검증) + 최신 드라이버. GPU 없이는 사실상 실행 불가(Dense Stereo는 CUDA 필수).
+- RAM **64 GB 권장**(Dense Stereo 융합 단계에서 프로세스가 일시적으로 40 GB 넘게 씀), 디스크 여유 **수백 GB 권장**(한 건물 촬영분 결과 폴더의 `colmap_dense/`가 수십 GB — 270장에서 45 GB 실측, 422장은 더 큼).
+- Git, Python 3.11+(Miniconda 권장), .NET 9 SDK(뷰어용), Visual Studio 2022 C++ 워크로드 + CUDA Toolkit 12.x + CMake + Ninja(아래 3번, CUDA pycolmap을 직접 빌드할 때만).
+
+### 설치 순서
+1. **받기**: `git clone https://github.com/youngilyou/CheckCrackV2.git`
+2. **`setup_new_machine.bat`** — Python 패키지(`requirements.txt`) + WeasyPrint(conda-forge) + .NET NuGet 복원.
+3. **CUDA PyTorch**(위 스크립트가 안 깔아줌): `pip install torch --index-url https://download.pytorch.org/whl/cu126`
+4. **CUDA pycolmap 빌드** — `requirements.txt`의 pip `pycolmap`에는 **CUDA Dense Stereo가 없습니다.** `check_env.bat`이 `pycolmap dense stereo`를 FAIL로 표시하면 `scripts\install_colmap_cuda_dense.bat`을 실행하세요(COLMAP+pycolmap 4.3.x CUDA 빌드, 수 시간 걸릴 수 있음, 재실행해도 안전).
+5. **크랙 모델 가중치 복사** — `*.pt`는 git에 없습니다(`.gitignore`). 원래 컴퓨터의 `training\crack_seg\models\`(`v1_all_cracks\best.pt`, `v2_exclude_structural_fp\best.pt`)를 같은 경로로 복사하세요.
+6. **`check_env.bat`** — 마지막에 `RESULT: READY`가 나오면 준비 완료. FAIL 줄마다 해결 방법이 같이 나옵니다. (LoFTR 가중치는 첫 실행 때 자동 다운로드되므로 인터넷이 한 번은 필요합니다.)
+
+### Python 지정
+`.bat`과 뷰어는 같은 순서로 Python을 찾습니다: 환경변수 **`CHECKCRACK_PYTHON`**(전체 경로, 최우선) → `%USERPROFILE%\miniconda3` / `anaconda3` / `%LOCALAPPDATA%\miniconda3` / `C:\ProgramData\miniconda3` → PATH의 `python`. torch/pycolmap이 다른 conda env에 있으면 `setx CHECKCRACK_PYTHON "C:\...\envs\내env\python.exe"` 로 지정하세요(새 cmd에서 적용).
+
+### 실행 (배치 파일)
+| 파일 | 하는 일 |
+|---|---|
+| `check_env.bat` | 이 컴퓨터가 실행 가능한지 점검 |
+| `run_stitch.bat <사진폴더> [facade이름] [--in-place] [--matcher-backend loftr\|hloc] [--structure-type APARTMENT\|DAM\|FACTORY]` | 사진 한 폴더 → 스티칭 + COLMAP + Dense Stereo. `--in-place`면 `<사진폴더>\output\Vnnn\`에 결과. **약 400장에 6시간 안팎**(RTX 4080 SUPER) |
+| `run_detect.bat <결과 output 폴더> [facade이름] [--skip-v2]` | 스티칭된 결과에서 크랙 검출(원본 사진에서 검출 → 깊이로 스티칭 좌표 배치 → 위치 오차 측정) |
+| `make_depth_sidecar.bat <결과 output 폴더> <사진폴더> [facade이름]` | 2026-09-26 이전에 끝난 실행(V008까지)에 깊이 사이드카 `*_depth_mapping.json` 생성 |
+| `run_viewer.bat` | 뷰어 빌드 + 실행(로그인 `admin`/`admin123`) |
+
+뷰어의 "▶ 실행"도 같은 파이썬 스크립트를 호출합니다. 결과 화면의 클릭 위치 계산(`tools/click_locator.py`)도 뷰어가 알아서 띄웁니다.
+
+### 결과를 다른 컴퓨터로 옮겨서 볼 때
+- 결과 폴더(`<사진폴더>\output\Vnnn\`)를 **통째로**(`colmap_stage1\`, `colmap_dense\` 포함) 옮기세요. 크랙을 깊이로 배치하고 스티칭 클릭 위치를 계산하려면 이 두 폴더가 필요합니다(`FRONT_depth_mapping.json`이 상대 경로로 가리킴). 용량 때문에 뺐다면 스티칭 결과 열람은 되지만 크랙/클릭은 평면 호모그래피 방식으로 떨어지고 화면에 그렇게 표시됩니다.
+- 원본 사진: 결과 폴더의 `*_source_images.json`에는 스티칭한 컴퓨터의 **절대 경로**가 들어 있습니다. 옮긴 컴퓨터에서도 자동으로 같은 파일명을 결과 폴더 위쪽(`<사진폴더>\` 또는 `<사진폴더>\images\`)에서 찾습니다. 사진이 다른 곳에 있으면 환경변수 **`CHECKCRACK_IMAGES_DIR`**에 그 폴더를 지정하세요. 못 찾은 사진은 로그에 경고로 나옵니다.
+
+### 파이프라인 트랙 (`config/pipeline.yaml`의 `pipeline.track`)
+- `reference`(현재 기본): 필터 없이 전체 이미지로 COLMAP 1단계 → flat 모자이크 → Dense Stereo 하이브리드. 결과 `*_colmap_dense.*`.
+- `full`: COLMAP 1단계 → 벽 미노출 이미지 필터 → H체인 → COLMAP 2단계 → Dense.
+- `dense_only`: 필터 후 Dense만(V007 방식, 위쪽/왼쪽 모서리가 어긋나 비권장).
+
+---
+
 ## 1. 다운로드
 
 ```bash
@@ -77,6 +120,13 @@ dotnet build
 최초 실행 시 로그인 화면이 뜹니다 — `%APPDATA%\SmartCrackViewer\users.db`(SQLite)에 계정이 자동 생성되고, 기본 계정은 `admin`/`admin123`입니다(설정 화면에서 변경 가능).
 
 로그인하면 프로젝트 루트(`CLAUDE.local.md`가 있는 폴더)를 자동으로 찾아서 `facades/`, `logs/pipeline.log`를 모니터링합니다. "+ 폴더" 버튼으로 이미지 폴더를 선택해 직접 파이프라인을 실행하고 실시간 스티칭 진행 상황을 볼 수 있습니다.
+
+## 3-1. 크랙 위치 정확도 (깊이 기반 배치, 2026-09-26)
+
+- 크랙은 **원본 사진 각각**에서 검출하고, 각 픽셀의 COLMAP 깊이(`colmap_dense/dense/stereo/depth_maps`)로 스티칭 좌표에 올립니다(`src/geometry/depth_mapping.py`). 예전의 평면 호모그래피 배치는 벽 굴곡 때문에 표시 모자이크와 중앙값 약 14 cm 어긋났고, 깊이 배치는 약 1.8 px(1.8 cm)입니다(V008/V009 실측).
+- 각 크랙의 `position_check`(JSON)와 뷰어의 "위치 오차 … px · 깊이 배치"는 원본 픽셀을 스티칭에 올려 표시 모자이크와 비교한 실측값입니다. 측정 못 한 것은 "미측정"(0 아님).
+- 스티칭 화면 클릭 → 원본 사진 마커도 깊이로 계산하고(`tools/click_locator.py`), 보고서 버튼 옆에 "선택 위치 오차"를 표시합니다.
+- 한계: 크랙 길이/폭 mm 측정은 아직 평면 가정 스케일이고, 검출 모델의 얼룩/벗겨진 페인트 오탐은 별도 문제입니다. 자세한 근거와 수치는 `CLAUDE.local.md`의 2026-09-26 기록 참고.
 
 ## 4. 빌드 결과물 제외
 

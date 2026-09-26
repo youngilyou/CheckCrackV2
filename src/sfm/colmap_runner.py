@@ -84,13 +84,36 @@ def run_colmap(
     image_filenames: list[str],
     workspace_dir: str | Path,
     logger=None,
+    catalog: list | None = None,
+    cfg=None,
+    matcher=None,
+    matcher_backend: str | None = None,
 ) -> ColmapResult:
-    """Run SIFT extraction -> exhaustive matching -> incremental SfM for one
-    facade's image set. `image_filenames` are names within `images_dir`
-    (matches `pycolmap.extract_features`' `image_names` filter — this lets a
-    facade's subset of a shared capture folder be reconstructed without
-    copying files). Requires `pycolmap` (pip install pycolmap); raises
-    ImportError if it's missing rather than faking a result.
+    """Run feature extraction -> matching -> incremental SfM for one facade's
+    image set. `image_filenames` are names within `images_dir` (matches
+    `pycolmap.extract_features`' `image_names` filter — this lets a facade's
+    subset of a shared capture folder be reconstructed without copying
+    files). Requires `pycolmap` (pip install pycolmap); raises ImportError if
+    it's missing rather than faking a result.
+
+    Matching stage: SIFT `pycolmap.match_exhaustive` by default. If `catalog`
+    (the facade's `list[ImageMetadata]`, needed for pair selection + GPS),
+    `cfg` (needed for `cfg.colmap.use_loftr_matching` + LoFTR/pair-selection
+    settings) and `matcher` (a caller-owned `TimeoutLoFTRMatcher`) are all
+    given AND `cfg.colmap.use_loftr_matching` is truthy, matching is done via
+    `src/matching/loftr_colmap_bridge.py` instead — LoFTR is far more robust
+    to the repetitive facade patterns (round vents/holes, balcony panels)
+    that confuse SIFT into triangulating a spurious, visibly duplicated 3D
+    point (root-caused 2026-09-16/17, re-confirmed 2026-09-23/24 on this same
+    building's FRONT facade: 422/422 images registered vs SuperPoint+LightGlue's
+    partial registration, lower reprojection error, and no commercial-license
+    conflict either — SuperPoint/SuperGlue carry Magic Leap's non-commercial
+    research license, LoFTR is Apache 2.0). This is a general, config-driven
+    switch: it applies identically to every facade's COLMAP call, never to one
+    image ID or location specifically. Any caller that omits
+    `catalog`/`cfg`/`matcher` (e.g. `extend_colmap_with_fixed_poses`'s own
+    internal use, or exploratory scripts) gets the original SIFT behavior
+    unchanged.
 
     `logger`, if given, gets phase-boundary events (extraction/matching/
     mapping start) plus a per-image event during incremental mapping via
@@ -101,10 +124,46 @@ def run_colmap(
     named image. Without a logger this runs exactly as before (silent,
     caller only sees the final ColmapResult) — CheckCrackViewer only shows
     live COLMAP progress for callers that pass one.
+
+    `matcher_backend` (2026-09-24, explicit user request to make the matcher
+    a user-facing choice, license concerns disregarded for this toggle):
+    `"sift"` / `"loftr"` / `"hloc"`, or `None` to fall back to
+    `cfg.colmap.matcher_backend` if set, else the legacy
+    `cfg.colmap.use_loftr_matching` boolean, else `"sift"`. `"hloc"` runs
+    SuperPoint+LightGlue via `src/matching/hloc_bridge.py` (a separate-env
+    subprocess — see that module's docstring) and does not need `matcher`
+    (no persistent GPU worker to reuse, unlike LoFTR).
     """
     import pycolmap
 
     from src.common.logging import log_event
+
+    resolved_backend = (matcher_backend or "").lower() or None
+    if resolved_backend is None:
+        if catalog is not None and cfg is not None and "colmap" in cfg and "matcher_backend" in cfg.colmap:
+            resolved_backend = str(cfg.colmap.matcher_backend).lower()
+        elif (
+            catalog is not None and cfg is not None and matcher is not None
+            and "colmap" in cfg and "use_loftr_matching" in cfg.colmap and bool(cfg.colmap.use_loftr_matching)
+        ):
+            resolved_backend = "loftr"
+        else:
+            resolved_backend = "sift"
+
+    if resolved_backend == "hloc" and (catalog is None or cfg is None):
+        if logger:
+            log_event(
+                logger, "warning", "matcher_backend=hloc requested but catalog/cfg missing -- SIFT로 대체",
+                stage="COLMAP_MATCH", facade_id=facade_id,
+            )
+        resolved_backend = "sift"
+    if resolved_backend == "loftr" and (catalog is None or cfg is None or matcher is None):
+        if logger:
+            log_event(
+                logger, "warning", "matcher_backend=loftr requested but catalog/cfg/matcher missing -- SIFT로 대체",
+                stage="COLMAP_MATCH", facade_id=facade_id,
+            )
+        resolved_backend = "sift"
 
     workspace_dir = Path(workspace_dir)
     workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -134,9 +193,28 @@ def run_colmap(
         extraction_options=extraction_options,
     )
 
-    if logger:
-        log_event(logger, "info", "CM 특징점 매칭 시작", stage="COLMAP_MATCH", facade_id=facade_id)
-    pycolmap.match_exhaustive(database_path=database_path)
+    if resolved_backend == "hloc":
+        if logger:
+            log_event(logger, "info", "CM 매칭 시작 (hloc/SuperPoint)", stage="COLMAP_MATCH", facade_id=facade_id)
+        from src.matching.hloc_bridge import match_database_with_hloc
+
+        match_database_with_hloc(
+            database_path, images_dir, image_filenames, catalog, cfg,
+            workspace_dir=workspace_dir, logger=logger,
+        )
+    elif resolved_backend == "loftr":
+        if logger:
+            log_event(logger, "info", "CM 매칭 시작 (LoFTR)", stage="COLMAP_MATCH", facade_id=facade_id)
+        from src.matching.loftr_colmap_bridge import match_database_with_loftr
+
+        match_database_with_loftr(
+            database_path, images_dir, image_filenames, catalog, cfg, matcher,
+            workspace_dir=workspace_dir, logger=logger,
+        )
+    else:
+        if logger:
+            log_event(logger, "info", "CM 특징점 매칭 시작 (SIFT)", stage="COLMAP_MATCH", facade_id=facade_id)
+        pycolmap.match_exhaustive(database_path=database_path)
 
     if logger:
         log_event(logger, "info", "CM SfM 재구성 시작", stage="COLMAP_MAPPING", facade_id=facade_id)

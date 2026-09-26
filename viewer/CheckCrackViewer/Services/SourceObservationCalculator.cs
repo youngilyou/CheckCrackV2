@@ -64,9 +64,13 @@ public static class SourceObservationCalculator
     /// loaded for review.</summary>
     public static SeamArtifacts? LoadSeamArtifacts(string outputDir, string facadeId)
     {
-        var homographiesPath = Pick(outputDir, facadeId, "_homographies_colmap.json", "_homographies.json");
-        var seamOwnerMapPath = Pick(outputDir, facadeId, "_seam_owner_map_colmap.png", "_seam_owner_map.png");
-        var seamOwnerIndexPath = Pick(outputDir, facadeId, "_seam_owner_index_colmap.json", "_seam_owner_index.json");
+        // Dense-stereo+flat hybrid (src/geometry/dense_stereo.py, 2026-09-23/24)
+        // takes precedence when present -- strictly better than plain flat-COLMAP
+        // (real depth fixes balcony/recess parallax tear), same precedence
+        // tools/detect_cracks_folder.py already uses for source_observations.
+        var homographiesPath = Pick(outputDir, facadeId, "_homographies_colmap_dense.json", "_homographies_colmap.json", "_homographies.json");
+        var seamOwnerMapPath = Pick(outputDir, facadeId, "_seam_owner_map_colmap_dense.png", "_seam_owner_map_colmap.png", "_seam_owner_map.png");
+        var seamOwnerIndexPath = Pick(outputDir, facadeId, "_seam_owner_index_colmap_dense.json", "_seam_owner_index_colmap.json", "_seam_owner_index.json");
         if (homographiesPath == null || seamOwnerMapPath == null || seamOwnerIndexPath == null)
             return null;
 

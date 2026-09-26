@@ -211,7 +211,16 @@
                                 <TextBlock Text="{Binding AiModelPath}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,0,0,14"/>
 
                                 <TextBlock Text="파일 저장소 상태" Foreground="{StaticResource Text2}" FontSize="11"/>
-                                <TextBlock Text="{Binding StorageStatusText}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap"/>
+                                <TextBlock Text="{Binding StorageStatusText}" Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap" Margin="0,0,0,14"/>
+
+                                <!-- 2026-09-24: 매칭 알고리즘 선택. 사용자 명시 요청, 라이선스 문제는
+                                     고려하지 않음. LoFTR이 기본(Apache 2.0, 실측 검증됨), hloc은
+                                     비교용 옵션(별도 env subprocess로 실행, src/matching/hloc_bridge.py). -->
+                                <TextBlock Text="매칭 알고리즘 (COLMAP 특징점 매칭)" Foreground="{StaticResource Text2}" FontSize="11"/>
+                                <TextBlock Text="다음 실행부터 적용됩니다. hloc(SuperPoint+LightGlue)은 Magic Leap 비상업 라이선스 대상입니다."
+                                           Foreground="{StaticResource Text2}" FontSize="10.5" TextWrapping="Wrap" Margin="0,2,0,6"/>
+                                <ComboBox ItemsSource="{Binding MatcherBackendOptions}" DisplayMemberPath="Label" SelectedValuePath="Value"
+                                          SelectedValue="{Binding MatcherBackend, Mode=TwoWay}" HorizontalAlignment="Left" MinWidth="260"/>
                             </StackPanel>
                         </Border>
                     </Grid>

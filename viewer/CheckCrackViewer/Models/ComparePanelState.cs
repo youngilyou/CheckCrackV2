@@ -49,6 +49,14 @@ public partial class ComparePanelState : ObservableObject
     partial void OnCrackMarkerDisplayXChanged(double? value) => OnPropertyChanged(nameof(HasCrackMarker));
     partial void OnCrackMarkerDisplayYChanged(double? value) => OnPropertyChanged(nameof(HasCrackMarker));
 
+    // 2026-09-26 (사용자 요청): 스티칭 패널을 클릭했을 때 그 지점의 정합 오차를 보고서 버튼 옆에
+    // 표시하기 위한 문구/툴팁. ClickRegistrationErrorCalculator가 계산하고
+    // ResultsCompareViewModel.StartClickErrorCalculation이 채운다. 빈 문자열이면 표시 안 함.
+    [ObservableProperty] private string _clickErrorText = "";
+    [ObservableProperty] private string _clickErrorDetail = "";
+    public bool HasClickError => !string.IsNullOrEmpty(ClickErrorText);
+    partial void OnClickErrorTextChanged(string value) => OnPropertyChanged(nameof(HasClickError));
+
     public bool HasOriginalImageList => OriginalImageList.Count > 0;
     public string OriginalImageLabel => HasOriginalImageList ? $"{OriginalImageIndex + 1} / {OriginalImageList.Count}" : "";
 

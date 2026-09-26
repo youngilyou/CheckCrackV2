@@ -322,6 +322,11 @@
                         <Button Content="보고서(PDF)"
                                 Command="{Binding DataContext.SetPanel2ModeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                 CommandParameter="보고서"/>
+                        <!-- 스티칭 클릭 지점의 정합 오차. 클릭 전이거나 결과가 없으면 숨김. 마우스를 올리면 사진별 상세. -->
+                        <TextBlock Text="{Binding ClickErrorText}" ToolTip="{Binding ClickErrorDetail}"
+                                   Margin="12,0,0,0" VerticalAlignment="Center" FontWeight="SemiBold"
+                                   Foreground="{StaticResource Accent}"
+                                   Visibility="{Binding HasClickError, Converter={StaticResource TruthyToVisibilityConverter}}"/>
                     </StackPanel>
                     <ContentControl Content="{Binding}">
                         <ContentControl.Style>
@@ -559,6 +564,7 @@
                                             <Run Text=" · 폭 "/><Run Text="{Binding WidthText, Mode=OneWay}"/>
                                         </TextBlock>
                                         <TextBlock Foreground="{StaticResource Text2}" FontSize="11" Text="{Binding ConfidenceText, StringFormat='신뢰도 {0}'}"/>
+                                        <TextBlock Foreground="{StaticResource Accent}" FontSize="11" Text="{Binding PositionErrorText, Mode=OneWay}"/>
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                             <Button Margin="0,0,6,0"
                                                     Command="{Binding DataContext.ToggleCrackRejectCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"

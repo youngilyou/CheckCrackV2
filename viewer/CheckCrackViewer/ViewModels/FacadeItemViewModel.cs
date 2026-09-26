@@ -109,13 +109,43 @@ public partial class FacadeItemViewModel : ObservableObject
     [ObservableProperty] private string? _visualImagePath;
     [ObservableProperty] private string? _analysisColmapImagePath;
     [ObservableProperty] private string? _visualColmapImagePath;
+    // 2026-09-24: dense stereo + flat hybrid (src/geometry/dense_stereo.py) -- 있으면
+    // AnalysisColmapImagePath/VisualColmapImagePath보다 항상 우선. FacadeOutputScanner.cs의
+    // 같은 이름 필드 참고.
+    [ObservableProperty] private string? _analysisColmapDenseImagePath;
+    [ObservableProperty] private string? _visualColmapDenseImagePath;
 
     /// <summary>True once any mosaic variant exists — gates the "크랙 검사 실행"
     /// button (detect_cracks_folder.py needs an analysis mosaic to run against).</summary>
-    public bool HasMosaic => AnalysisImagePath != null || AnalysisColmapImagePath != null;
+    public bool HasMosaic => AnalysisImagePath != null || AnalysisColmapImagePath != null || AnalysisColmapDenseImagePath != null;
 
-    partial void OnAnalysisImagePathChanged(string? value) => OnPropertyChanged(nameof(HasMosaic));
-    partial void OnAnalysisColmapImagePathChanged(string? value) => OnPropertyChanged(nameof(HasMosaic));
+    /// <summary>Same "best available variant" convention as FacadeSnapshot's own
+    /// EffectiveAnalysisImagePath/EffectiveVisualImagePath (FacadeOutputScanner.cs) --
+    /// dense-stereo hybrid, then flat-COLMAP, then plain H-chain.</summary>
+    public string? EffectiveAnalysisImagePath => AnalysisColmapDenseImagePath ?? AnalysisColmapImagePath ?? AnalysisImagePath;
+    public string? EffectiveVisualImagePath => VisualColmapDenseImagePath ?? VisualColmapImagePath ?? VisualImagePath;
+
+    partial void OnAnalysisImagePathChanged(string? value)
+    {
+        OnPropertyChanged(nameof(HasMosaic));
+        OnPropertyChanged(nameof(EffectiveAnalysisImagePath));
+    }
+
+    partial void OnAnalysisColmapImagePathChanged(string? value)
+    {
+        OnPropertyChanged(nameof(HasMosaic));
+        OnPropertyChanged(nameof(EffectiveAnalysisImagePath));
+    }
+
+    partial void OnAnalysisColmapDenseImagePathChanged(string? value)
+    {
+        OnPropertyChanged(nameof(HasMosaic));
+        OnPropertyChanged(nameof(EffectiveAnalysisImagePath));
+    }
+
+    partial void OnVisualImagePathChanged(string? value) => OnPropertyChanged(nameof(EffectiveVisualImagePath));
+    partial void OnVisualColmapImagePathChanged(string? value) => OnPropertyChanged(nameof(EffectiveVisualImagePath));
+    partial void OnVisualColmapDenseImagePathChanged(string? value) => OnPropertyChanged(nameof(EffectiveVisualImagePath));
 
     partial void OnFacadeIdChanged(string value) => OnPropertyChanged(nameof(Key));
     partial void OnSourceFolderPathChanged(string? value) => OnPropertyChanged(nameof(Key));
@@ -169,6 +199,8 @@ public partial class FacadeItemViewModel : ObservableObject
         VisualImagePath = null;
         AnalysisColmapImagePath = null;
         VisualColmapImagePath = null;
+        AnalysisColmapDenseImagePath = null;
+        VisualColmapDenseImagePath = null;
 
         // 2026-08-29: 새 실행은 새 버전 폴더(output/Vnnn)에 쓰므로 그 폴더의 quality_flags.json은
         // 아직 존재하지 않음 -- 이전 실행에서 체크했던 값이 새 실행 완료 전까지 잘못 남아있지

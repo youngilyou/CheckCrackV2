@@ -67,3 +67,9 @@ remote_downloads/
 
 # === Claude Code local session config (not meant to be shared) ===
 .claude/
+
+# === Local exploration / review artifacts (large, regenerable, not source) ===
+/gsplat3d/
+/preview_reference_track/
+/training_data_structural_fp_v2_gt/
+.vscode/

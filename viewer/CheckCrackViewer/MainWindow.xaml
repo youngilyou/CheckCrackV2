@@ -115,10 +115,22 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="{Binding ComplexName}" FontWeight="Bold" FontSize="13.5"
                                    Foreground="{StaticResource Text}" VerticalAlignment="Center"/>
-                        <Button Grid.Column="1" Content="단지 종합보고서" Padding="6,1" FontSize="10"
+                        <!-- 2026-09-24: 구조물 유형(댐/아파트/공장 등). 사용자 요청, "내부 처리
+                             알고리즘이 다른것 같아요". 선택 즉시 ComplexSettingsStore에 저장되고
+                             (ComplexNode.OnStructureTypeCommitted), 이 단지 소속 facade를 실행할
+                             때 structure type 인자로 전달됨(MainViewModel.RunFacade). 오늘은
+                             APARTMENT만 실제로 보정된 값이고 DAM/FACTORY는 provenance 태그만
+                             남김. src/common/structure_profiles.py 참고. -->
+                        <ComboBox Grid.Column="1" Margin="0,0,8,0" Padding="6,1" FontSize="10" VerticalAlignment="Center"
+                                  ItemsSource="{x:Static vm:ComplexNode.StructureTypeOptions}"
+                                  DisplayMemberPath="Label" SelectedValuePath="Value"
+                                  SelectedValue="{Binding StructureType, Mode=TwoWay}"
+                                  ToolTip="구조물 유형 (댐/아파트/공장) -- 오늘은 아파트만 알고리즘이 보정되어 있고 나머지는 표시용 태그입니다."/>
+                        <Button Grid.Column="2" Content="단지 종합보고서" Padding="6,1" FontSize="10"
                                 Command="{Binding DataContext.GenerateBuildingReportCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                 CommandParameter="{Binding}"/>
                     </Grid>
@@ -219,6 +231,9 @@
                                     <TextBlock Text="실행 중…" FontSize="10.5" Foreground="{StaticResource Accent}" VerticalAlignment="Center"/>
                                     <TextBlock Text="{Binding ElapsedLabel}" FontSize="10.5" FontFamily="Consolas"
                                                Foreground="{StaticResource Accent}" VerticalAlignment="Center" Margin="5,0,0,0"/>
+                                    <Button Content="■ 정지" Padding="8,2" FontSize="10.5" Margin="6,0,0,0"
+                                            Command="{Binding DataContext.StopFacadeCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}"/>
                                 </StackPanel>
                             </StackPanel>
                             <Button Content="분류 변경" Padding="8,2" FontSize="10.5" Margin="6,0,0,0"
@@ -587,12 +602,14 @@
                                                  공간을 안 주므로, 1개면 그 하나가 자기 폭만큼만, 2개면 나란히 놓임. -->
                                             <StackPanel Orientation="Horizontal">
                                                 <Border Style="{StaticResource CardBorder}" Margin="0,0,8,8"
-                                            Visibility="{Binding VisualColmapImagePath, Converter={StaticResource TruthyToVisibilityConverter}}">
+                                            Visibility="{Binding EffectiveVisualImagePath, Converter={StaticResource TruthyToVisibilityConverter}}">
                                                     <StackPanel>
+                                                        <!-- 2026-09-24: dense stereo + flat 하이브리드가 있으면 그게 최우선으로 뜸(EffectiveVisualImagePath).
+                                                             라벨은 "visual_CM" 그대로 둠(둘 다 COLMAP 기반이라는 의미는 여전히 맞음). -->
                                                         <TextBlock Text="보정본 (visual_CM) — 더블클릭하면 확대" FontSize="10.5" Foreground="{StaticResource Text2}" Margin="0,0,0,6"/>
-                                                        <Image Source="{Binding VisualColmapImagePath, Converter={StaticResource PathToBitmapConverter}}"
+                                                        <Image Source="{Binding EffectiveVisualImagePath, Converter={StaticResource PathToBitmapConverter}}"
                                                    MaxHeight="260" Stretch="Uniform" HorizontalAlignment="Left" Cursor="Hand"
-                                                   Tag="{Binding VisualColmapImagePath}" MouseLeftButtonDown="Image_MouseLeftButtonDown"/>
+                                                   Tag="{Binding EffectiveVisualImagePath}" MouseLeftButtonDown="Image_MouseLeftButtonDown"/>
                                                     </StackPanel>
                                                 </Border>
                                                 <!-- 2026-09-10: 사용자 요청으로 visual(H체인) 항목은 당분간 숨김.

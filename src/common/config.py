@@ -35,6 +35,16 @@ class Config:
     def to_dict(self) -> dict:
         return self._data
 
+    def set_override(self, section: str, key: str, value: Any) -> None:
+        """Set `section.key` in-place on THIS Config instance only (2026-09-24,
+        for CLI-arg-driven per-run overrides such as `--matcher-backend` /
+        `--structure-type` in `tools/stitch_folder.py`). Safe because every
+        `load_config()` call returns a fresh, unshared dict -- this never
+        mutates a config another running facade is also holding a reference
+        to. Not a general escape hatch: prefer editing the YAML file itself
+        for anything that isn't a one-off per-invocation override."""
+        self._data.setdefault(section, {})[key] = value
+
 
 def load_config(path: str | Path) -> Config:
     with open(path, "r", encoding="utf-8") as f:

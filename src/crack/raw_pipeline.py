@@ -148,6 +148,7 @@ def detect_cracks_from_raw_images(
     cross_image_iou_threshold: float | None = None,
     wall_region_mask: np.ndarray | None = None,
     min_on_wall_fraction: float = 0.5,
+    depth_mapper=None,
 ) -> list[Crack]:
     """Full raw-photo-first pipeline: `image_paths`(image_id -> file path,
     already filtered to the surviving/good image set -- see
@@ -160,7 +161,14 @@ def detect_cracks_from_raw_images(
     확정 "merge_tiles.py와 동일 임계치 사용" -- 기본값은 merge_detections의
     기본 iou_threshold=0.2와 통일) -> length/width/area는 각 원본 자신의
     로컬 스케일로 측정 후 평균, source_observations는 이 병합 결과 자체로
-    직접 채움(더 이상 역방향 조회 아님)."""
+    직접 채움(더 이상 역방향 조회 아님).
+
+    `depth_mapper` (src.geometry.depth_mapping.DepthCanvasMapper, 2026-09-26): 주어지면 크랙의 캔버스
+    위치를 평면 호모그래피가 아니라 각 픽셀의 COLMAP 깊이로 옮긴다. 표시되는 Dense 모자이크는 실제
+    3D 점으로 그려져 시차가 맞는데, 평면 호모그래피는 벽에서 튀어나오거나 들어간 지점을 촬영 각도에
+    따라 10~20cm씩 다른 곳에 놓아서(V008 실측: 중앙값 14cm) 크랙 표시가 모자이크의 실제 크랙과
+    어긋나고, 같은 크랙을 본 다른 사진과의 병합도 깨졌다. 깊이가 없는 꼭짓점은 호모그래피로
+    대체하며(placement_method 로그로 집계) 근거 없는 좌표는 만들지 않는다."""
     from src.common.logging import get_logger, log_event
 
     logger = get_logger("pipeline", log_dir="logs")
@@ -194,16 +202,27 @@ def detect_cracks_from_raw_images(
     # Step 2: 각 원본의 크랙 폴리곤을 캔버스 좌표로 변환 (위치/병합 매칭용).
     items: list[tuple[Polygon, float, str]] = []  # (canvas polygon, confidence, image_id)
     item_meta: list[tuple[str, np.ndarray]] = []  # (image_id, polygon_raw_px) 같은 인덱스로 대응
+    method_counts = {"depth": 0, "depth+flat": 0, "flat": 0}
     for image_id, polys in per_image_polys.items():
         H = np.asarray(source_transforms[image_id]["H"], dtype=np.float64)
+        use_depth = depth_mapper is not None and depth_mapper.has_image(image_id)
         for poly in polys:
-            canvas_poly_px = _polygon_to_canvas(poly.polygon_px, H)
+            if use_depth:
+                canvas_poly_px, method = depth_mapper.map_polygon(image_id, poly.polygon_px, H)
+            else:
+                canvas_poly_px, method = _polygon_to_canvas(poly.polygon_px, H), "flat"
+            method_counts[method] = method_counts.get(method, 0) + 1
             shapely_poly = _to_shapely(canvas_poly_px)
             if shapely_poly is None:
                 continue
             items.append((shapely_poly, poly.confidence, image_id))
             item_meta.append((image_id, poly.polygon_px))
 
+    log_event(
+        logger, "info", "크랙 캔버스 배치 방식 집계",
+        stage="RAW_CRACK_PLACEMENT", facade_id=facade_id, depth_mapper=depth_mapper is not None,
+        **{k.replace("+", "_plus_"): v for k, v in method_counts.items()},
+    )
     if not items:
         return []
 

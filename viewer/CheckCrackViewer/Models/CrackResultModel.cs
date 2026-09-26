@@ -28,6 +28,22 @@ public sealed class SourceObservationModel
     [JsonPropertyName("owned_pixel_count")] public int OwnedPixelCount { get; set; }
 }
 
+/// <summary>src/crack/position_check.py의 실측 결과(2026-09-26, 사용자 요구): 이 크랙의 주 원본 사진
+/// 픽셀을 크랙을 놓은 것과 같은 방식으로 캔버스에 놓았을 때, 실제로 표시되는 모자이크와 몇 캔버스
+/// px 어긋나는지. null(필드 없음 또는 측정 불가)은 "미측정"이지 "오차 0"이 아니다.</summary>
+public sealed class PositionCheckModel
+{
+    [JsonPropertyName("offset_px")] public double OffsetPx { get; set; }
+    [JsonPropertyName("dx")] public double Dx { get; set; }
+    [JsonPropertyName("dy")] public double Dy { get; set; }
+    [JsonPropertyName("ncc")] public double Ncc { get; set; }
+    /// <summary>"depth"(각 픽셀의 깊이로 배치) 또는 "flat"(평면 호모그래피로 배치).</summary>
+    [JsonPropertyName("method")] public string Method { get; set; } = "";
+    [JsonPropertyName("image_id")] public string ImageId { get; set; } = "";
+    /// <summary>스케일이 보정된 facade에서만 채워짐(CLAUDE.local.md #9/#26).</summary>
+    [JsonPropertyName("offset_mm")] public double? OffsetMm { get; set; }
+}
+
 /// <summary>Maps {facade_id}_cracks.json — mirrors src/common/types.py: Crack.
 /// NOTE: as of this app's first version, the Python pipeline does not yet
 /// write this file automatically (crack/pipeline.py:detect_cracks() was
@@ -94,4 +110,7 @@ public class CrackResultModel
     /// persistence (older facades) -- always safe to enumerate.</summary>
     [JsonPropertyName("source_observations")]
     public List<SourceObservationModel> SourceObservations { get; set; } = new();
+
+    [JsonPropertyName("position_check")]
+    public PositionCheckModel? PositionCheck { get; set; }
 }

@@ -42,9 +42,16 @@ public partial class ResultsCompareView : UserControl
     private void ResultsCompareView_DataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (e.OldValue is ResultsCompareViewModel oldVm)
+        {
             oldVm.PropertyChanged -= ViewModel_PropertyChanged;
+            oldVm.ClickMarkerRefined -= CenterPanel1OnPendingPoint;
+        }
         if (e.NewValue is ResultsCompareViewModel newVm)
+        {
             newVm.PropertyChanged += ViewModel_PropertyChanged;
+            // 깊이 기반으로 마커가 정확한 위치로 옮겨지면(비동기) 원본 사진을 그 지점으로 다시 스크롤한다.
+            newVm.ClickMarkerRefined += CenterPanel1OnPendingPoint;
+        }
     }
 
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)

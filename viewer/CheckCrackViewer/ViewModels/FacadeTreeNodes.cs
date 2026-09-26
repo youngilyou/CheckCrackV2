@@ -1,4 +1,7 @@
+using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using CheckCrackViewer.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace CheckCrackViewer.ViewModels;
@@ -15,6 +18,33 @@ public partial class ComplexNode : ObservableObject
     public string ComplexName { get; init; } = "";
     [ObservableProperty] private bool _isExpanded = true;
     public ObservableCollection<object> Children { get; } = new();
+
+    /// <summary>"APARTMENT"/"DAM"/"FACTORY" -- 단지 종합보고서 버튼 옆 콤보박스
+    /// (2026-09-24). This node is transient (RebuildFacadeTree recreates it
+    /// every refresh, see BuildingNode's own doc comment above), so
+    /// MainViewModel sets both the initial value (from ComplexSettingsStore,
+    /// keyed by ComplexId) AND <see cref="OnCommit"/> right after
+    /// constructing each node -- the property setter below fires that
+    /// callback so a combo-box selection change persists immediately without
+    /// needing a separate "저장" button.</summary>
+    [ObservableProperty] private string _structureType = "APARTMENT";
+
+    /// <summary>Set once by MainViewModel.RebuildFacadeTree right after
+    /// construction; invoked from OnStructureTypeChanged so a UI selection
+    /// writes straight through to ComplexSettingsStore. Never invoked during
+    /// the initial load itself (that assigns the field directly via the
+    /// backing property before this callback is wired, so loading a saved
+    /// value never re-triggers a redundant save).</summary>
+    public Action<ComplexNode>? OnStructureTypeCommitted { get; set; }
+
+    public static IReadOnlyList<SelectOption> StructureTypeOptions { get; } = new[]
+    {
+        new SelectOption("APARTMENT", "아파트"),
+        new SelectOption("DAM", "댐"),
+        new SelectOption("FACTORY", "공장"),
+    };
+
+    partial void OnStructureTypeChanged(string value) => OnStructureTypeCommitted?.Invoke(this);
 }
 
 /// <summary>동(Building) 노드 — 선택 사항 레벨. Children은 SideGroupNode만 담는다.

@@ -33,6 +33,8 @@ public partial class MainViewModel : ObservableObject
         ["NEEDS_MANUAL_REVIEW"] = "검토 필요 (Drift 감지)",
         ["COLMAP_EXTRACT"] = "CM 특징점 추출 중",
         ["COLMAP_MATCH"] = "CM 매칭 중",
+        ["COLMAP_LOFTR_MATCH"] = "CM 매칭 중 (LoFTR)",
+        ["COLMAP_HLOC_MATCH"] = "CM 매칭 중 (hloc)",
         ["COLMAP_MAPPING"] = "CM SfM 재구성 중",
         ["COLMAP_MAPPING_PROGRESS"] = "CM 이미지 등록 중",
         ["COLMAP_FALLBACK"] = "CM 보정 완료",
@@ -40,6 +42,41 @@ public partial class MainViewModel : ObservableObject
         ["FAILED_GEOMETRY"] = "실패 (품질 게이트 통과 pair 없음)",
         ["DONE"] = "완료",
         ["PREVIEW_UPDATED"] = "모자이크 미리보기 갱신 중",
+        // 2026-09-24: 2026-09-12 COLMAP 1/2단계 재구조화 이후 추가된 stage들이
+        // 이 표에 빠져 있어서 "CM 1단계 재구성 중" 같은 실제 진행 중에도 화면엔
+        // 원본 영문 stage 이름이 그대로 노출되고 있었음(StageLabels에 없으면
+        // 원본 문자열 그대로 표시하는 폴백 자체는 정상 동작 -- 다만 사용자에게
+        // 무슨 뜻인지 안 보임). 사용자 피드백("3시간 넘게 돌아가는데 되는지
+        // 모르겠다")으로 dense stereo 무진행 구간과 함께 발견/보완.
+        ["COLMAP_STAGE1"] = "CM 1단계 재구성 완료 (필터링용)",
+        ["OFF_WALL_DETECTED"] = "벽면 미노출 이미지 자동 제외",
+        ["COLMAP_STAGE1_FAILED"] = "CM 1단계 실패 (필터링 없이 진행)",
+        ["COLMAP_STAGE2"] = "CM 2단계 최종 재구성 완료",
+        ["COLMAP_STAGE2_FAILED"] = "CM 2단계 실패 (Flat 결과 유지)",
+        ["OFF_WALL_COVERAGE_REGRESSION"] = "필터링 후 coverage 감소 경고",
+        ["COLMAP_ALIGNMENT_POOR"] = "CM 정렬 불량 -- GPS/짐벌 자세로 대체",
+        ["POSE_PRIOR_UNAVAILABLE"] = "GPS/짐벌 자세 보정 불가",
+        ["POSE_PRIOR_RECTIFIED"] = "GPS/짐벌 자세 기반 재투영 완료",
+        ["STRUCTURE_TYPE"] = "구조물 유형 설정",
+        // Dense stereo (colmap_dense) -- patch_match_stereo 단독으로 수 시간 걸리는데
+        // 그동안 아무 로그도 없어서 "돌아가는지 모르겠다"는 게 직접적인 계기였음.
+        ["DENSE_STEREO_UNDISTORT"] = "Dense Stereo 이미지 언디스토트 중",
+        ["DENSE_STEREO_PATCHMATCH"] = "Dense Stereo Depth 계산 시작",
+        ["DENSE_STEREO_PROGRESS"] = "Dense Stereo Depth 계산 중",
+        ["DENSE_STEREO_FUSION"] = "Dense Stereo 포인트 융합 중",
+        ["DENSE_STEREO_EMPTY"] = "Dense Stereo 결과 없음 (Flat 결과 유지)",
+        ["DENSE_STEREO_FAILED"] = "Dense Stereo 실패 (Flat 결과 유지)",
+        ["RECTIFIED_COLMAP_DENSE"] = "Dense Stereo 하이브리드 완료",
+        // 2026-09-25: Track 1(H체인 + COLMAP 2단계) 산출물이 디스크에 확정된 시점 -- 이 뒤로
+        // Track 2(Dense Stereo, 수 시간)가 이어짐. 이 시점부터 Track 1 결과는 이미 열람 가능.
+        ["TRACK1_DONE"] = "Track 1 완료 (H체인 + COLMAP 2단계) · Dense Stereo 준비",
+        // pipeline.track = dense_only: COLMAP 1단계 → 필터 → Dense Stereo (H체인/COLMAP 2단계 생략)
+        ["DENSE_ONLY_START"] = "Track 2 시작 (Dense Stereo 단독 · H체인/COLMAP 2단계 생략)",
+        ["DENSE_ONLY_FAILED"] = "실패 (Dense Stereo 준비 단계 -- 로그 확인)",
+        // pipeline.track = reference: gsplat3d/render_dense_stereo_loftr 절차 그대로(필터 없이 전체 이미지)
+        ["REFERENCE_START"] = "Track 2 시작 (render_dense_stereo_loftr 절차 · 전체 이미지)",
+        ["REFERENCE_FAILED"] = "실패 (Track 2 준비 단계 -- 로그 확인)",
+        ["DENSE_CANVAS_MISMATCH"] = "Dense Stereo 생략 (flat/평면 캔버스 불일치 -- 로그 확인)",
     };
 
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -83,6 +120,20 @@ public partial class MainViewModel : ObservableObject
     // --- 설정 > 시스템 상태 탭: 읽기 전용 모니터링 값 (실제 신호만, 지어내지 않음) ---
     [ObservableProperty] private string _aiModelPath = "확인 중...";
     [ObservableProperty] private string _storageStatusText = "확인 중...";
+
+    // --- 설정 > 계정/연결 탭: 매칭 알고리즘 선택 (2026-09-24, 사용자 명시 요청 --
+    // 라이선스 문제 고려하지 않음). PipelineSettingsStore(RootPath/pipeline_settings.json)에
+    // 즉시 영속화되고, RunFacade가 매 실행마다 이 값을 읽어 stitch_folder.py에
+    // --matcher-backend로 넘긴다(RunFacade 참고). ---
+    [ObservableProperty] private string _matcherBackend = "loftr";
+    public IReadOnlyList<SelectOption> MatcherBackendOptions { get; } = new[]
+    {
+        new SelectOption("loftr", "LoFTR (기본, Apache 2.0)"),
+        new SelectOption("hloc", "hloc (SuperPoint+LightGlue, 비상업 라이선스)"),
+    };
+
+    partial void OnMatcherBackendChanged(string value) =>
+        PipelineSettingsStore.Save(RootPath, new PipelineSettings { MatcherBackend = value });
 
     // --- 계정(로그인) 아이디/비밀번호 변경, "설정" 페이지 -- UserStore(SQLite)가
     // 저장소, MySQL DbConnectionSettings와는 완전히 별개. 계정명 변경도 비밀번호
@@ -184,6 +235,10 @@ public partial class MainViewModel : ObservableObject
     /// and remote-triggered runs (AnalysisAssignment, see AnalysisBridgeService) -- see
     /// AnalysisConcurrencyManager's own doc comment for why this didn't exist before.</summary>
     private readonly AnalysisConcurrencyManager _concurrency = new();
+    // 정지 버튼용: facade.Key(폴더+FacadeId) -> 실행 중인 stitch_folder.py 프로세스, 그리고 "사용자가
+    // 정지를 눌렀다"는 표시(강제 종료된 실행을 오류로 표시하지 않기 위함).
+    private readonly Dictionary<string, Process> _runningStitchProcesses = new();
+    private readonly HashSet<string> _stopRequested = new();
 
     private readonly AnalysisBridgeService _analysisBridge = new();
     private readonly DispatcherTimer _heartbeatTimer;
@@ -619,6 +674,7 @@ public partial class MainViewModel : ObservableObject
         RecomputeDashboardCounts();
         AiModelPath = PipelineConfigReader.ReadCrackModelPath(RootPath)
             ?? "확인 불가 (config/pipeline.yaml에서 crack.model을 찾을 수 없음)";
+        MatcherBackend = PipelineSettingsStore.Load(RootPath).MatcherBackend;
         RefreshStorageStatus();
         RecomputeActiveJobs();
         _facadeScanTimer.Start();
@@ -1239,7 +1295,16 @@ public partial class MainViewModel : ObservableObject
 
         foreach (var complexGroup in byComplex)
         {
-            var complexNode = new ComplexNode { ComplexId = complexGroup.Key.ComplexId, ComplexName = complexGroup.Key.ComplexName };
+            var complexNode = new ComplexNode
+            {
+                ComplexId = complexGroup.Key.ComplexId,
+                ComplexName = complexGroup.Key.ComplexName,
+                StructureType = ComplexSettingsStore.GetStructureType(RootPath, complexGroup.Key.ComplexId),
+            };
+            // Wired AFTER the initial StructureType assignment above so loading a saved
+            // value never immediately re-saves it right back (see ComplexNode's own doc).
+            complexNode.OnStructureTypeCommitted = node =>
+                ComplexSettingsStore.SetStructureType(RootPath, node.ComplexId, node.StructureType);
 
             var withBuilding = complexGroup.Where(f => !string.IsNullOrEmpty(f.BuildingId));
             var withoutBuilding = complexGroup.Where(f => string.IsNullOrEmpty(f.BuildingId));
@@ -1312,9 +1377,18 @@ public partial class MainViewModel : ObservableObject
         // remote-triggered job would report AnalysisJobQueued instead of a silent block.
         await _concurrency.WaitForSlotAsync();
 
+        if (_stopRequested.Remove(facade.Key))
+        {
+            // 대기열에서 기다리는 동안 정지가 눌림 -- 프로세스를 시작하지 않고 슬롯만 반환.
+            MarkStopped(facade);
+            _concurrency.Release();
+            return;
+        }
+
         var baseOutputDir = Path.Combine(facade.SourceFolderPath, "output");
         var (versionLabel, versionDir) = FacadeVersionStore.AllocateNextVersionDir(baseOutputDir);
         var succeeded = false;
+        var stoppedByUser = false;
         try
         {
             var scriptPath = Path.Combine(RootPath, "tools", "stitch_folder.py");
@@ -1336,17 +1410,30 @@ public partial class MainViewModel : ObservableObject
             // 충돌하지 않는다).
             psi.ArgumentList.Add("--output-dir");
             psi.ArgumentList.Add(versionDir);
+            // 2026-09-24: 설정 화면(매칭 알고리즘)/단지 종합보고서 옆(구조물 유형) 두 콤보박스
+            // 선택값을 이 실행에 그대로 전달 -- 둘 다 선택 안 해도(기본값 loftr/APARTMENT)
+            // 이전과 동일하게 동작.
+            psi.ArgumentList.Add("--matcher-backend");
+            psi.ArgumentList.Add(MatcherBackend);
+            psi.ArgumentList.Add("--structure-type");
+            psi.ArgumentList.Add(ComplexSettingsStore.GetStructureType(RootPath, facade.ComplexId));
 
             using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
             process.Start();
             ChildProcessRegistry.Register(process);
+            _runningStitchProcesses[facade.Key] = process;
             try
             {
                 var stderrTask = process.StandardError.ReadToEndAsync();
                 var stdoutTask = process.StandardOutput.ReadToEndAsync();
                 await process.WaitForExitAsync();
 
-                if (process.ExitCode != 0)
+                stoppedByUser = _stopRequested.Remove(facade.Key);
+                if (stoppedByUser)
+                {
+                    facade.AddIssue("[INFO] 사용자가 실행을 중지했습니다.");
+                }
+                else if (process.ExitCode != 0)
                 {
                     var stderr = await stderrTask;
                     facade.AddIssue($"[ERROR] 파이프라인 실행 실패 (exit {process.ExitCode}): {SummarizePythonError(stderr)}");
@@ -1358,6 +1445,7 @@ public partial class MainViewModel : ObservableObject
             }
             finally
             {
+                _runningStitchProcesses.Remove(facade.Key);
                 ChildProcessRegistry.Unregister(process);
             }
         }
@@ -1396,12 +1484,57 @@ public partial class MainViewModel : ObservableObject
             // 화면이 "진행 중" 문구에 멈춰 보이지 않게 한다. 라이브 로그가 구조화된
             // FAILED_GEOMETRY 이벤트 없이(예: Python 처리되지 않은 예외) 죽으면
             // OverallStatus/CurrentStageLabel이 마지막으로 본 단계에 멈춰버리는 문제였음.
-            if (!succeeded)
+            if (stoppedByUser)
+            {
+                facade.OverallStatus = FacadeOverallStatus.Unknown;
+                facade.CurrentStageLabel = "중지됨 (사용자 요청)";
+            }
+            else if (!succeeded)
             {
                 facade.OverallStatus = FacadeOverallStatus.Failed;
                 facade.CurrentStageLabel = "실패 (마지막 실행 오류 — 아래 이슈 확인)";
             }
         }
+    }
+
+    /// <summary>실행 중(또는 대기열에서 기다리는) facade의 stitch_folder.py를 중지한다.
+    /// 프로세스 트리 전체를 종료하므로 COLMAP/LoFTR 하위 프로세스도 함께 멈춘다.</summary>
+    [RelayCommand]
+    private void StopFacade(FacadeItemViewModel facade)
+    {
+        if (!facade.IsRunning)
+            return;
+
+        var answer = MessageBox.Show(
+            facade.FacadeId + " 실행을 중지할까요?" + Environment.NewLine
+                + "지금까지의 진행 내용은 버려지고, 이전 성공 결과는 그대로 유지됩니다.",
+            "실행 중지", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes)
+            return;
+
+        _stopRequested.Add(facade.Key);
+        if (_runningStitchProcesses.TryGetValue(facade.Key, out var process))
+        {
+            try
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // best-effort -- process may already have exited on its own.
+            }
+        }
+    }
+
+    private static void MarkStopped(FacadeItemViewModel facade)
+    {
+        facade.IsRunning = false;
+        facade.RunStartTime = null;
+        facade.ElapsedLabel = "";
+        facade.LivePreviewImagePath = null;
+        facade.OverallStatus = FacadeOverallStatus.Unknown;
+        facade.CurrentStageLabel = "중지됨 (사용자 요청)";
     }
 
     /// <summary>Python 서브프로세스 stderr에서 실제로 쓸모있는 에러 정보를 뽑아낸다.
@@ -1653,7 +1786,7 @@ public partial class MainViewModel : ObservableObject
             // false인 facade(스티칭만 하고 크랙검사 안 돌린 경우)는 이 파일이 없으므로
             // UpsertFacadeCracksAsync 내부에서 조용히 no-op.
             await CrackVisionArchiveQueryService.UpsertFacadeCracksAsync(settings, archiveId, facade.FacadeId,
-                outputDir, facade.AnalysisColmapImagePath ?? facade.AnalysisImagePath,
+                outputDir, facade.EffectiveAnalysisImagePath,
                 facade.CoverageRatioColmap ?? facade.CoverageRatio, facade.NeedsRetake, facade.HasRectifiedMosaic);
         }
         finally
@@ -1928,7 +2061,7 @@ public partial class MainViewModel : ObservableObject
 
         var stage = entry.Stage ?? "";
         var label = StageLabels.TryGetValue(stage, out var known) ? known : stage;
-        if ((stage == "MATCH_GEOMETRY" || stage == "COLMAP_MAPPING_PROGRESS") && entry.Progress != null)
+        if ((stage == "MATCH_GEOMETRY" || stage == "COLMAP_MAPPING_PROGRESS" || stage == "DENSE_STEREO_PROGRESS") && entry.Progress != null)
             label += $"  ({entry.Progress})";
         facade.CurrentStageLabel = label;
 
@@ -2161,6 +2294,8 @@ public partial class MainViewModel : ObservableObject
         facade.VisualImagePath = snap.VisualImagePath;
         facade.AnalysisColmapImagePath = snap.AnalysisColmapImagePath;
         facade.VisualColmapImagePath = snap.VisualColmapImagePath;
+        facade.AnalysisColmapDenseImagePath = snap.AnalysisColmapDenseImagePath;
+        facade.VisualColmapDenseImagePath = snap.VisualColmapDenseImagePath;
 
         facade.OutputDir = snap.OutputDir;
         facade.NeedsRetake = snap.NeedsRetake;

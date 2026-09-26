@@ -148,12 +148,11 @@ public partial class ImageViewerWindow : Window
         // window's thumbnail grid uses) — several of these properties can settle
         // in over a couple of ticks as RescanFacadeOutputs catches up.
         if (e.PropertyName is nameof(FacadeItemViewModel.IsRunning)
-            or nameof(FacadeItemViewModel.VisualColmapImagePath)
-            or nameof(FacadeItemViewModel.VisualImagePath))
+            or nameof(FacadeItemViewModel.EffectiveVisualImagePath))
         {
             if (_liveFacade.IsRunning)
                 return;
-            var finalPath = _liveFacade.VisualColmapImagePath ?? _liveFacade.VisualImagePath;
+            var finalPath = _liveFacade.EffectiveVisualImagePath;
             if (finalPath != null)
                 LoadImage(finalPath, _liveFacade.FacadeId + " (완료)");
         }

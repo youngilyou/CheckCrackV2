@@ -1,7 +1,11 @@
 # torch is intentionally not pinned here — install the CUDA build first
 # per the README's setup steps, then this covers the rest.
 kornia==0.8.3
+scipy==1.16.3  # depth mapping / dense stereo / stitch-graph refinement
 opencv-python==4.12.0.88
+# NOTE: the plain pip wheel has NO CUDA dense stereo. Reconstruction works with it, but pipeline.track
+# 'reference' (dense stereo) and depth-based crack placement need the CUDA build (4.3.x) from
+# scripts\install_colmap_cuda_dense.bat -- see README section 0.
 pycolmap==4.1.1
 ultralytics==8.4.21
 networkx==3.6.1

@@ -75,6 +75,19 @@ public partial class FacadeSnapshot : ObservableObject
     public string? VisualImagePath { get; set; }
     public string? AnalysisColmapImagePath { get; set; }
     public string? VisualColmapImagePath { get; set; }
+    /// <summary>2026-09-24: dense stereo(patch_match_stereo/stereo_fusion, 실제 3D 깊이) +
+    /// flat COLMAP mosaic hole-fill 하이브리드(src/geometry/dense_stereo.py) -- 존재하면
+    /// AnalysisColmapImagePath/VisualColmapImagePath보다 항상 우선(발코니/돌출부 왜곡이 없는
+    /// 더 나은 버전). pipeline.yaml의 colmap.use_dense_stereo가 켜진 facade만 생성됨 -- 없는
+    /// facade는 그냥 null, 기존 "_colmap" 우선순위로 자연스럽게 폴백.</summary>
+    public string? AnalysisColmapDenseImagePath { get; set; }
+    public string? VisualColmapDenseImagePath { get; set; }
+    /// <summary>Same "prefer the best available variant" convention as DisplayCracks
+    /// above -- dense-stereo hybrid, then flat-COLMAP, then plain H-chain. Every
+    /// consumer that wants "whichever mosaic is currently the best one" should use
+    /// these instead of re-deriving the same ?? chain per call site.</summary>
+    public string? EffectiveAnalysisImagePath => AnalysisColmapDenseImagePath ?? AnalysisColmapImagePath ?? AnalysisImagePath;
+    public string? EffectiveVisualImagePath => VisualColmapDenseImagePath ?? VisualColmapImagePath ?? VisualImagePath;
     public string? ReportPath { get; set; }
 }
 
@@ -191,6 +204,8 @@ public static class FacadeOutputScanner
             VisualImagePath = ExistsOrNull(Path.Combine(outputDir, $"{facadeId}_visual.tif")),
             AnalysisColmapImagePath = ExistsOrNull(Path.Combine(outputDir, $"{facadeId}_analysis_colmap.tif")),
             VisualColmapImagePath = ExistsOrNull(Path.Combine(outputDir, $"{facadeId}_visual_colmap.tif")),
+            AnalysisColmapDenseImagePath = ExistsOrNull(Path.Combine(outputDir, $"{facadeId}_analysis_colmap_dense.tif")),
+            VisualColmapDenseImagePath = ExistsOrNull(Path.Combine(outputDir, $"{facadeId}_visual_colmap_dense.tif")),
             ReportPath = ExistsOrNull(Path.Combine(outputDir, $"{facadeId}_report.pdf")),
             NeedsRetake = flags.NeedsRetake,
             NeedsDetailCapture = flags.NeedsDetailCapture,

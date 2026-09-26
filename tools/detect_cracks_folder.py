@@ -133,10 +133,13 @@ def main() -> None:
     cfg = load_config(args.config)
     logger = get_logger("pipeline", log_dir="logs")
 
-    # COLMAP-rectified variants take precedence when present, same precedence
-    # AiTrainingViewModel already uses for display.
-    analysis_path = _pick(output_dir, facade_id, "_analysis_colmap.tif", "_analysis.tif")
-    mask_path = _pick(output_dir, facade_id, "_observed_mask_colmap.tif", "_observed_mask.tif")
+    # Dense-stereo+flat hybrid (src/geometry/dense_stereo.py, 2026-09-23/24)
+    # takes precedence over plain flat-COLMAP when present -- real depth fixes
+    # the flat mosaic's balcony/recess parallax tear, so this variant is
+    # strictly the better one whenever it exists. Falls back through the same
+    # precedence AiTrainingViewModel already uses for display otherwise.
+    analysis_path = _pick(output_dir, facade_id, "_analysis_colmap_dense.tif", "_analysis_colmap.tif", "_analysis.tif")
+    mask_path = _pick(output_dir, facade_id, "_observed_mask_colmap_dense.tif", "_observed_mask_colmap.tif", "_observed_mask.tif")
     source_images_path = output_dir / f"{facade_id}_source_images.json"
 
     if analysis_path is None or mask_path is None:
@@ -154,16 +157,28 @@ def main() -> None:
     if source_images_path.exists():
         source_entries = json.loads(source_images_path.read_text(encoding="utf-8"))
         source_image_ids = [entry["image_id"] for entry in source_entries]
-        raw_image_paths = {entry["image_id"]: entry["file_path"] for entry in source_entries}
+        # The stored paths are absolute on the machine that stitched -- on another computer look for the
+        # same file name next to the run's folders (src/common/paths.py). Unresolved photos keep their
+        # stored path so the later "원본 이미지 로드 실패" log names them instead of silently dropping them.
+        from src.common.paths import resolve_source_image
+
+        raw_image_paths = {
+            entry["image_id"]: (resolve_source_image(entry["file_path"], output_dir) or entry["file_path"])
+            for entry in source_entries
+        }
+        missing = [i for i, path in raw_image_paths.items() if not Path(path).exists()]
+        if missing:
+            print(f"[warn] {len(missing)}/{len(raw_image_paths)} source photos not found (e.g. {missing[:3]}) -- "
+                  "set CHECKCRACK_IMAGES_DIR to the folder holding the original JPEGs")
 
     # source_observations inputs -- same COLMAP-preferred picking as
     # analysis/mask above, so these always match whichever mosaic variant was
     # actually loaded. All optional: an older facade stitched before this
     # feature existed simply has none of these files, and every crack's
     # source_observations comes back an empty list rather than erroring.
-    homographies_path = _pick(output_dir, facade_id, "_homographies_colmap.json", "_homographies.json")
-    seam_owner_map_path = _pick(output_dir, facade_id, "_seam_owner_map_colmap.png", "_seam_owner_map.png")
-    seam_owner_index_path = _pick(output_dir, facade_id, "_seam_owner_index_colmap.json", "_seam_owner_index.json")
+    homographies_path = _pick(output_dir, facade_id, "_homographies_colmap_dense.json", "_homographies_colmap.json", "_homographies.json")
+    seam_owner_map_path = _pick(output_dir, facade_id, "_seam_owner_map_colmap_dense.png", "_seam_owner_map_colmap.png", "_seam_owner_map.png")
+    seam_owner_index_path = _pick(output_dir, facade_id, "_seam_owner_index_colmap_dense.json", "_seam_owner_index_colmap.json", "_seam_owner_index.json")
 
     source_transforms: dict | None = None
     if homographies_path is not None:
@@ -229,6 +244,23 @@ def main() -> None:
     else:
         scale = ScaleInfo(px_per_m=None, calibrated=False)
 
+    # {facade_id}_structure_type.json only exists for facades run after
+    # 2026-09-24 (pipeline/runner.py writes it for every run since then, same
+    # sidecar-file convention as scale_colmap.json above) -- an older output
+    # folder without it defaults to APARTMENT via get_structure_profile(None),
+    # matching the behavior every facade already had before this tag existed.
+    # 2026-09-24 seam (see src/common/structure_profiles.py's module docstring):
+    # today this is recorded as provenance only -- crack criteria below are NOT
+    # yet branched by structure_type, because only APARTMENT has been
+    # calibrated so far (explicit user decision, this session).
+    from src.common.structure_profiles import get_structure_profile
+
+    structure_type_path = output_dir / f"{facade_id}_structure_type.json"
+    if structure_type_path.exists():
+        structure_profile = json.loads(structure_type_path.read_text(encoding="utf-8"))
+    else:
+        structure_profile = get_structure_profile(None)
+
     # Raw-photo-first pipeline needs BOTH a real metric canvas scale (COLMAP,
     # not the H-chain-only uncalibrated case) and this facade's stage-2
     # per-image homographies -- source_transforms already prefers the colmap
@@ -246,6 +278,22 @@ def main() -> None:
     }
     if use_raw_pipeline and not raw_image_paths_available:
         use_raw_pipeline = False  # homographies exist but source JPEGs are gone -- fall back rather than error
+
+    # 2026-09-26: place cracks by each pixel's own depth instead of the flat-plane homography -- but
+    # ONLY when the mosaic being displayed/analysed is the dense-stereo hybrid the depth maps belong
+    # to (a flat mosaic is itself drawn by the homographies, so there the homography IS consistent).
+    depth_mapper = None
+    if use_raw_pipeline and analysis_path.name.endswith("_analysis_colmap_dense.tif"):
+        from src.geometry.depth_mapping import load_mapper_from_sidecar
+
+        depth_mapper = load_mapper_from_sidecar(output_dir, facade_id)
+        if depth_mapper is None:
+            log_event(
+                logger, "warning",
+                "Dense 모자이크인데 depth_mapping 사이드카/깊이 맵이 없어 평면 호모그래피로 크랙을 배치함 "
+                "(위치가 벽 굴곡만큼 어긋날 수 있음) -- tools/make_depth_mapping_sidecar.py 로 생성 가능",
+                stage="DEPTH_MAPPING_MISSING", facade_id=facade_id,
+            )
 
     def run_pass(version_label: str, model_path: str, cracks_path: Path, mask_path_out: Path) -> int:
         # Stable crack_ids across re-runs against this SAME mosaic -- each
@@ -279,6 +327,7 @@ def main() -> None:
                 device=args.device,
                 previous_cracks=previous_cracks,
                 wall_region_mask=wall_region_mask,
+                depth_mapper=depth_mapper,
             )
         else:
             cracks = detect_cracks(
@@ -335,6 +384,28 @@ def main() -> None:
         # UI use without breaking the current parser. {facade_id}_cracks_v2.json
         # (2차) uses the identical schema -- no viewer reads it yet (3차 육안
         # 검토 UI wiring is a separate, not-yet-done task).
+        # 위치 오차(사용자 요구, 2026-09-26): 이 크랙의 주 원본 사진 픽셀을 이 크랙을 놓은 것과 같은
+        # 방식으로 캔버스에 놓고, 실제로 표시되는 모자이크와 몇 px 어긋나는지 실측한다.
+        position_checks: dict = {}
+        if use_raw_pipeline:
+            from src.crack.position_check import compute_position_checks
+
+            t_check = time.time()
+            position_checks = compute_position_checks(
+                cracks, raw_image_paths_available, source_transforms, analysis_image,
+                scale.px_per_m, scale.calibrated, depth_mapper=depth_mapper,
+            )
+            valid_offsets = [v["offset_px"] for v in position_checks.values() if v]
+            log_event(
+                logger, "info", "크랙 위치 오차 측정 완료",
+                stage="CRACK_POSITION_CHECKED", facade_id=facade_id, model_version=version_label,
+                measured=len(valid_offsets), total=len(cracks),
+                median_offset_px=(round(float(np.median(valid_offsets)), 2) if valid_offsets else None),
+                p90_offset_px=(round(float(np.percentile(valid_offsets, 90)), 2) if valid_offsets else None),
+                placement="depth" if depth_mapper is not None else "flat",
+                elapsed_s=round(time.time() - t_check, 1),
+            )
+
         payload = []
         for crack in cracks:
             cx = float((crack.bbox_px[0] + crack.bbox_px[2]) / 2)
@@ -355,11 +426,14 @@ def main() -> None:
                 # extra provenance/overlay fields, not read by CrackResultModel today
                 "severity": crack.severity,
                 "building_id": crack.building_id,
+                "structure_type": structure_profile["structure_type"],
+                "structure_type_calibrated": structure_profile["calibrated"],
                 "position": {"pixel_x": round(cx, 1), "pixel_y": round(cy, 1), "u_m": None, "v_m": None},
                 "bbox_px": [round(v, 1) for v in crack.bbox_px],
                 "polygon_px": crack.polygon_px.round(1).tolist(),
                 "skeleton_px": crack.skeleton_px.round(1).tolist(),
                 "source_tile_ids": crack.source_tile_ids,
+                "position_check": position_checks.get(crack.crack_id),
                 "source_observations": [
                     {
                         "image_id": obs.image_id,

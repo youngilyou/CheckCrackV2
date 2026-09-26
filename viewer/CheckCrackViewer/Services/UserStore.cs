@@ -108,7 +108,8 @@ public static class UserStore
         });
     }
 
-    public static Task<AppUser?> ValidateLoginAsync(string username, string password)
+    public static Task<AppUser?> 
+        ValidateLoginAsync(string username, string password)
     {
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();

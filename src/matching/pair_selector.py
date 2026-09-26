@@ -69,10 +69,26 @@ def select_pairs(catalog: list[ImageMetadata], cfg: Config) -> list[PairCandidat
         lat0 = sum(m.gps.latitude for m in located) / len(located)
         lon0 = sum(m.gps.longitude for m in located) / len(located)
         xy = np.array([_local_enu_xy(m.gps.latitude, m.gps.longitude, lat0, lon0) for m in located])
-        tree = cKDTree(xy)
-        neighbor_pairs = tree.query_pairs(r=max_gps_m)
-        for i, j in neighbor_pairs:
-            add(located[i], located[j], "gps_proximity")
+        max_neighbors = getattr(mcfg, "max_neighbors_per_image", None)
+        if max_neighbors:
+            # A radius query alone returns every photo within max_gps_m -- with dense
+            # captures (10 m standoff, ~2 m column/vertical spacing) that is >100
+            # neighbors per image (54,545 pairs for 422 photos, measured 2026-09-22),
+            # of which only ~12% can actually overlap. Keep each image's nearest
+            # neighbors in 3D (altitude included -- same-column photos share xy) instead.
+            alt = np.array([m.gps.altitude_m if m.gps.altitude_m is not None else 0.0 for m in located])
+            xyz = np.column_stack([xy, alt])
+            k_query = min(int(max_neighbors) + 1, len(located))
+            dists, idxs = cKDTree(xyz).query(xyz, k=k_query, distance_upper_bound=max_gps_m)
+            for i in range(len(located)):
+                for d, j in zip(dists[i][1:], idxs[i][1:]):
+                    if np.isfinite(d) and j < len(located):
+                        add(located[i], located[j], "gps_proximity")
+        else:
+            tree = cKDTree(xy)
+            neighbor_pairs = tree.query_pairs(r=max_gps_m)
+            for i, j in neighbor_pairs:
+                add(located[i], located[j], "gps_proximity")
 
     return list(pairs.values())
 

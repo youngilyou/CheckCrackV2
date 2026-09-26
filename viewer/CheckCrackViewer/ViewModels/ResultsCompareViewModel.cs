@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media;
@@ -83,7 +84,7 @@ public partial class ResultsCompareViewModel : ObservableObject
         try
         {
             snapshots = FacadeOutputScanner.ScanAll(RootPath)
-                .Where(s => s.AnalysisImagePath != null || s.AnalysisColmapImagePath != null)
+                .Where(s => s.EffectiveAnalysisImagePath != null)
                 .OrderBy(s => s.Key, StringComparer.Ordinal)
                 .ToList();
         }
@@ -229,6 +230,8 @@ public partial class ResultsCompareViewModel : ObservableObject
         dst.VisualImagePath = src.VisualImagePath;
         dst.AnalysisColmapImagePath = src.AnalysisColmapImagePath;
         dst.VisualColmapImagePath = src.VisualColmapImagePath;
+        dst.AnalysisColmapDenseImagePath = src.AnalysisColmapDenseImagePath;
+        dst.VisualColmapDenseImagePath = src.VisualColmapDenseImagePath;
         dst.ReportPath = src.ReportPath;
         dst.NeedsRetake = src.NeedsRetake;
         dst.NeedsDetailCapture = src.NeedsDetailCapture;
@@ -243,6 +246,9 @@ public partial class ResultsCompareViewModel : ObservableObject
         panel.OriginalOrigHeight = 0;
         panel.CrackMarkerDisplayX = null;
         panel.CrackMarkerDisplayY = null;
+        _clickErrorVersion++; // 진행 중이던 정합 오차 계산 결과가 새 화면에 덮어써지지 않게 무효화
+        panel.ClickErrorText = "";
+        panel.ClickErrorDetail = "";
         panel.StitchDisplayBitmap = null;
         panel.StitchImagePath = "";
         panel.StitchOrigWidth = 0;
@@ -268,7 +274,7 @@ public partial class ResultsCompareViewModel : ObservableObject
     private void LoadOriginalImages(ComparePanelState panel)
     {
         var facade = SelectedFacade;
-        var mosaicPath = facade?.AnalysisColmapImagePath ?? facade?.AnalysisImagePath;
+        var mosaicPath = facade?.EffectiveAnalysisImagePath;
         var outputDir = mosaicPath != null ? Path.GetDirectoryName(mosaicPath) : null;
         if (facade == null || outputDir == null)
             return;
@@ -280,7 +286,9 @@ public partial class ResultsCompareViewModel : ObservableObject
         try
         {
             var entries = JsonSerializer.Deserialize<List<SourceImageEntry>>(File.ReadAllText(sourceJsonPath));
-            var paths = entries?.Select(e => e.FilePath).Where(File.Exists).ToList() ?? new List<string>();
+            var paths = entries?
+                .Select(e => SourceImagePathResolver.Resolve(e.FilePath, outputDir))
+                .Where(p => p != null).Select(p => p!).ToList() ?? new List<string>();
             panel.OriginalImageList = paths;
             if (paths.Count > 0)
             {
@@ -334,7 +342,7 @@ public partial class ResultsCompareViewModel : ObservableObject
     private void LoadStitchImage(ComparePanelState panel)
     {
         var facade = SelectedFacade;
-        var path = facade?.AnalysisColmapImagePath ?? facade?.AnalysisImagePath;
+        var path = facade?.EffectiveAnalysisImagePath;
         if (path == null || !File.Exists(path))
             return;
 
@@ -534,7 +542,139 @@ public partial class ResultsCompareViewModel : ObservableObject
                 targetPanel.CrackMarkerDisplayY = targetPanel.PendingCenterDisplayY;
             }
         }
+
+        StartClickLocate(mosaicX, mosaicY, imageId);
         return StitchClickResult.Success;
+    }
+
+    private int _clickErrorVersion;
+    private readonly ClickLocatorClient _clickLocator = new();
+    private CancellationTokenSource? _clickLocatorCts;
+
+    /// <summary>원본 패널의 마커를 정확한 위치로 옮긴 뒤(깊이 기반) 뷰가 그 지점으로 다시 스크롤하게 하는
+    /// 신호. ResultsCompareView가 구독해서 CenterPanel1OnPendingPoint를 호출한다.</summary>
+    public event Action? ClickMarkerRefined;
+
+    /// <summary>2026-09-26 (사용자 요구, "스티칭에서 선택한 곳과 원본이미지 위치 표시 오차"): 위의 호모그래피
+    /// 마커는 즉시 보이는 임시 위치일 뿐이다 -- 벽이 평면이 아니라서(측정: 중앙값 7px=7cm, 최대 24px) 원본
+    /// 사진 위에서는 수십 px 어긋난다. tools/click_locator.py가 깊이로 실제 위치를 구하고 그 마커의 오차를
+    /// 실측해서, 마커를 옮기고 보고서 버튼 옆에 표시한다. 그 사이 다시 클릭하거나 화면이 바뀌면
+    /// (_clickErrorVersion이 달라지면) 늦게 도착한 결과는 버린다. 실패하면 임시 마커를 그대로 두고 그
+    /// 사실을 문구로 알린다(값을 만들어내지 않음).</summary>
+    private void StartClickLocate(int mosaicX, int mosaicY, string ownerImageId)
+    {
+        var panel = Panel2;
+        var version = ++_clickErrorVersion;
+        panel.ClickErrorText = "선택 위치 오차 계산 중…";
+        panel.ClickErrorDetail = "임시로 평면 호모그래피 위치를 표시했습니다. 깊이 기반 위치와 오차를 계산 중입니다.";
+
+        var facade = SelectedFacade;
+        if (facade?.OutputDir == null || string.IsNullOrEmpty(RootPath))
+        {
+            panel.ClickErrorText = "선택 위치 오차: 계산 불가 (결과 폴더 정보 없음)";
+            return;
+        }
+        var outputDir = facade.OutputDir;
+        var facadeId = facade.FacadeId;
+        var rootPath = RootPath;
+
+        _clickLocatorCts?.Cancel();
+        var cts = _clickLocatorCts = new CancellationTokenSource();
+        var dispatcher = Application.Current?.Dispatcher;
+
+        Task.Run(async () =>
+        {
+            ClickLocateResult? result = null;
+            try
+            {
+                result = await _clickLocator.LocateAsync(rootPath, outputDir, facadeId, mosaicX, mosaicY, cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return; // a newer click superseded this one
+            }
+
+            void Apply()
+            {
+                if (version != _clickErrorVersion)
+                    return;
+                var (text, detail) = FormatClickError(result);
+                panel.ClickErrorText = text;
+                panel.ClickErrorDetail = detail;
+                if (result?.Depth != null && result.RawWidth > 0)
+                    MoveOriginalMarker(result);
+            }
+            if (dispatcher != null)
+                dispatcher.BeginInvoke(new Action(Apply));
+            else
+                Apply();
+        });
+    }
+
+    /// <summary>깊이로 구한 위치로 원본 패널 마커를 옮긴다. 그 사이 사용자가 다른 사진으로 넘겼다면
+    /// (지금 보이는 사진이 결과의 사진과 다르면) 건드리지 않는다.</summary>
+    private void MoveOriginalMarker(ClickLocateResult result)
+    {
+        var panel = Panel1;
+        if (panel.OriginalImageIndex < 0 || panel.OriginalImageIndex >= panel.OriginalImageList.Count)
+            return;
+        var current = Path.GetFileNameWithoutExtension(panel.OriginalImageList[panel.OriginalImageIndex]);
+        if (!string.Equals(current, result.ImageId, StringComparison.Ordinal) || panel.OriginalDisplayWidth <= 0)
+            return;
+
+        var scale = panel.OriginalDisplayWidth / result.RawWidth;
+        var x = Math.Clamp(result.Depth!.X, 0, result.RawWidth) * scale;
+        var y = Math.Clamp(result.Depth.Y, 0, result.RawHeight) * scale;
+        panel.CrackMarkerDisplayX = x;
+        panel.CrackMarkerDisplayY = y;
+        panel.PendingCenterDisplayX = x;
+        panel.PendingCenterDisplayY = y;
+        ClickMarkerRefined?.Invoke();
+    }
+
+    private static (string Text, string Detail) FormatClickError(ClickLocateResult? r)
+    {
+        const string Definition =
+            "스티칭에서 클릭한 지점과, 원본 사진에 표시된 마커 위치 사이의 오차입니다. 원본 사진의 마커 주변 " +
+            "픽셀을 같은 방식으로 스티칭 좌표에 올려 실제 표시되는 모자이크와 몇 px 어긋나는지 이미지 내용으로 " +
+            "잰 값입니다(1px = 스티칭 1픽셀). 질감이 없는 벽은 측정할 수 없어 '측정 불가'로 표시하며 0으로 " +
+            "보이지 않습니다.";
+
+        if (r == null)
+            return ("선택 위치 오차: 계산 실패 (평면 호모그래피 마커 유지)",
+                    "위치 계산 프로그램을 실행하지 못해 임시 마커(평면 호모그래피)를 그대로 표시했습니다. 이 마커는 " +
+                    "원본 사진 위에서 수십 px 어긋날 수 있습니다.\n" + Definition);
+        if (!string.IsNullOrEmpty(r.Error))
+            return ($"선택 위치 오차: {r.Error}", Definition);
+
+        string Mm(double px) => r.Calibrated && r.PxPerM is > 0 ? $" (약 {px / r.PxPerM.Value * 1000.0:F0} mm)" : "";
+        var flatText = r.FlatError != null ? $"{r.FlatError.OffsetPx:F1} px" : "측정 불가";
+
+        string text, detail;
+        if (r.Depth != null && r.DepthError != null)
+        {
+            var d = r.DepthError;
+            text = $"선택 위치 오차 {d.OffsetPx:F1} px{Mm(d.OffsetPx)} · 깊이 기반 (평면 방식은 {flatText})";
+            detail = $"깊이 기반 마커: 오차 {d.OffsetPx:F1} px (dx {d.Dx:+0.0;-0.0}, dy {d.Dy:+0.0;-0.0}, 상관 {d.Ncc:F2})\n" +
+                     $"평면 호모그래피 마커(이전 방식): {flatText}\n" +
+                     $"사진: {r.ImageId}";
+        }
+        else if (r.Depth != null)
+        {
+            text = $"선택 위치 오차 측정 불가 (질감 부족) · 깊이 기반 위치 사용 (평면 방식은 {flatText})";
+            detail = $"깊이로 위치는 구했지만(잔차 {r.Depth.ResidualPx:F2} px) 이 지점은 질감이 없어 오차를 이미지로 재지 못했습니다.\n사진: {r.ImageId}";
+        }
+        else
+        {
+            text = r.FlatError != null
+                ? $"선택 위치 오차 {r.FlatError.OffsetPx:F1} px{Mm(r.FlatError.OffsetPx)} · 평면 호모그래피 (이 지점은 깊이 없음)"
+                : "선택 위치 오차 측정 불가 · 평면 호모그래피 (이 지점은 깊이 없음)";
+            detail = "이 지점은 깊이 정보가 없어 평면 호모그래피 마커를 그대로 썼습니다. 벽에서 튀어나오거나 들어간 곳이면 " +
+                     $"실제 위치와 어긋날 수 있습니다.\n사진: {r.ImageId}";
+        }
+        if (r.Calibrated)
+            detail += "\nmm 환산은 GPS 기반 COLMAP 정렬 스케일(정밀 RTK 아님) 기준의 근사값입니다.";
+        return (text, detail + "\n\n" + Definition);
     }
 
     [RelayCommand]
@@ -791,7 +931,7 @@ public partial class ResultsCompareViewModel : ObservableObject
         _nextManualLabel = 1;
 
         var facade = SelectedFacade;
-        var mosaicPath = facade?.AnalysisColmapImagePath ?? facade?.AnalysisImagePath;
+        var mosaicPath = facade?.EffectiveAnalysisImagePath;
         if (facade == null || facade.OutputDir == null || mosaicPath == null || !File.Exists(mosaicPath))
             return;
 
@@ -830,7 +970,8 @@ public partial class ResultsCompareViewModel : ObservableObject
             {
                 var entries = JsonSerializer.Deserialize<List<SourceImageEntry>>(File.ReadAllText(sourceJsonPath));
                 foreach (var entry in entries ?? new List<SourceImageEntry>())
-                    _reviewSourceImagePaths[entry.ImageId] = entry.FilePath;
+                    _reviewSourceImagePaths[entry.ImageId] =
+                        SourceImagePathResolver.Resolve(entry.FilePath, facade.OutputDir) ?? entry.FilePath;
             }
             catch (JsonException)
             {
@@ -856,7 +997,8 @@ public partial class ResultsCompareViewModel : ObservableObject
             ReviewItems.Add(BuildReviewItem(
                 crack.CrackId, crack.LengthPx, crack.MaxWidthPx, crack.AreaPx,
                 crack.LengthMm, crack.MaxWidthMm, crack.AreaMm2,
-                crack.Confidence, crack.Severity, crack.PolygonPx, crack.BboxPx, status, sourceObservations));
+                crack.Confidence, crack.Severity, crack.PolygonPx, crack.BboxPx, status, sourceObservations,
+                crack.PositionCheck));
         }
 
         foreach (var addition in review?.ManualAdditions ?? new List<ManualCrackAddition>())
@@ -875,7 +1017,7 @@ public partial class ResultsCompareViewModel : ObservableObject
         string crackId, double? lengthPx, double? maxWidthPx, double? areaPx,
         double? lengthMm, double? maxWidthMm, double? areaMm2, double confidence,
         string? severity, double[][] polygonPx, double[]? bboxPx, CrackReviewStatus status,
-        List<SourceObservationModel>? sourceObservations = null)
+        List<SourceObservationModel>? sourceObservations = null, PositionCheckModel? positionCheck = null)
     {
         var canvasPoints = new PointCollection(polygonPx.Select(p => new Point(p[0] * _reviewScale, p[1] * _reviewScale)));
         return new CrackReviewItem
@@ -894,6 +1036,7 @@ public partial class ResultsCompareViewModel : ObservableObject
             Status = status,
             CanvasPoints = canvasPoints,
             SourceObservations = sourceObservations ?? new List<SourceObservationModel>(),
+            PositionCheck = positionCheck,
             // 2026-09-18, 사용자 요청: 신뢰도 60% 미만은 기본적으로 이미 있는 "숨김"
             // 상태(IsHighlightVisible)로 시작 -- 새 회색 스타일을 따로 만들 필요 없이
             // 기존 토글(클릭하면 다시 보임) 그대로 재사용. 이 값과 pdf_report.py의

@@ -24,6 +24,7 @@ facade_assignment:
 matching:
   temporal_neighbor_count: 4
   max_gps_distance_m: 20
+  max_neighbors_per_image: 16  # nearest neighbors kept per image (3D GPS); 0/absent = old radius-only behavior
   max_view_angle_delta_deg: 20
 
 loftr:
@@ -53,6 +54,29 @@ colmap:
   max_drift_px: 10.0
   max_seam_drift_px: 20.0  # single worst seam — a facade can pass the *mean* drift check while one bad seam still produces a visible wavy/misaligned line
   max_coverage_gap_ratio: 0.5
+  use_loftr_matching: true  # SIFT(match_exhaustive)를 LoFTR로 대체 (src/matching/loftr_colmap_bridge.py) -- 반복 패턴(창/환기구/발코니 패널) 오정합 근본 해결책. 2026-09-17 최초 확정, 2026-09-24 재확인: FRONT facade(422장) 기준 SuperPoint+LightGlue보다도 등록률/재투영오차 우수, 라이선스도 깨끗함(Apache 2.0). 이 설정은 09-13 baseline 되돌리기로 잠시 유실됐다가 이번에 재적용.
+  use_dense_stereo: true  # COLMAP dense stereo(patch_match_stereo+stereo_fusion, pycolmap 순수 호출) + 같은 평면 flat mosaic hole-fill 하이브리드 (src/geometry/dense_stereo.py) -- 2026-09-23/24 gsplat3d PoC에서 검증, flat 단독의 발코니/돌출부 왜곡을 해결. 면 하나당 여러 시간(dense stereo 자체가 수 시간) 추가 소요 -- 2026-09-24 사용자 확정("UI와 모두 연결"): 시간보다 정확성 우선.
+  # matcher_backend: "sift" | "loftr" | "hloc" -- 2026-09-24, Viewer 설정 화면의 매칭 알고리즘
+  # 콤보박스가 매 실행마다 --matcher-backend로 이 값을 오버라이드한다(Config.set_override,
+  # src/pipeline/runner.run_facade_poc). 이 키 자체를 여기 두지 않으면(주석 처리 상태 유지)
+  # 위 use_loftr_matching 불리언이 계속 기본 결정권을 가짐 -- src/sfm/colmap_runner.run_colmap의
+  # docstring이 정확한 우선순위를 설명함. "hloc"은 SuperPoint+LightGlue를 별도 env
+  # (D:/ClaudePr/CheckCrack3D/nerfstudio/hloc_env, src/matching/hloc_bridge.py) subprocess로
+  # 실행 -- 사용자 명시 요청으로 라이선스(Magic Leap 비상업) 고려 없이 비교용으로 추가됨.
+  # matcher_backend: loftr
+
+# 실행 트랙 (2026-09-25):
+#   reference  = gsplat3d/render_dense_stereo_loftr 절차 그대로 (현재 값). COLMAP 1단계(LoFTR, 전체 이미지) -> flat 모자이크(전체
+#                이미지, 평면 캔버스 그대로) -> Dense Stereo(전체 이미지) -> 참조와 같은 병합. **이미지 필터 없음**, H체인/COLMAP
+#                2단계 없음, 가장자리 마진 없음. (사용자: "Colmap->이미지 필터->LoFTR->Dense Stereo 이것 버리고 render_dense_stereo_loftr
+#                이것의 실행 로직을 적용" -- V007에서 필터가 이미지 152장을 제외해 위쪽 파라펫/왼쪽 면이 어긋나고 구멍이 생김)
+#   dense_only = COLMAP 1단계 -> 벽면 미노출 이미지 필터 -> Dense Stereo (V007 방식, 위 문제 때문에 비권장)
+#   full       = COLMAP 1단계 -> 필터 -> H체인 -> COLMAP 2단계 -> Dense Stereo (키가 없을 때의 기본값)
+# reference/dense_only 결과물: *_colmap_dense.* + 크랙 검사/뷰어가 읽는 *_colmap.* 사이드카(_scale_colmap, _wall_region_mask_colmap,
+# _colmap_report, _source_images). H체인 산출물(_analysis.tif/_visual.tif/_quality_report.json)은 만들어지지 않음.
+# reference/dense_only는 colmap.use_dense_stereo 값과 무관하게 Dense Stereo를 실행함(이 트랙의 존재 이유이므로).
+pipeline:
+  track: reference
 
 tiling:
   tile_width: 1024

@@ -47,6 +47,22 @@ public partial class CrackReviewItem : ObservableObject
     /// ResultsCompareViewModel.SelectedReviewItem.</summary>
     public List<SourceObservationModel> SourceObservations { get; init; } = new();
 
+    /// <summary>2026-09-26 (사용자 요구): 스티칭 위 크랙 표시와 원본 크랙 위치의 실측 오차.
+    /// null = 미측정(구버전 결과, 수동 추가, 텍스처 부족 등) -- "오차 0"으로 보이면 안 된다.</summary>
+    public PositionCheckModel? PositionCheck { get; init; }
+
+    public string PositionErrorText
+    {
+        get
+        {
+            if (PositionCheck == null)
+                return Status == CrackReviewStatus.Manual ? "위치 오차 해당 없음" : "위치 오차 미측정";
+            var mm = PositionCheck.OffsetMm.HasValue ? $" (약 {PositionCheck.OffsetMm:F0} mm)" : "";
+            var how = PositionCheck.Method == "depth" ? "깊이 배치" : "평면 호모그래피 배치";
+            return $"위치 오차 {PositionCheck.OffsetPx:F1} px{mm} · {how}";
+        }
+    }
+
     /// <summary>Sequential 1..N shown on the small canvas badge (matches the
     /// PDF report's "전체 위치도" numbering convention) -- replaces showing the
     /// full crack_id text on-canvas, which at high zoom (LayoutTransform scales
