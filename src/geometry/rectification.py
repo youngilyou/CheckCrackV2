@@ -172,6 +172,12 @@ def _robust_range(values: np.ndarray, k: float = 3.0) -> tuple[float, float]:
     return float(inliers.min()), float(inliers.max())
 
 
+FILTER_MAX_SPREAD_M = 5.0  # p10-p90 spread along the normal above which the wall is not the dominant cluster
+FILTER_SLAB_M = 3.0  # thickness of the densest slab used as the wall seed
+FILTER_MIN_SLAB_FRACTION = 0.25  # the seed slab must hold at least this share of all points
+FILTER_WALL_BAND_M = 1.5  # half-width of the band around the re-seeded wall plane (balconies/recesses fit)
+
+
 def _filter_points_near_plane(
     points: np.ndarray, centroid: np.ndarray, normal: np.ndarray, k: float = 3.0, max_iters: int = 3
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -207,6 +213,35 @@ def _filter_points_near_plane(
             break
         subset = inliers
         centroid_est = subset.mean(axis=0)
+
+    # Second chance (2026-09-26, LEFT): the mean-centred IQR filter above only works when the wall is the
+    # dominant depth cluster. On LEFT (drone flying straight up/down a flat wall, far terrain triangulated
+    # in the background) the wall slab held only ~43% of the points, the mean sat between wall and
+    # background, and the filter kept 21515 of 21517 points -> a 328 m x 103 m canvas (real wall ~20 x 40 m)
+    # that never finished rendering. If the surviving set is still spread over several metres along the
+    # normal, re-seed from the DENSEST thin slab (the wall) and filter again. A well-separated capture
+    # (FRONT: everything within ~1.5 m) never reaches this branch, so its result is unchanged.
+    spread = np.percentile((subset - centroid_est) @ normal, 90) - np.percentile((subset - centroid_est) @ normal, 10)
+    if spread > FILTER_MAX_SPREAD_M:
+        d_all = (points - centroid_est) @ normal
+        order = np.sort(d_all)
+        counts = np.searchsorted(order, order + FILTER_SLAB_M) - np.arange(len(order))
+        i = int(np.argmax(counts))
+        if counts[i] >= FILTER_MIN_SLAB_FRACTION * len(points):
+            in_slab = (d_all >= order[i]) & (d_all <= order[i] + FILTER_SLAB_M)
+            reseeded_centroid = points[in_slab].mean(axis=0)
+            # Keep only points within a band of the wall slab. (The mean-centred IQR above measures the
+            # spread of the WHOLE cloud, which is exactly what is huge here, so it cannot be reused.)
+            for _ in range(max_iters):
+                near = np.abs((points - reseeded_centroid) @ normal) <= FILTER_WALL_BAND_M
+                if near.sum() < 10:
+                    break
+                new_centroid = points[near].mean(axis=0)
+                if np.allclose(new_centroid, reseeded_centroid):
+                    break
+                reseeded_centroid = new_centroid
+            near = np.abs((points - reseeded_centroid) @ normal) <= FILTER_WALL_BAND_M
+            return points[near], reseeded_centroid
     return subset, centroid_est
 
 
@@ -433,6 +468,96 @@ def align_reconstruction_to_utm(
 
 MAX_GPS_ALIGN_MEAN_RESIDUAL_M = 2.0
 MAX_GPS_ALIGN_MAX_RESIDUAL_M = 3.0
+
+# A capture whose camera positions lie (almost) on one line -- e.g. LEFT: the drone climbs/descends
+# straight along a wall -- cannot pin down COLMAP's rotation about that line from GPS, and the
+# reconstruction of a flat wall from such a path is nearly degenerate (focal length and depth trade
+# off), so both the reconstruction and the GPS check need different handling (see below).
+GPS_DEGENERATE_SECOND_TO_FIRST_STD = 0.25
+GPS_DEGENERATE_MIN_FIRST_STD_M = 3.0
+# Robust GPS check for the degenerate case: EXIF GPS is unreliable while the drone moves (measured on
+# LEFT: up to ~20 m vertical error on climbing/descending shots, 0.3-2 m while hovering), so a mean/max
+# over ALL images rejects a good reconstruction. Require this fraction of images within
+# MAX_GPS_ALIGN_MAX_RESIDUAL_M instead, plus consistent intrinsics.
+GPS_ROBUST_MIN_INLIER_FRACTION = 0.5
+MAX_FOCAL_RELATIVE_SPREAD = 0.10
+
+
+def gps_configuration_is_degenerate(images: list[ImageMetadata]) -> bool:
+    """True when the images' GPS positions are (nearly) collinear: the 2nd principal std is below
+    GPS_DEGENERATE_SECOND_TO_FIRST_STD of the 1st, and the 1st spans at least
+    GPS_DEGENERATE_MIN_FIRST_STD_M. FRONT: 14.8/15.8 m (not degenerate); LEFT: 1.6/15.3 m (degenerate)."""
+    pts = [
+        (m.gps.longitude, m.gps.latitude, m.gps.altitude_m)
+        for m in images
+        if m.gps.latitude is not None and m.gps.longitude is not None and m.gps.altitude_m is not None
+    ]
+    if len(pts) < 3:
+        return False
+    lon, lat, alt = (np.array(c, dtype=np.float64) for c in zip(*pts))
+    x = (lon - lon.mean()) * 111320.0 * np.cos(np.radians(lat.mean()))
+    y = (lat - lat.mean()) * 110540.0
+    z = alt - alt.mean()
+    sv = np.linalg.svd(np.column_stack([x, y, z]), compute_uv=False) / np.sqrt(len(x))
+    return bool(sv[0] >= GPS_DEGENERATE_MIN_FIRST_STD_M and sv[1] / sv[0] < GPS_DEGENERATE_SECOND_TO_FIRST_STD)
+
+
+def focal_relative_spread(reconstruction: pycolmap.Reconstruction) -> float:
+    """(p95 - p5) / median of the registered cameras' focal lengths -- ~0.03 on FRONT (3730-3835 px),
+    but a bent/degenerate reconstruction lets every image pick its own focal (LEFT: 581-18642 px)."""
+    focals = [
+        float(img.camera.params[0]) for img in reconstruction.images.values() if img.has_pose
+    ]
+    if len(focals) < 2:
+        return 0.0
+    med = float(np.median(focals))
+    return float((np.percentile(focals, 95) - np.percentile(focals, 5)) / med) if med > 0 else float("inf")
+
+
+def check_gps_alignment(
+    reconstruction: pycolmap.Reconstruction,
+    by_id: dict[str, ImageMetadata],
+    utm_epsg: int,
+) -> tuple[bool, dict]:
+    """(ok, info) for a reconstruction already passed through align_reconstruction_to_utm.
+
+    Normal captures keep the original strict rule (mean <= 2 m and max <= 3 m over all images) --
+    FRONT/BACK are unaffected. For a collinear-GPS capture (gps_configuration_is_degenerate) the
+    strict rule would reject good reconstructions because of noisy in-motion GPS, so it uses the
+    inlier fraction within 3 m AND the focal-length consistency instead (the direct symptom of a
+    degenerate reconstruction, independent of GPS noise). info is always filled for logging."""
+    residuals = gps_alignment_residuals_m(reconstruction, by_id, utm_epsg)
+    if residuals is None:
+        return True, {"checked": False}
+    per_image = _gps_residuals_per_image(reconstruction, by_id, utm_epsg)
+    registered_meta = [by_id[Path(i.name).stem] for i in reconstruction.images.values() if Path(i.name).stem in by_id]
+    degenerate = gps_configuration_is_degenerate(registered_meta)
+    spread = focal_relative_spread(reconstruction)
+    frac = float(np.mean(np.array(per_image) <= MAX_GPS_ALIGN_MAX_RESIDUAL_M)) if per_image else 0.0
+    info = {
+        "checked": True, "degenerate_gps_layout": degenerate, "mean_residual_m": round(residuals[0], 2),
+        "max_residual_m": round(residuals[1], 2), "median_residual_m": round(float(np.median(per_image)), 2),
+        "inlier_fraction_3m": round(frac, 3), "focal_relative_spread": round(spread, 3),
+    }
+    if not degenerate:
+        return (
+            residuals[0] <= MAX_GPS_ALIGN_MEAN_RESIDUAL_M and residuals[1] <= MAX_GPS_ALIGN_MAX_RESIDUAL_M
+        ), info
+    return (frac >= GPS_ROBUST_MIN_INLIER_FRACTION and spread <= MAX_FOCAL_RELATIVE_SPREAD), info
+
+
+def _gps_residuals_per_image(
+    reconstruction: pycolmap.Reconstruction, by_id: dict[str, ImageMetadata], utm_epsg: int,
+) -> list[float]:
+    transformer = pyproj.Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}", always_xy=True)
+    out: list[float] = []
+    for img in reconstruction.images.values():
+        meta = by_id.get(Path(img.name).stem)
+        if meta is None or meta.gps.latitude is None or meta.gps.altitude_m is None:
+            continue
+        x, y = transformer.transform(meta.gps.longitude, meta.gps.latitude)
+        out.append(float(np.linalg.norm(_camera_center(img) - np.array([x, y, meta.gps.altitude_m]))))
+    return out
 
 
 def gps_alignment_residuals_m(

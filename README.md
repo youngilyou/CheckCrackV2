@@ -52,6 +52,11 @@ DJI 드론 촬영 이미지를 Facade 단위로 자동 분리·스티칭하고, 
 - 결과 폴더(`<사진폴더>\output\Vnnn\`)를 **통째로**(`colmap_stage1\`, `colmap_dense\` 포함) 옮기세요. 크랙을 깊이로 배치하고 스티칭 클릭 위치를 계산하려면 이 두 폴더가 필요합니다(`FRONT_depth_mapping.json`이 상대 경로로 가리킴). 용량 때문에 뺐다면 스티칭 결과 열람은 되지만 크랙/클릭은 평면 호모그래피 방식으로 떨어지고 화면에 그렇게 표시됩니다.
 - 원본 사진: 결과 폴더의 `*_source_images.json`에는 스티칭한 컴퓨터의 **절대 경로**가 들어 있습니다. 옮긴 컴퓨터에서도 자동으로 같은 파일명을 결과 폴더 위쪽(`<사진폴더>\` 또는 `<사진폴더>\images\`)에서 찾습니다. 사진이 다른 곳에 있으면 환경변수 **`CHECKCRACK_IMAGES_DIR`**에 그 폴더를 지정하세요. 못 찾은 사진은 로그에 경고로 나옵니다.
 
+### 촬영 위치가 한 줄인 촬영 (예: LEFT — 드론이 벽을 따라 수직으로 오르내림)
+- 일반 촬영(FRONT/BACK)과 같은 절차·같은 산출물(`*_colmap_dense.*`, `*_depth_mapping.json`)이 나오도록 자동 처리합니다. 사진 GPS 위치가 한 줄이면 로그에 `COLMAP_SINGLE_CAMERA`가 뜨고, 카메라 하나를 공유하며 내부 파라미터를 `config/pipeline.yaml`의 `colmap.known_intrinsics`(카메라 기종별 초점거리/왜곡)로 **고정**해서 재구성합니다. 이 값이 없는 카메라 기종은 이 경로를 못 써서 GPS/짐벌 자세 기반 대체 보정(Dense 없음)으로 끝납니다 — 새 기종은 그 기종을 잘 찍은 촬영에서 재구성된 값을 `known_intrinsics`에 추가하세요.
+- 어떤 촬영이든 COLMAP과 GPS가 안 맞으면(`COLMAP_ALIGNMENT_POOR`) 실패로 끝내지 않고 GPS/짐벌 기반 모자이크로 저장합니다(이때는 Dense/깊이 사이드카가 없고, 크랙과 클릭 위치는 평면 방식으로 표시됨).
+- LEFT(48장) 실측: 약 1시간 이내(1단계 2분, flat 2분, Dense 39분).
+
 ### 파이프라인 트랙 (`config/pipeline.yaml`의 `pipeline.track`)
 - `reference`(현재 기본): 필터 없이 전체 이미지로 COLMAP 1단계 → flat 모자이크 → Dense Stereo 하이브리드. 결과 `*_colmap_dense.*`.
 - `full`: COLMAP 1단계 → 벽 미노출 이미지 필터 → H체인 → COLMAP 2단계 → Dense.

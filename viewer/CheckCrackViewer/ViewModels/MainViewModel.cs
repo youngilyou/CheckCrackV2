@@ -49,6 +49,7 @@ public partial class MainViewModel : ObservableObject
         // 무슨 뜻인지 안 보임). 사용자 피드백("3시간 넘게 돌아가는데 되는지
         // 모르겠다")으로 dense stereo 무진행 구간과 함께 발견/보완.
         ["COLMAP_STAGE1"] = "CM 1단계 재구성 완료 (필터링용)",
+        ["COLMAP_SINGLE_CAMERA"] = "촬영 위치가 한 줄 -- 카메라 공유 + 내부 파라미터 고정",
         ["OFF_WALL_DETECTED"] = "벽면 미노출 이미지 자동 제외",
         ["COLMAP_STAGE1_FAILED"] = "CM 1단계 실패 (필터링 없이 진행)",
         ["COLMAP_STAGE2"] = "CM 2단계 최종 재구성 완료",

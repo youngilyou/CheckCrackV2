@@ -41,6 +41,7 @@ from src.geometry.rectification import (
     compute_wall_region_canvas_mask,
     estimate_utm_epsg,
     facade_plane_from_reconstruction,
+    check_gps_alignment,
     facade_plane_from_segment,
     gps_alignment_residuals_m,
     MAX_GPS_ALIGN_MAX_RESIDUAL_M,
@@ -266,15 +267,12 @@ def _run_colmap_and_rectify_once(
     rect_result = None
     if reconstruction is not None and plane is not None:
         effective_utm_epsg = utm_epsg if utm_epsg is not None else estimate_utm_epsg(catalog)
-        residuals = gps_alignment_residuals_m(reconstruction, by_id, effective_utm_epsg)
-        if residuals is not None and (
-            residuals[0] > MAX_GPS_ALIGN_MEAN_RESIDUAL_M or residuals[1] > MAX_GPS_ALIGN_MAX_RESIDUAL_M
-        ):
+        gps_ok, gps_info = check_gps_alignment(reconstruction, by_id, effective_utm_epsg)
+        if not gps_ok:
             log_event(
                 logger, "warning",
                 "COLMAP 재구성이 GPS와 맞지 않음(정렬 잔차 과다) -- COLMAP 포즈 대신 GPS/짐벌 자세로 보정",
-                stage="COLMAP_ALIGNMENT_POOR", facade_id=facade_id,
-                mean_residual_m=round(residuals[0], 2), max_residual_m=round(residuals[1], 2),
+                stage="COLMAP_ALIGNMENT_POOR", facade_id=facade_id, **gps_info,
                 mean_limit_m=MAX_GPS_ALIGN_MEAN_RESIDUAL_M, max_limit_m=MAX_GPS_ALIGN_MAX_RESIDUAL_M,
             )
             # COLMAP poses are unusable here, so place the images from their own
@@ -489,7 +487,7 @@ def _write_flat_colmap_outputs(
         },
     )
     _write_source_transform_artifacts(output_dir, facade_id, "_colmap", rect_result)
-    if rect_result.source_transforms is not None:
+    if rect_result.source_transforms is not None and aligned is not None:
         try:
             wall_region_mask = compute_wall_region_canvas_mask(
                 aligned, plane, rect_result.source_transforms,
@@ -504,12 +502,12 @@ def _write_flat_colmap_outputs(
 
     # detect_cracks_folder.py reads the raw photo paths from here (no H체인 in these tracks, so the
     # registered images actually present in `aligned` are the sources).
+    if aligned is not None:
+        source_ids = [Path(img.name).stem for img in aligned.images.values()]
+    else:  # GPS/gimbal pose-prior mosaic: the sources are whatever it actually placed
+        source_ids = list((rect_result.source_transforms or {}).keys())
     source_images = sorted(
-        (
-            {"image_id": Path(img.name).stem, "file_path": by_id[Path(img.name).stem].file_path}
-            for img in aligned.images.values()
-            if Path(img.name).stem in by_id
-        ),
+        ({"image_id": iid, "file_path": by_id[iid].file_path} for iid in source_ids if iid in by_id),
         key=lambda e: e["image_id"],
     )
     atomic_write_json(output_dir / f"{facade_id}_source_images.json", source_images)
@@ -575,14 +573,9 @@ def _run_dense_only_track(
             raise ValueError(f"only {aligned.num_reg_images()} on-wall images registered, need >= 4")
 
         effective_utm_epsg = utm_epsg if utm_epsg is not None else estimate_utm_epsg(catalog)
-        residuals = gps_alignment_residuals_m(aligned, by_id, effective_utm_epsg)
-        if residuals is not None and (
-            residuals[0] > MAX_GPS_ALIGN_MEAN_RESIDUAL_M or residuals[1] > MAX_GPS_ALIGN_MAX_RESIDUAL_M
-        ):
-            raise ValueError(
-                f"COLMAP reconstruction disagrees with GPS (mean {residuals[0]:.2f}m / max {residuals[1]:.2f}m "
-                f"residual) -- dense stereo would be placed wrongly"
-            )
+        gps_ok, gps_info = check_gps_alignment(aligned, by_id, effective_utm_epsg)
+        if not gps_ok:
+            raise ValueError(f"COLMAP reconstruction disagrees with GPS {gps_info} -- dense stereo would be placed wrongly")
 
         if segment is not None:
             reference_altitudes = [
@@ -616,6 +609,42 @@ def _run_dense_only_track(
     # full pipeline) -- it is logged as DENSE_STEREO_FAILED/EMPTY, not turned into a failed run.
     _run_dense_hybrid_stage(
         facade_id, native_dir, aligned, plane, rect_result, sim3d, images_dir, output_dir, logger,
+    )
+    return True
+
+
+MAX_PLANE_CANVAS_PIXELS = 150_000_000  # FRONT is 25 MP; a real facade far above ~100 MP is a failed plane fit
+
+
+def _reference_pose_prior_fallback(
+    facade_id: str, output_dir: Path, cfg: Config, logger, by_id: dict[str, ImageMetadata],
+    colmap_result, aligned, utm_epsg: int, t_start: float,
+) -> bool:
+    """reference 트랙에서 COLMAP-GPS 정렬이 실패했을 때: geometry/pose_prior.py로 GPS+짐벌 자세 기반 flat
+    모자이크를 만들어 같은 산출물 세트(`*_colmap.*` + 사이드카)를 저장한다. Dense Stereo와 깊이
+    사이드카는 만들지 않는다(정렬되지 않은 COLMAP 포즈 위에서 Dense를 돌리면 잘못된 위치가 됨) --
+    크랙 검출/클릭은 평면 호모그래피 방식으로 떨어지고 화면에 그렇게 표시된다."""
+    registered = {Path(img.name).name for img in aligned.images.values()}
+    prior_images = [m for m in by_id.values() if Path(m.file_path).name in registered]
+    try:
+        prior = rectify_from_pose_prior(facade_id, prior_images, utm_epsg, cfg)
+    except Exception as exc:
+        prior = None
+        log_event(logger, "warning", "GPS/짐벌 자세 기반 보정 실패", facade_id=facade_id, error=str(exc))
+    if prior is None:
+        log_event(
+            logger, "error", "GPS/짐벌 자세 기반 보정도 불가 -- 이 facade는 결과 없음",
+            stage="REFERENCE_FAILED", facade_id=facade_id,
+        )
+        return False
+    prior_plane, prior_result, prior_info = prior
+    log_event(
+        logger, "info", "GPS/짐벌 자세 기반 보정 모자이크 생성",
+        stage="POSE_PRIOR_RECTIFIED", facade_id=facade_id,
+        coverage_ratio=prior_result.quality.coverage_ratio, **prior_info,
+    )
+    _write_flat_colmap_outputs(
+        facade_id, output_dir, colmap_result, prior_result, None, prior_plane, by_id, logger, t_start, None,
     )
     return True
 
@@ -661,13 +690,31 @@ def _run_reference_track(
     )
     try:
         effective_utm_epsg = utm_epsg if utm_epsg is not None else estimate_utm_epsg(list(by_id.values()))
-        residuals = gps_alignment_residuals_m(aligned, by_id, effective_utm_epsg)
-        if residuals is not None and (
-            residuals[0] > MAX_GPS_ALIGN_MEAN_RESIDUAL_M or residuals[1] > MAX_GPS_ALIGN_MAX_RESIDUAL_M
-        ):
-            raise ValueError(
-                f"COLMAP reconstruction disagrees with GPS (mean {residuals[0]:.2f}m / max {residuals[1]:.2f}m "
-                f"residual) -- dense stereo would be placed wrongly"
+        gps_ok, gps_info = check_gps_alignment(aligned, by_id, effective_utm_epsg)
+        if not gps_ok:
+            # 2026-09-26 (사용자 확정 "B, C 둘 다"): 이 트랙도 full 트랙처럼 GPS/짐벌 자세 기반 대체
+            # 보정으로 끝까지 간다(Dense 없음 -- COLMAP 포즈를 못 믿으므로). 예전엔 여기서 그냥 실패했다.
+            log_event(
+                logger, "warning",
+                "COLMAP 재구성이 GPS와 맞지 않음 -- COLMAP 포즈 대신 GPS/짐벌 자세로 보정 (Dense Stereo 없음)",
+                stage="COLMAP_ALIGNMENT_POOR", facade_id=facade_id, **gps_info,
+                mean_limit_m=MAX_GPS_ALIGN_MEAN_RESIDUAL_M, max_limit_m=MAX_GPS_ALIGN_MAX_RESIDUAL_M,
+            )
+            return _reference_pose_prior_fallback(
+                facade_id, output_dir, cfg, logger, by_id, colmap_result, aligned, effective_utm_epsg, t_start,
+            )
+        canvas_px = int(round(plane.width_m * plane.px_per_m)) * int(round(plane.height_m * plane.px_per_m))
+        if canvas_px > MAX_PLANE_CANVAS_PIXELS:
+            # An absurd canvas means the wall plane was not fitted properly (2026-09-26, LEFT: 328 x 103 m =
+            # 337 MP, real wall ~20 x 40 m); rendering it never finishes / exhausts memory. Same fallback.
+            log_event(
+                logger, "warning",
+                f"벽 평면 캔버스가 비정상적으로 큼({plane.width_m:.0f} x {plane.height_m:.0f} m, {canvas_px / 1e6:.0f} MP) "
+                "-- 평면 맞춤 실패로 보고 GPS/짐벌 자세 기반 보정으로 대체 (Dense Stereo 없음)",
+                stage="COLMAP_ALIGNMENT_POOR", facade_id=facade_id, canvas_megapixels=round(canvas_px / 1e6, 1),
+            )
+            return _reference_pose_prior_fallback(
+                facade_id, output_dir, cfg, logger, by_id, colmap_result, aligned, effective_utm_epsg, t_start,
             )
         warped, canvas_size, source_transforms = rectify_images(aligned, plane, images_dir)
         flat = blend_rectified_images(

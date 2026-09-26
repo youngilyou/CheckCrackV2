@@ -186,12 +186,61 @@ def run_colmap(
     # the final crack-analysis mosaic, so it doesn't need full resolution the
     # way the stitched output does (#8).
     extraction_options = pycolmap.FeatureExtractionOptions(num_threads=4, max_image_size=3200)
+
+    # Fixed, known intrinsics for a capture whose GPS positions lie on one line (2026-09-26, LEFT: the
+    # drone climbs/descends straight along a flat wall). COLMAP's default gives every image its OWN
+    # camera and refines focal length + distortion per image; on such a nearly degenerate capture focal
+    # length and depth trade off, so the focals drift apart (measured on LEFT: 581-18642 px for ONE
+    # physical camera; FRONT stays at 3730-3835) and the whole reconstruction bends (camera path 12 x
+    # 10 m wide instead of the true ~1.6 m), which breaks the GPS alignment. A shared camera alone was
+    # tried and is NOT enough (23 of 48 photos registered), so the calibrated intrinsics of the same camera
+    # model (taken from a well-conditioned capture, config `colmap.known_intrinsics`) are shared AND fixed.
+    # `colmap.single_camera`: "auto" (default: only for a collinear-GPS capture, so FRONT/BACK are
+    # unchanged), true, or false. Without known intrinsics for this camera the default behavior is kept.
+    fixed_intrinsics = None
+    mode = "auto"
+    if cfg is not None and "colmap" in cfg and "single_camera" in cfg.colmap:
+        mode = str(cfg.colmap.single_camera).strip().lower()
+    if mode != "false" and catalog is not None and cfg is not None and "colmap" in cfg and "known_intrinsics" in cfg.colmap:
+        names = set(image_filenames)
+        subset = [m for m in catalog if Path(m.file_path).name in names]
+        wants_fixed = mode in ("true", "1", "yes")
+        if mode == "auto" and subset:
+            from src.geometry.rectification import gps_configuration_is_degenerate
+
+            wants_fixed = gps_configuration_is_degenerate(subset)
+        if wants_fixed and subset:
+            known = cfg.colmap.known_intrinsics.to_dict().get(str(subset[0].camera_model))
+            sizes = {(m.width, m.height) for m in subset}
+            if known and sizes == {(int(known["width"]), int(known["height"]))}:
+                fixed_intrinsics = known
+    if fixed_intrinsics is not None and logger:
+        log_event(
+            logger, "info", "촬영 위치(GPS)가 한 줄 -- 카메라 하나를 공유하고 알려진 내부 파라미터로 고정해 재구성",
+            stage="COLMAP_SINGLE_CAMERA", facade_id=facade_id,
+            focal_px=float(fixed_intrinsics["focal_px"]), k1=float(fixed_intrinsics.get("k1", 0.0)),
+        )
     pycolmap.extract_features(
         database_path=database_path,
         image_path=images_dir,
         image_names=image_filenames,
+        camera_mode=pycolmap.CameraMode.SINGLE if fixed_intrinsics is not None else pycolmap.CameraMode.AUTO,
         extraction_options=extraction_options,
     )
+    if fixed_intrinsics is not None:
+        import numpy as np
+
+        db = pycolmap.Database.open(str(database_path))
+        try:
+            for cam in db.read_all_cameras():
+                cam.params = np.array([
+                    float(fixed_intrinsics["focal_px"]), cam.params[1], cam.params[2],
+                    float(fixed_intrinsics.get("k1", 0.0)),
+                ])
+                cam.has_prior_focal_length = True
+                db.update_camera(cam)
+        finally:
+            db.close()
 
     if resolved_backend == "hloc":
         if logger:
@@ -230,11 +279,18 @@ def run_colmap(
                 progress=f"~{registered['n'] + 2}/{len(image_filenames)}",  # +2: the unreported initial seed pair
             )
 
+    mapping_kwargs = {}
+    if fixed_intrinsics is not None:
+        options = pycolmap.IncrementalPipelineOptions()
+        options.ba_refine_focal_length = False
+        options.ba_refine_extra_params = False
+        mapping_kwargs["options"] = options
     reconstructions = pycolmap.incremental_mapping(
         database_path=database_path,
         image_path=images_dir,
         output_path=sparse_dir,
         next_image_callback=_on_next_image,
+        **mapping_kwargs,
     )
 
     if not reconstructions:

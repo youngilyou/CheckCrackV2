@@ -2254,3 +2254,21 @@ u-extent 양 끝 2m만 dense stereo에서 제외(`EDGE_MARGIN_M`)하고 flat 모
 - 새 컴퓨터에 자동으로 안 따라오는 것(문서화): CUDA PyTorch, **CUDA pycolmap**(pip 휠엔 Dense Stereo 없음 -> `scripts/install_colmap_cuda_dense.bat`), 크랙 모델 `*.pt`(gitignore), LoFTR 가중치(첫 실행 때 다운로드), hloc 별도 env(선택).
 - `requirements.txt`에 scipy 추가(깊이 매핑/Dense/그래프 정제에서 사용하는데 빠져 있었음). `.gitignore`에 gsplat3d/, preview_reference_track/, training_data_structural_fp_v2_gt/, .vscode/ 추가.
 - 미검증: 실제로 두 번째 컴퓨터에서 처음부터 설치해 본 적은 없음 -- 이 컴퓨터에서 `check_env.bat`이 READY로 나오는 것과 경로 해석 함수만 확인.
+
+## 2026-09-26 세션 기록 (5): LEFT(수직 한 줄 촬영)도 FRONT와 같은 산출물(Dense + 깊이 사이드카)로 -- 사용자 확정 "B, C 둘 다"
+
+### 원인 (LEFT 이전 로그 + 실측)
+- LEFT는 드론이 벽을 따라 수직으로 오르내림: GPS 촬영 위치 주성분 표준편차 15.3 / 1.6 / 0 m (FRONT 15.8 / 14.8 / 0). 평평한 벽 + 좁은 이동이라 COLMAP이 **사진마다 카메라를 따로** 최적화하면서 초점거리가 흩어짐(한 카메라가 581~18642 px, FRONT는 3730~3835) -> 재구성이 휨(카메라 경로 12x10 m로 퍼짐, 실제 ~1.6 m) -> GPS 정렬 잔차 평균 7.6~9.5 m / 최대 25~45 m -> `COLMAP_ALIGNMENT_POOR` -> 예전엔 GPS/짐벌 자세 기반 대체 보정(`POSE_PRIOR_RECTIFIED`, scale 출처 `gps_pose_prior`, Dense 없음).
+- 별개의 발견: 이동 중 촬영분의 EXIF 고도는 수직으로 최대 ~22 m 어긋남(제자리에 떠 있던 사진은 0.3~2 m) -> "전체 사진 평균/최대 잔차" 검사가 좋은 재구성도 탈락시킴. GPS만으로는 휜 재구성과 정상 재구성을 구분할 수 없음(실측: 휜 것 중앙값 0.79 m / 정상 1.89 m) -> 초점거리 일관성이 직접 지표.
+- 시도했으나 부족했던 것: COLMAP pose prior(`use_prior_position`; DB의 EXIF prior는 WGS84 + 공분산 NaN이라 오히려 악화, 직접 쓴 CARTESIAN prior도 개선 없음), 카메라 하나만 공유(48장 중 23장만 등록).
+
+### 수정
+- **C (재구성)**: `colmap.single_camera: auto`(기본) -- GPS가 한 줄인 촬영일 때만(`gps_configuration_is_degenerate`: 2번째/1번째 주성분 < 0.25, 1번째 >= 3 m) 카메라 하나 공유 + `colmap.known_intrinsics`(카메라 기종별 focal/k1, 현재 `L2D-20c` = FRONT V009 중앙값 3789.27 px)로 **고정**하고 초점거리/왜곡 최적화 끔. 해당 기종 값이 없으면 기존 동작. FRONT/BACK은 auto에서 영향 없음(코드 경로/결과 동일 확인).
+- **C (평면)**: `_filter_points_near_plane`에 두 번째 기회 -- 걸러낸 뒤에도 p10-p90 깊이 폭이 5 m 넘으면(벽이 지배적 군집이 아님) 가장 촘촘한 3 m 슬래브에서 다시 시작해 +-1.5 m 밴드만 남김. LEFT: 캔버스 328x103 m(렌더링 안 끝남) -> 14.3x28.0 m. FRONT는 이 분기를 안 타서 6171x4013 그대로(검증).
+- **GPS 검사** `check_gps_alignment`: 일반 촬영은 기존 규칙(평균 2 m/최대 3 m) 그대로, GPS가 한 줄인 촬영은 "3 m 이내 비율 >= 50% + 초점거리 상대 편차 <= 10%". 세 트랙(full/dense_only/reference)이 공용.
+- **B (폴백)**: reference 트랙도 GPS 검사 실패 또는 캔버스 > 150 MP(평면 맞춤 실패)면 실패로 끝내지 않고 GPS/짐벌 자세 기반 flat 모자이크로 같은 산출물 세트를 저장(Dense/깊이 사이드카 없음, 화면에 평면 방식으로 표시). `_write_flat_colmap_outputs`가 `aligned=None` 허용.
+
+### LEFT 검증 실행 (별도 폴더, 완료 후 삭제)
+- 1단계 COLMAP 114 s, 48/48장 등록(재투영 오차 1.19 px), GPS 검사 통과 -> flat 99 s(coverage 0.972) -> Dense 39분(융합 점 1,885,554) -> DONE. 산출물 세트가 FRONT와 동일(`*_colmap_dense.*`, `LEFT_depth_mapping.json`, wall_region_mask 등). 벽 안쪽 순검정 0.000%.
+- 크랙 검출도 동작: v1 24건 / v2 5건(무늬 없는 벽이라 적음). 위치 오차 측정 가능한 것 중 깊이 배치 0.9~5.5 px, 평면 배치 0.2~19 px. **깊이 배치 비율이 낮음**(대부분 `flat`으로 표시) -- 깊이 맵 유효 비율 25~77% + 벽 밴드(+-3 m) 밖 픽셀(하늘/배경) 제외 때문. 벽이 평평해서 평면 배치도 오차 ~5 px 수준이지만 FRONT처럼 1.8 px는 아님.
+- 한계/미검증: 재구성 재투영 오차가 FRONT(~1.0)보다 약간 큼(1.19), 촬영 정지 구간별로 벽 모자이크에 가로 이음선이 보임(정지 위치가 다른 두 묶음). `known_intrinsics`는 FRONT에서 잰 값을 같은 카메라 기종에 재사용한 것 -- 다른 카메라 기종은 값이 없어 이 경로를 못 씀(대체 보정으로 떨어짐).
