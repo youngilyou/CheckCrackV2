@@ -805,12 +805,14 @@ public partial class ResultsCompareViewModel : ObservableObject
     // 나머지는 해제, 모두 해제하면 전부 표시)이라 "기준 이상만 표시"라는 한 가지 의미만 갖는다. 목록(우측)과
     // 원본 데이터/저장 결과는 그대로이고 화면 표시만 바뀐다(관리자가 직접 추가한 크랙은 신뢰도 개념이 없어 항상 표시).
     [ObservableProperty] private bool _minConfidence40;
-    [ObservableProperty] private bool _minConfidence60;
+    // 시작 시 기본값은 60%(사용자 요청 2026-09-27): 필드 초기값으로 켜 두면 속성 변경 이벤트가 안 나오므로
+    // 아래 _reviewMinConfidence도 같은 값으로 시작해야 한다(둘이 어긋나면 체크는 되어 있는데 필터가 안 걸림).
+    [ObservableProperty] private bool _minConfidence60 = true;
     [ObservableProperty] private bool _minConfidence80;
     [ObservableProperty] private bool _minConfidence90;
     [ObservableProperty] private string _reviewFilterText = "";
 
-    private double _reviewMinConfidence;
+    private double _reviewMinConfidence = 0.60;
     private bool _syncingMinConfidence;
 
     partial void OnMinConfidence40Changed(bool value) => SetReviewMinConfidence(value ? 0.40 : 0.0, nameof(MinConfidence40));
