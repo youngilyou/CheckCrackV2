@@ -2293,3 +2293,11 @@ u-extent 양 끝 2m만 dense stereo에서 제외(`EDGE_MARGIN_M`)하고 flat 모
 - 원리: 뷰어는 PDF를 이미지로만 그려 클릭한 곳이 어느 카드인지 몰라서, `src/report/pdf_report.py::_render_with_cards`가 WeasyPrint 레이아웃 상자에서 `data-crack-id` 카드의 페이지별 사각형(페이지 대비 0..1 비율) + 원본 사진 id/bbox를 뽑아 `{facade_id}_report_cards.json`으로 PDF와 함께 저장(`report.html`의 `.crack-card`에 `data-crack-id` 추가). 뷰어: `Models/ReportCardModel.cs`, `ResultsCompareViewModel.SelectCrackFromReportClick/ShowObservationInPanel1`(균열 검토의 마커 표시와 같은 경로로 통합), `ComparePanelState.IsCrackMarkerVisible/ShowCrackMarker/CrackMarkerLabel`, `ResultsCompareView.xaml(.cs)`의 `ReportImage_MouseLeftButtonDown`.
 - 검증: FRONT V010 복사본으로 보고서 생성 -> 카드 20개(페이지 6~9) 사각형을 PDF 페이지 이미지 위에 그려 실제 카드와 정확히 일치함을 확인(PyMuPDF). `dotnet build` 오류 0. **뷰어 화면에서 직접 클릭해 본 확인은 안 함.**
 - **기존 보고서는 `_report_cards.json`이 없어** 카드를 눌러도 "카드 위치 정보가 없다"는 안내가 뜸 -> 최종 보고서를 다시 생성하면 만들어짐. 관리자가 직접 그린 크랙은 사진 근거가 없어 안내 메시지만 표시.
+
+## 2026-09-27 세션 기록 (4): Dense 모자이크의 벽 밖 배경 겹침 제거 (사용자: FRONT V010 왼쪽 위 "이미지가 겹쳐져 있음 해결 필요")
+
+- 원인(원본 해상도 확인 + 소유 사진 조사): 동그라미 부분은 벽이 아니라 **옥상 바닥/옥상 구조물/지형/하늘**. Dense는 평면 +-3 m(WALL_BAND_M) 안의 점만 쓰므로 이것들을 못 그리는데, Dense 구멍을 메우는 flat 모자이크는 각 사진이 투영되는 곳이면 어디든 데이터가 있어 **멀리 있는 내용을 벽 평면에 늘려 던지고, 사진마다 어긋나서** 겹친 조각으로 보였음(LEFT의 "이게 무엇인지" 블록과 같은 현상).
+- 수정 (`dense_stereo.py::compute_wall_extent` + `build_hybrid_mosaic`): 벽 범위 = Dense가 실제로 점을 그린 영역의 닫힘(1.6 m 미만 틈) + 구멍 채움 + 큰 조각만 유지. flat 채움은 **이 범위 안에서만** 하고 바깥은 검정/미관측(seam owner 0, observed 0). 범위 안에 완전히 둘러싸인 큰 유리/무늬 없는 패널은 그대로 flat으로 채워 검은 구멍이 안 생김. Dense가 너무 성기면(캔버스 5% 미만) 예전 동작 유지. `quality.coverage_ratio`는 캔버스 전체가 아니라 **벽 범위 기준**(배경이 빠져 캔버스 기준이면 낮아 보이기 때문) -- 범위 안은 flat이 채우므로 사실상 1.0이 되어 정보량은 적음.
+- 이미 끝난 실행에 적용: `tools/rebuild_dense_hybrid.py`(+ `rebuild_dense_hybrid.bat`) -- 사이드카(Sim3d+평면)와 기존 flat 산출물, `colmap_dense/dense/fused.ply`로 다시 합성(V010 약 4분), 이전 결과는 `_backup_before_rebuild/`.
+- V010 검증: 그려진 벽 픽셀이 이전과 **100% 동일**, 벽 안쪽 순검정 0.004%(불변), 전체 캔버스 검정 3.9% -> 28.5%(배경 제거, 의도). 크랙 좌표/wall_region_mask/보고서는 캔버스 좌표가 그대로라 영향 없음. 뷰어 화면에서 확인은 안 함.
+- 새 실행부터는 파이프라인이 자동 적용. 이전 실행(LEFT V003 등)은 위 도구로 재합성 가능. flat 모자이크(`*_colmap.*`)는 그대로(배경 포함).

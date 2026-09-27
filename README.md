@@ -44,6 +44,7 @@ DJI 드론 촬영 이미지를 Facade 단위로 자동 분리·스티칭하고, 
 | `run_stitch.bat <사진폴더> [facade이름] [--in-place] [--matcher-backend loftr\|hloc] [--structure-type APARTMENT\|DAM\|FACTORY]` | 사진 한 폴더 → 스티칭 + COLMAP + Dense Stereo. `--in-place`면 `<사진폴더>\output\Vnnn\`에 결과. **약 400장에 6시간 안팎**(RTX 4080 SUPER) |
 | `run_detect.bat <결과 output 폴더> [facade이름] [--skip-v2]` | 스티칭된 결과에서 크랙 검출(원본 사진에서 검출 → 깊이로 스티칭 좌표 배치 → 위치 오차 측정) |
 | `make_depth_sidecar.bat <결과 output 폴더> <사진폴더> [facade이름]` | 2026-09-26 이전에 끝난 실행(V008까지)에 깊이 사이드카 `*_depth_mapping.json` 생성 |
+| `rebuild_dense_hybrid.bat <결과 output 폴더> [facade이름]` | 끝난 실행의 Dense 모자이크(`*_colmap_dense.*`)를 기존 Dense 작업 폴더(`fused.ply`)로 **몇 분 만에** 다시 합성. 합성 규칙을 바꾼 뒤 이전 결과에 적용할 때 사용(이전 결과는 `_backup_before_rebuild/`에 보관) |
 | `run_viewer.bat` | 뷰어 빌드 + 실행(로그인 `admin`/`admin123`) |
 
 뷰어의 "▶ 실행"도 같은 파이썬 스크립트를 호출합니다. 결과 화면의 클릭 위치 계산(`tools/click_locator.py`)도 뷰어가 알아서 띄웁니다.
