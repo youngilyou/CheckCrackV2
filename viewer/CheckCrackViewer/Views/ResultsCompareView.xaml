@@ -62,7 +62,7 @@
                             <Canvas Width="{Binding OriginalDisplayWidth}" Height="{Binding OriginalDisplayHeight}" IsHitTestVisible="False">
                                 <Ellipse Width="60" Height="60" Stroke="#FFD400" StrokeThickness="1.5" Fill="Transparent"
                                          Canvas.Left="{Binding CrackMarkerDisplayX}" Canvas.Top="{Binding CrackMarkerDisplayY}"
-                                         Visibility="{Binding HasCrackMarker, Converter={StaticResource TruthyToVisibilityConverter}}">
+                                         Visibility="{Binding ShowCrackMarker, Converter={StaticResource TruthyToVisibilityConverter}}">
                                     <Ellipse.RenderTransform>
                                         <TranslateTransform X="-30" Y="-30"/>
                                     </Ellipse.RenderTransform>
@@ -149,7 +149,7 @@
                                 Command="{Binding DataContext.ResetZoomPanelCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                 CommandParameter="{Binding}" Click="ResetZoomButton_Click"/>
                     </StackPanel>
-                    <TextBlock DockPanel.Dock="Bottom" Text="기본은 화면에 맞춤 · 우클릭 드래그로 이동 · 휠로 줌" FontSize="10" Foreground="{StaticResource Text2}"
+                    <TextBlock DockPanel.Dock="Bottom" Text="크랙 카드를 클릭하면 왼쪽에 원본 사진과 크랙 위치 표시 · 기본은 화면에 맞춤 · 우클릭 드래그로 이동 · 휠로 줌" FontSize="10" Foreground="{StaticResource Text2}"
                                HorizontalAlignment="Center" Margin="0,4,0,0"/>
                     <!-- ZoomFactor=1일 때 패널 뷰포트에 딱 맞도록 ReportDisplayWidth/Height를
                          실제 컨테이너 크기 기준으로 계산한다(FitReportPage, 코드비하인드).
@@ -167,7 +167,7 @@
                                 <ScaleTransform ScaleX="{Binding ZoomFactor}" ScaleY="{Binding ZoomFactor}"/>
                             </Grid.LayoutTransform>
                             <Image Source="{Binding ReportPageBitmap}" Width="{Binding ReportDisplayWidth}" Height="{Binding ReportDisplayHeight}"
-                                   Stretch="Fill"/>
+                                   Stretch="Fill" MouseLeftButtonDown="ReportImage_MouseLeftButtonDown"/>
                         </Grid>
                     </ScrollViewer>
                 </DockPanel>
@@ -295,6 +295,12 @@
                         <Button Content="스티칭 결과"
                                 Command="{Binding DataContext.SetPanel1ModeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                 CommandParameter="스티칭"/>
+                        <!-- 크랙 위치 원 마커 Show/Hide (보고서 카드 클릭, 균열 검토 선택, 스티칭 클릭으로 마커가 있을 때만 보임).
+                             끄면 좌표는 그대로 두고 표시만 숨긴다. -->
+                        <CheckBox Content="크랙 위치 표시" IsChecked="{Binding IsCrackMarkerVisible, Mode=TwoWay}"
+                                  Foreground="{StaticResource Text}" VerticalAlignment="Center" Margin="14,0,8,0"
+                                  Visibility="{Binding HasCrackMarker, Converter={StaticResource TruthyToVisibilityConverter}}"/>
+                        <TextBlock Text="{Binding CrackMarkerLabel}" Foreground="{StaticResource Accent}" FontSize="11" VerticalAlignment="Center"/>
                     </StackPanel>
                     <ContentControl Content="{Binding}">
                         <ContentControl.Style>
@@ -375,6 +381,16 @@
                         <TextBlock DockPanel.Dock="Bottom" Text="드래그로 놓친 균열을 새로 그릴 수 있습니다 · 우클릭 드래그로 이동 · 휠로 줌"
                                    FontSize="10" Foreground="{StaticResource Text2}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
 
+                        <!-- 신뢰도 기준 필터: 번호 배지가 너무 많아 건물이 안 보일 때, 체크한 기준 이상인 크랙만
+                             캔버스에 표시한다(체크박스는 하나만 선택됨, 모두 해제하면 전부 표시). -->
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+                            <TextBlock Text="신뢰도 이상만 표시:" Foreground="{StaticResource Text2}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <CheckBox Content="40%" IsChecked="{Binding MinConfidence40, Mode=TwoWay}" Foreground="{StaticResource Text}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <CheckBox Content="60%" IsChecked="{Binding MinConfidence60, Mode=TwoWay}" Foreground="{StaticResource Text}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <CheckBox Content="80%" IsChecked="{Binding MinConfidence80, Mode=TwoWay}" Foreground="{StaticResource Text}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <CheckBox Content="90%" IsChecked="{Binding MinConfidence90, Mode=TwoWay}" Foreground="{StaticResource Text}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <TextBlock Text="{Binding ReviewFilterText}" Foreground="{StaticResource Accent}" FontSize="11" VerticalAlignment="Center"/>
+                        </StackPanel>
                         <ScrollViewer x:Name="ReviewScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
                                       PreviewMouseRightButtonDown="PanZoomScrollViewer_PreviewMouseRightButtonDown"
                                       MouseMove="PanZoomScrollViewer_MouseMove"
@@ -407,7 +423,18 @@
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate DataType="{x:Type models:CrackReviewItem}">
+                                            <!-- 신뢰도 기준 체크박스(위 필터 행)로 숨김 처리된 크랙은 번호 배지와 윤곽선을 함께 접는다.
+                                                 화면 표시만 바뀌고 크랙 상태/저장 데이터는 그대로다. -->
                                             <Canvas>
+                                                <Canvas.Style>
+                                                    <Style TargetType="Canvas">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsHiddenByFilter}" Value="True">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Canvas.Style>
                                                 <!-- 제외해도 윤곽선은 또렷하게 남긴다: 회색 가는 점선+투명 채움으로
                                                      지워버리면 "여기 크랙 후보가 있었다"는 사실 자체가 배경 벽면과
                                                      구분이 안 돼서 사라져 보였다(사용자가 스크린샷으로 지적한 문제). -->

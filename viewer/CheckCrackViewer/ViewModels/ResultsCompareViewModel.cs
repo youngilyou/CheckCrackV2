@@ -246,6 +246,7 @@ public partial class ResultsCompareViewModel : ObservableObject
         panel.OriginalOrigHeight = 0;
         panel.CrackMarkerDisplayX = null;
         panel.CrackMarkerDisplayY = null;
+        panel.CrackMarkerLabel = "";
         _clickErrorVersion++; // 진행 중이던 정합 오차 계산 결과가 새 화면에 덮어써지지 않게 무효화
         panel.ClickErrorText = "";
         panel.ClickErrorDetail = "";
@@ -799,6 +800,74 @@ public partial class ResultsCompareViewModel : ObservableObject
 
     public ObservableCollection<CrackReviewItem> ReviewItems { get; } = new();
 
+    // 2026-09-27 (사용자 요청): 크랙 번호 배지가 너무 많아 건물이 안 보인다 -> 신뢰도 40/60/80/90 체크박스로
+    // 기준 미만인 크랙의 번호 배지와 윤곽선을 캔버스에서 숨긴다. 체크박스 넷은 서로 배타적(하나를 체크하면
+    // 나머지는 해제, 모두 해제하면 전부 표시)이라 "기준 이상만 표시"라는 한 가지 의미만 갖는다. 목록(우측)과
+    // 원본 데이터/저장 결과는 그대로이고 화면 표시만 바뀐다(관리자가 직접 추가한 크랙은 신뢰도 개념이 없어 항상 표시).
+    [ObservableProperty] private bool _minConfidence40;
+    [ObservableProperty] private bool _minConfidence60;
+    [ObservableProperty] private bool _minConfidence80;
+    [ObservableProperty] private bool _minConfidence90;
+    [ObservableProperty] private string _reviewFilterText = "";
+
+    private double _reviewMinConfidence;
+    private bool _syncingMinConfidence;
+
+    partial void OnMinConfidence40Changed(bool value) => SetReviewMinConfidence(value ? 0.40 : 0.0, nameof(MinConfidence40));
+    partial void OnMinConfidence60Changed(bool value) => SetReviewMinConfidence(value ? 0.60 : 0.0, nameof(MinConfidence60));
+    partial void OnMinConfidence80Changed(bool value) => SetReviewMinConfidence(value ? 0.80 : 0.0, nameof(MinConfidence80));
+    partial void OnMinConfidence90Changed(bool value) => SetReviewMinConfidence(value ? 0.90 : 0.0, nameof(MinConfidence90));
+
+    private void SetReviewMinConfidence(double threshold, string changedCheckBox)
+    {
+        if (_syncingMinConfidence)
+            return;
+        // 방금 해제된 체크박스가 현재 선택된 기준이 아니면(다른 체크박스로 옮겨가는 중 자동 해제된 것) 무시한다.
+        if (threshold == 0.0 && _reviewMinConfidence != 0.0 && !IsCurrentThresholdCheckBox(changedCheckBox))
+            return;
+
+        _syncingMinConfidence = true;
+        try
+        {
+            MinConfidence40 = threshold == 0.40;
+            MinConfidence60 = threshold == 0.60;
+            MinConfidence80 = threshold == 0.80;
+            MinConfidence90 = threshold == 0.90;
+        }
+        finally
+        {
+            _syncingMinConfidence = false;
+        }
+        _reviewMinConfidence = threshold;
+        ApplyReviewConfidenceFilter();
+    }
+
+    private bool IsCurrentThresholdCheckBox(string name) => name switch
+    {
+        nameof(MinConfidence40) => _reviewMinConfidence == 0.40,
+        nameof(MinConfidence60) => _reviewMinConfidence == 0.60,
+        nameof(MinConfidence80) => _reviewMinConfidence == 0.80,
+        nameof(MinConfidence90) => _reviewMinConfidence == 0.90,
+        _ => false,
+    };
+
+    /// <summary>기준 미만 크랙을 캔버스에서 숨긴다(IsHiddenByFilter). 크랙을 다시 불러오거나 추가/삭제할 때마다
+    /// UpdateReviewStatusText가 호출하므로 새 항목에도 같은 기준이 적용된다.</summary>
+    private void ApplyReviewConfidenceFilter()
+    {
+        var hidden = 0;
+        foreach (var item in ReviewItems)
+        {
+            var hide = _reviewMinConfidence > 0 && item.Status != CrackReviewStatus.Manual && item.Confidence < _reviewMinConfidence;
+            item.IsHiddenByFilter = hide;
+            if (hide)
+                hidden++;
+        }
+        ReviewFilterText = _reviewMinConfidence > 0
+            ? $"신뢰도 {_reviewMinConfidence:P0} 미만 {hidden}건 숨김 (목록에는 그대로 있음)"
+            : "";
+    }
+
     /// <summary>image_id -> original photo file path, for OriginalCrackViewerWindow
     /// (원본 보기) to resolve a crack's SourceObservations into an actual file to
     /// load -- loaded once per LoadReviewCanvas from the same
@@ -825,15 +894,22 @@ public partial class ResultsCompareViewModel : ObservableObject
 
     private void ShowCrackMarkerInPanel1(CrackReviewItem? item)
     {
-        var panel = Panel1;
         var obs = item?.SourceObservations.Count > 0 ? item.SourceObservations[0] : null;
         if (obs == null || obs.BboxPxInSource.Length != 4)
         {
-            panel.CrackMarkerDisplayX = null;
-            panel.CrackMarkerDisplayY = null;
+            Panel1.CrackMarkerDisplayX = null;
+            Panel1.CrackMarkerDisplayY = null;
             return;
         }
+        ShowObservationInPanel1(obs.ImageId, obs.BboxPxInSource);
+    }
 
+    /// <summary>Panel1을 "원본" 모드로 바꿔 imageId 사진을 띄우고 bbox 중심(원본 픽셀)에 원 마커를 놓는다.
+    /// 균열 검토의 크랙 선택(ShowCrackMarkerInPanel1)과 보고서 카드 클릭(SelectCrackFromReportClick)이
+    /// 같은 경로를 쓴다. 사진을 못 찾으면 마커를 지우고 false.</summary>
+    private bool ShowObservationInPanel1(string imageId, double[] bboxPxInSource)
+    {
+        var panel = Panel1;
         // JumpToOriginalImageAt과 동일한 이유로, 이미 "원본" 모드면 Mode 세터가
         // PropertyChanged를 안 태우므로(값이 안 바뀜) 리스트가 비어있을 때만 직접 채운다.
         panel.Mode = "원본";
@@ -841,12 +917,12 @@ public partial class ResultsCompareViewModel : ObservableObject
             LoadOriginalImages(panel);
 
         var idx = panel.OriginalImageList.FindIndex(
-            p => string.Equals(Path.GetFileNameWithoutExtension(p), obs.ImageId, StringComparison.Ordinal));
+            p => string.Equals(Path.GetFileNameWithoutExtension(p), imageId, StringComparison.Ordinal));
         if (idx < 0)
         {
             panel.CrackMarkerDisplayX = null;
             panel.CrackMarkerDisplayY = null;
-            return;
+            return false;
         }
 
         if (panel.OriginalImageIndex != idx)
@@ -859,15 +935,60 @@ public partial class ResultsCompareViewModel : ObservableObject
         {
             panel.CrackMarkerDisplayX = null;
             panel.CrackMarkerDisplayY = null;
-            return;
+            return false;
         }
 
-        var bbox = obs.BboxPxInSource;
-        double cx = (bbox[0] + bbox[2]) / 2.0;
-        double cy = (bbox[1] + bbox[3]) / 2.0;
+        double cx = (bboxPxInSource[0] + bboxPxInSource[2]) / 2.0;
+        double cy = (bboxPxInSource[1] + bboxPxInSource[3]) / 2.0;
         var scale = panel.OriginalDisplayWidth / panel.OriginalOrigWidth;
         panel.CrackMarkerDisplayX = cx * scale;
         panel.CrackMarkerDisplayY = cy * scale;
+        return true;
+    }
+
+    /// <summary>2026-09-27 (사용자 요청): 보고서(PDF) 화면에서 크랙 카드를 클릭하면 왼쪽(Panel1)에 그 크랙의
+    /// 원본 사진이 나오고 크랙 위치가 원 마커로 표시된다(마커는 Show/Hide 체크박스로 끄고 켬).
+    /// (fx, fy)는 보고서 페이지 이미지 안에서 클릭한 위치(0..1 비율). 카드가 아닌 곳을 누르면 아무 일도 안
+    /// 한다. 돌려주는 문자열은 카드는 눌렀지만 표시하지 못한 이유(사용자에게 그대로 보여줌), 성공/무동작은 null.</summary>
+    public string? SelectCrackFromReportClick(double fx, double fy)
+    {
+        var facade = SelectedFacade;
+        if (facade?.OutputDir == null)
+            return null;
+        var page = Panel2.ReportPageIndex;
+
+        var cardsPath = Path.Combine(facade.OutputDir, $"{facade.FacadeId}_report_cards.json");
+        if (!File.Exists(cardsPath))
+            return "이 보고서에는 크랙 카드 위치 정보(_report_cards.json)가 없습니다.\n최종 보고서를 다시 생성하면 만들어집니다.";
+
+        ReportCardsFile? file;
+        try
+        {
+            file = JsonSerializer.Deserialize<ReportCardsFile>(File.ReadAllText(cardsPath));
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            return $"크랙 카드 위치 정보를 읽지 못했습니다: {ex.Message}";
+        }
+
+        var card = file?.Cards.FirstOrDefault(c => c.Page == page && fx >= c.X0 && fx <= c.X1 && fy >= c.Y0 && fy <= c.Y1);
+        if (card == null)
+            return null;
+
+        var label = card.No.HasValue ? $"No.{card.No} - {card.CrackId}" : card.CrackId;
+        if (string.IsNullOrEmpty(card.ImageId) || card.BboxPxInSource is not { Length: 4 })
+            return $"{label}: 원본 사진 정보가 없습니다(관리자가 직접 추가한 크랙 등).";
+
+        if (!ShowObservationInPanel1(card.ImageId, card.BboxPxInSource))
+            return $"{label}: 원본 사진 {card.ImageId}을(를) 찾지 못했습니다. 사진 폴더 위치를 확인해 주세요.";
+
+        Panel1.IsCrackMarkerVisible = true;
+        Panel1.CrackMarkerLabel = label;
+        // 원본 사진의 크랙 위치가 화면 중앙에 오도록 스크롤(스티칭 클릭과 같은 경로).
+        Panel1.PendingCenterDisplayX = Panel1.CrackMarkerDisplayX;
+        Panel1.PendingCenterDisplayY = Panel1.CrackMarkerDisplayY;
+        ClickMarkerRefined?.Invoke();
+        return null;
     }
 
     [ObservableProperty] private bool _isReviewMode;
@@ -1059,6 +1180,7 @@ public partial class ResultsCompareViewModel : ObservableObject
     private void UpdateReviewStatusText()
     {
         RenumberReviewItems();
+        ApplyReviewConfidenceFilter();
         var aiTotal = SelectedFacade?.DisplayCracks?.Count ?? 0;
         var rejected = ReviewItems.Count(i => i.Status == CrackReviewStatus.Rejected);
         var manual = ReviewItems.Count(i => i.Status == CrackReviewStatus.Manual);

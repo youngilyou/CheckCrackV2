@@ -80,6 +80,10 @@ public partial class CrackReviewItem : ObservableObject
     [NotifyPropertyChangedFor(nameof(LabelText))]
     private CrackReviewStatus _status;
 
+    /// <summary>2026-09-27 (사용자 요청): 신뢰도 기준 체크박스(ResultsCompareViewModel.MinConfidence40 등)
+    /// 미만이라 캔버스에서 번호 배지/윤곽선을 숨기는 중. 화면 표시만 바꾸고 상태/저장 결과는 건드리지 않는다.</summary>
+    [ObservableProperty] private bool _isHiddenByFilter;
+
     public PointCollection CanvasPoints { get; set; } = new();
 
     /// <summary>Clicking a crack's overlay toggles this -- when false, the

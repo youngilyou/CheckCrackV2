@@ -88,6 +88,25 @@ public partial class ResultsCompareView : UserControl
             _originalCrackViewer.ShowCrack(vm.SelectedReviewItem, vm);
     }
 
+    /// <summary>2026-09-27 (사용자 요청): 보고서(PDF) 페이지에서 크랙 카드를 클릭하면 왼쪽(Panel1)에 그 크랙의 원본
+    /// 사진이 나오고 위치가 표시된다. 어느 카드인지는 보고서와 함께 저장된 _report_cards.json이 알려준다
+    /// (ResultsCompareViewModel.SelectCrackFromReportClick). e.GetPosition(image)는 이미지 자신의 로컬 좌표
+    /// (=ReportDisplayWidth/Height 범위)라 줌과 무관하게 페이지 비율로 바꿀 수 있다.</summary>
+    private void ReportImage_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ComparePanelState panel } reportImage)
+            return;
+        if (e.ClickCount != 1 || DataContext is not ResultsCompareViewModel vm || !ReferenceEquals(panel, vm.Panel2))
+            return;
+        if (panel.ReportDisplayWidth <= 0 || panel.ReportDisplayHeight <= 0)
+            return;
+
+        var pos = e.GetPosition(reportImage);
+        var message = vm.SelectCrackFromReportClick(pos.X / panel.ReportDisplayWidth, pos.Y / panel.ReportDisplayHeight);
+        if (message != null)
+            MessageBox.Show(message, "크랙 위치 표시 불가", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
     private void StitchImage_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: ComparePanelState panel } stitchImage)

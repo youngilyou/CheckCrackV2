@@ -360,6 +360,49 @@ def _render(template_name: str, context: dict) -> bytes:
     return HTML(string=html, base_url=str(_TEMPLATE_DIR)).write_pdf()
 
 
+def _render_with_cards(template_name: str, context: dict) -> tuple[bytes, list[dict]]:
+    """Same as `_render`, plus where each crack detail card landed in the PDF.
+
+    2026-09-27 (사용자 요청): 결과 보기의 보고서(PDF) 화면에서 크랙 카드를 클릭하면 왼쪽에 그 크랙의 원본
+    사진과 위치가 표시돼야 한다. 뷰어는 PDF를 이미지로만 그리므로 "클릭한 곳이 어느 카드인지"를 알
+    방법이 없어서, WeasyPrint가 레이아웃한 상자에서 `data-crack-id` 카드의 페이지별 위치를 뽑아 둔다.
+    좌표는 페이지 크기에 대한 비율(0..1)이라 뷰어가 어떤 배율로 그리든 그대로 쓸 수 있다."""
+    template = _JINJA_ENV.get_template(template_name)
+    html = template.render(**context)
+    document = HTML(string=html, base_url=str(_TEMPLATE_DIR)).render()
+    pdf_bytes = document.write_pdf()
+
+    by_crack_id = {c["crack_id"]: c for c in context.get("cracks", []) if c.get("crack_id")}
+    cards: list[dict] = []
+    for page_index, page in enumerate(document.pages):
+        page_box = page._page_box
+        page_w, page_h = float(page_box.margin_width()), float(page_box.margin_height())
+        seen: set[str] = set()
+        for box in page_box.descendants():  # depth-first: the outermost box of a card comes first
+            element = getattr(box, "element", None)
+            crack_id = element.get("data-crack-id") if element is not None else None
+            if not crack_id or crack_id in seen:
+                continue
+            seen.add(crack_id)
+            crack = by_crack_id.get(crack_id, {})
+            observations = crack.get("source_observations") or []
+            first = observations[0] if observations else None
+            x0, y0 = float(box.border_box_x()), float(box.border_box_y())
+            cards.append({
+                "page": page_index,
+                "crack_id": crack_id,
+                "no": crack.get("_no"),
+                "x0": round(x0 / page_w, 5), "y0": round(y0 / page_h, 5),
+                "x1": round((x0 + float(box.border_width())) / page_w, 5),
+                "y1": round((y0 + float(box.border_height())) / page_h, 5),
+                # Which original photo + where in it (source_observations[0], the photo the review UI's
+                # 원본 보기 uses). Absent for a reviewer-drawn crack: it has no photo provenance.
+                "image_id": first.get("image_id") if first else None,
+                "bbox_px_in_source": first.get("bbox_px_in_source") if first else None,
+            })
+    return pdf_bytes, cards
+
+
 def _atomic_write_pdf(pdf_bytes: bytes, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
@@ -419,9 +462,13 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
         "deliverables": _facade_deliverables(snapshot),
     }
 
-    pdf_bytes = _render("report.html", context)
+    pdf_bytes, cards = _render_with_cards("report.html", context)
     out_path = snapshot.output_dir / f"{facade_id}_report.pdf"
     _atomic_write_pdf(pdf_bytes, out_path)
+    # Sidecar for CheckCrackViewer's report panel (card click -> original photo + crack position).
+    from src.common.atomic_io import atomic_write_json
+
+    atomic_write_json(snapshot.output_dir / f"{facade_id}_report_cards.json", {"version": 1, "cards": cards})
     return out_path
 
 

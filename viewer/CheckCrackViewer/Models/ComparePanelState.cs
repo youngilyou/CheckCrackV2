@@ -46,8 +46,23 @@ public partial class ComparePanelState : ObservableObject
     [ObservableProperty] private double? _crackMarkerDisplayY;
 
     public bool HasCrackMarker => CrackMarkerDisplayX.HasValue && CrackMarkerDisplayY.HasValue;
-    partial void OnCrackMarkerDisplayXChanged(double? value) => OnPropertyChanged(nameof(HasCrackMarker));
-    partial void OnCrackMarkerDisplayYChanged(double? value) => OnPropertyChanged(nameof(HasCrackMarker));
+
+    // 2026-09-27 (사용자 요청, 보고서 카드 클릭 -> 원본 위치 표시의 Show/Hide): 마커 좌표는 그대로 두고
+    // 표시만 켜고 끈다. 원 마커의 실제 표시 여부는 ShowCrackMarker(좌표가 있고 켜져 있을 때).
+    [ObservableProperty] private bool _isCrackMarkerVisible = true;
+    // 지금 표시 중인 크랙이 무엇인지(예: "No.1 - FRONT_C000325") -- 비어 있으면 안 보임.
+    [ObservableProperty] private string _crackMarkerLabel = "";
+    public bool ShowCrackMarker => HasCrackMarker && IsCrackMarkerVisible;
+
+    partial void OnCrackMarkerDisplayXChanged(double? value) => NotifyMarkerChanged();
+    partial void OnCrackMarkerDisplayYChanged(double? value) => NotifyMarkerChanged();
+    partial void OnIsCrackMarkerVisibleChanged(bool value) => OnPropertyChanged(nameof(ShowCrackMarker));
+
+    private void NotifyMarkerChanged()
+    {
+        OnPropertyChanged(nameof(HasCrackMarker));
+        OnPropertyChanged(nameof(ShowCrackMarker));
+    }
 
     // 2026-09-26 (사용자 요청): 스티칭 패널을 클릭했을 때 그 지점의 정합 오차를 보고서 버튼 옆에
     // 표시하기 위한 문구/툴팁. ClickRegistrationErrorCalculator가 계산하고

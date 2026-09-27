@@ -2279,3 +2279,17 @@ u-extent 양 끝 2m만 dense stereo에서 제외(`EDGE_MARGIN_M`)하고 flat 모
 - **FRONT V010** (LEFT 대응 코드 변경 후 첫 FRONT 전체 실행, 06:4x 확인): 회귀 키(SINGLE_CAMERA/새 ALIGNMENT_POOR/OFF_WALL_DETECTED/실패 stage/ERROR) 0건, 1단계 422/422(재투영 1.0006), flat coverage 0.9607, Dense 20,983 s(융합 점 24,202,268), coverage 0.9608, 벽 안쪽 순검정 0.004%, 깊이 사이드카 자동 생성. V009와 화질 동등.
 - 캔버스 크기: V010 5905x3987 vs V009 6171x4013 -- V010 재구성에 새/옛 평면 규칙을 각각 적용하면 둘 다 5905x3987로 동일해 **새 코드의 영향이 아니라 COLMAP 실행 간 변동**임을 확인(V008 6172x4008, V009 6171x4013, V010 5905x3987). 실행마다 캔버스 좌표가 조금 달라지므로 서로 다른 실행의 크랙 좌표를 직접 비교하지 말 것.
 - 정리: FRONT output에서 V001~V008 삭제(256.9 GB 확보, version_index.json에서도 제거).
+
+## 2026-09-27 세션 기록 (2): 균열 검토 화면 신뢰도 기준 체크박스 (사용자 요청 "번호가 너무 많아 건물을 볼 수 없다")
+
+- 균열 검토 캔버스 위에 "신뢰도 이상만 표시" 체크박스 40/60/80/90%. 하나만 선택되는 배타 방식(모두 해제 = 전부 표시), 기준 미만 크랙의 **번호 배지와 윤곽선**을 캔버스에서 숨김. 우측 목록/저장 데이터/상태는 그대로(화면 표시만), 관리자 수동 추가 크랙은 항상 표시. 숨긴 건수는 체크박스 옆에 "신뢰도 X% 미만 N건 숨김"으로 표시.
+- 구현: `ResultsCompareViewModel.MinConfidence40/60/80/90` + `SetReviewMinConfidence`/`ApplyReviewConfidenceFilter`(UpdateReviewStatusText가 호출해 새 항목에도 적용), `CrackReviewItem.IsHiddenByFilter`, `ResultsCompareView.xaml`(필터 행 + 항목 Canvas 트리거).
+- V010 FRONT 크랙 분포(참고): v2 760건 중 40% 이상 314 / 60% 이상 74 / 80% 이상 5 / 90% 이상 0, v1 1002건 중 250 / 20 / 0 / 0 -- 80/90% 기준은 사실상 거의 안 남음.
+- 검증: `dotnet build` 오류 0. 뷰어 화면에서 직접 체크해 본 확인은 안 함.
+
+## 2026-09-27 세션 기록 (3): 보고서 카드 클릭 -> 왼쪽에 원본 사진 + 크랙 위치 표시 (Show/Hide) (사용자 요청)
+
+- 결과 보기의 보고서(PDF) 화면에서 크랙 카드(No.N)를 클릭하면 왼쪽(Panel1)이 "원본" 모드로 바뀌어 그 크랙의 원본 사진(source_observations[0])이 나오고, 크랙 bbox 중심에 원 마커가 표시되며 그 지점으로 스크롤됨. Panel1 상단 "크랙 위치 표시" 체크박스로 마커 Show/Hide(좌표는 유지, 표시만), 옆에 "No.1 - FRONT_C000325" 라벨.
+- 원리: 뷰어는 PDF를 이미지로만 그려 클릭한 곳이 어느 카드인지 몰라서, `src/report/pdf_report.py::_render_with_cards`가 WeasyPrint 레이아웃 상자에서 `data-crack-id` 카드의 페이지별 사각형(페이지 대비 0..1 비율) + 원본 사진 id/bbox를 뽑아 `{facade_id}_report_cards.json`으로 PDF와 함께 저장(`report.html`의 `.crack-card`에 `data-crack-id` 추가). 뷰어: `Models/ReportCardModel.cs`, `ResultsCompareViewModel.SelectCrackFromReportClick/ShowObservationInPanel1`(균열 검토의 마커 표시와 같은 경로로 통합), `ComparePanelState.IsCrackMarkerVisible/ShowCrackMarker/CrackMarkerLabel`, `ResultsCompareView.xaml(.cs)`의 `ReportImage_MouseLeftButtonDown`.
+- 검증: FRONT V010 복사본으로 보고서 생성 -> 카드 20개(페이지 6~9) 사각형을 PDF 페이지 이미지 위에 그려 실제 카드와 정확히 일치함을 확인(PyMuPDF). `dotnet build` 오류 0. **뷰어 화면에서 직접 클릭해 본 확인은 안 함.**
+- **기존 보고서는 `_report_cards.json`이 없어** 카드를 눌러도 "카드 위치 정보가 없다"는 안내가 뜸 -> 최종 보고서를 다시 생성하면 만들어짐. 관리자가 직접 그린 크랙은 사진 근거가 없어 안내 메시지만 표시.
