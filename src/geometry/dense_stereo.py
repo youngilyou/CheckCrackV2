@@ -393,47 +393,6 @@ def _assign_dense_owners(
     return nearest.reshape(canvas_h, canvas_w).astype(np.int32), np.array(camera_names)
 
 
-WALL_EXTENT_CLOSE_M = 1.6  # dense gaps narrower than this (window frames, thin seams) count as inside the wall
-WALL_EXTENT_MIN_COMPONENT_FRACTION = 0.05  # keep wall pieces at least this big relative to the biggest one
-WALL_EXTENT_MIN_CANVAS_FRACTION = 0.05  # below this the dense render is too sparse to define a wall -> no masking
-WALL_EXTENT_WORK_SCALE = 4  # the extent is computed on a canvas downscaled by this factor (1 px = 4 cm at 100 px/m)
-
-
-def compute_wall_extent(dense_has_data: np.ndarray, px_per_m: float) -> np.ndarray | None:
-    """Where the WALL is, judged by where the dense render actually put points near the facade plane.
-
-    2026-09-27 (사용자 지적, FRONT V010: "이미지가 겹쳐져 있음 해결 필요"): dense stereo only keeps points within
-    WALL_BAND_M of the plane, so the roof deck, rooftop machinery further back, terrain and sky are never drawn
-    by it -- but the flat mosaic that fills the dense holes has data EVERYWHERE its photos project (each photo's
-    homography throws far-away content onto the wall plane, stretched, and different photos disagree), so that
-    background showed up as overlapping, smeared patches around the building. Only the flat fill INSIDE this
-    extent is kept; nothing outside it is drawn or counted as observed wall.
-
-    The extent is the dense coverage after a closing (small gaps) and hole filling (a big glass area or textureless
-    panel enclosed by dense wall stays inside, so it is still filled from the flat mosaic and never becomes a
-    black hole), keeping the biggest connected pieces. Returns None if the dense render is too sparse to define a
-    wall at all (callers then keep the old behavior instead of blanking everything)."""
-    import cv2
-    from scipy import ndimage
-
-    h, w = dense_has_data.shape
-    if dense_has_data.sum() < WALL_EXTENT_MIN_CANVAS_FRACTION * h * w:
-        return None
-    sw, sh = max(1, w // WALL_EXTENT_WORK_SCALE), max(1, h // WALL_EXTENT_WORK_SCALE)
-    small = cv2.resize(dense_has_data.astype(np.uint8), (sw, sh), interpolation=cv2.INTER_AREA) > 0
-    k = int(round(WALL_EXTENT_CLOSE_M * px_per_m / WALL_EXTENT_WORK_SCALE)) | 1  # odd kernel size
-    closed = cv2.morphologyEx(small.astype(np.uint8), cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
-    filled = ndimage.binary_fill_holes(closed)
-    labels, n = ndimage.label(filled)
-    if n == 0:
-        return None
-    sizes = ndimage.sum(filled, labels, range(1, n + 1))
-    keep_ids = [i + 1 for i, size in enumerate(sizes) if size >= WALL_EXTENT_MIN_COMPONENT_FRACTION * sizes.max()]
-    extent_small = np.isin(labels, keep_ids)
-    extent = cv2.resize(extent_small.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
-    return extent if extent.sum() >= WALL_EXTENT_MIN_CANVAS_FRACTION * h * w else None
-
-
 def build_hybrid_mosaic(
     reconstruction: "pycolmap.Reconstruction",
     plane,
@@ -490,20 +449,12 @@ def build_hybrid_mosaic(
     # a dense pixel is a hole iff it is pure black after splat + small-hole inpaint. Replaces the older
     # "was any splat written here" test, so the two agree exactly with the reference procedure.
     dense_has_data = np.any(dense_canvas > 0, axis=2)
-    # Only fill dense holes INSIDE the wall (see compute_wall_extent); everything outside stays black/unobserved
-    # instead of showing each photo's stretched view of the roof, terrain and sky.
-    wall_extent = compute_wall_extent(dense_has_data, plane.px_per_m)
     use_flat = (~dense_has_data) & flat_has_data
-    if wall_extent is not None:
-        use_flat &= wall_extent
     if flat_visual is not None:
         hybrid_visual[use_flat] = flat_visual[use_flat]
-    if wall_extent is not None:
-        hybrid_visual[~wall_extent] = 0
-        dense_has_data = dense_has_data & wall_extent
     hybrid_analysis = hybrid_visual  # dense stereo has no separate low-blend variant; visual IS the analysis source here
 
-    observed_mask = (dense_has_data | (flat_has_data & (wall_extent if wall_extent is not None else True))).astype(np.uint8) * 255
+    observed_mask = (dense_has_data | flat_has_data).astype(np.uint8) * 255
 
     camera_names = [Path(img.name).stem for img in reconstruction.images.values()]  # matches rectify_images' own image_id convention
     dense_owner_idx, owner_names = _assign_dense_owners(plane, canvas_w, canvas_h, camera_names, camera_centers)
@@ -538,12 +489,7 @@ def build_hybrid_mosaic(
     import copy
 
     quality = copy.copy(flat_result.quality)  # never mutate the flat mosaic's own already-persisted quality report
-    # With a wall extent, coverage is measured over the WALL (observed wall pixels / wall pixels), not the whole
-    # canvas -- the canvas is mostly background the wall mosaic no longer draws, which would read as low coverage.
-    if wall_extent is not None:
-        quality.coverage_ratio = float(np.count_nonzero(observed_mask)) / float(max(1, np.count_nonzero(wall_extent)))
-    else:
-        quality.coverage_ratio = float(np.count_nonzero(observed_mask)) / float(observed_mask.size)
+    quality.coverage_ratio = float(np.count_nonzero(observed_mask)) / float(observed_mask.size)
 
     return MosaicResult(
         analysis_image=hybrid_analysis,
