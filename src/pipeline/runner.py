@@ -405,6 +405,33 @@ def _run_dense_hybrid_stage(
             aligned_reconstruction, plane, dense_result, rect_result, (canvas_w, canvas_h), sim3d,
             edge_margin_m=edge_margin_m,
         )
+        # 2026-09-27~28 (BACK facade 실사용, 사용자 확정): wall-texture blotch fix -- plain per-pixel
+        # depth resampling (NO exposure matching, NO flat_result blending), documented in
+        # src/geometry/depth_fill.py::finish_hybrid_mosaic's own docstring, which also records why the
+        # two stronger alternatives tried first (exposure-matched resampling; flat_result-primary) were
+        # each rejected -- flat-primary in particular was confirmed, with exact canvas locations, to
+        # reintroduce real window-row ghosting that plain depth resampling cannot (it never touches
+        # `flat_result`, only real measured 3D points, the same guarantee the dense render itself
+        # relies on). Only possible with a real Sim3d (GPS/pose-prior fallback runs have none); any
+        # exception here must not cost the hybrid mosaic that already rendered successfully.
+        if sim3d is not None:
+            try:
+                from src.geometry.depth_fill import finish_hybrid_mosaic
+                from src.geometry.depth_mapping import DepthCanvasMapper
+
+                mapper = DepthCanvasMapper(
+                    native_sparse_dir=native_sparse_dir, dense_dir=output_dir / "colmap_dense" / "dense",
+                    sim3d_scale=float(sim3d.scale), sim3d_rotation=np.asarray(sim3d.rotation.matrix()),
+                    sim3d_translation=np.asarray(sim3d.translation),
+                    plane_origin=plane.origin, plane_e_u=plane.e_u, plane_e_v=plane.e_v,
+                    px_per_m=plane.px_per_m,
+                )
+                hybrid = finish_hybrid_mosaic(hybrid, rect_result, mapper, images_dir, logger=logger)
+            except Exception as exc:
+                log_event(
+                    logger, "warning", "wall-texture 마감 실패 -- 기본 하이브리드 모자이크 유지",
+                    facade_id=facade_id, error=str(exc),
+                )
         if hybrid.analysis_image is not None:
             imwrite_unicode(output_dir / f"{facade_id}_analysis_colmap_dense.tif", hybrid.analysis_image)
         if hybrid.visual_image is not None:

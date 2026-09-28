@@ -360,10 +360,19 @@ def facade_plane_from_reconstruction(
     # outward normal is always "along the wall" no matter how degenerate the
     # track was. The roof/plan-view case has no such anchor (that's exactly
     # why it trusts the track at all), so it's left untouched.
+    fallback_used = False
     if is_wall:
         e_v_provisional = np.array([0.0, 0.0, -1.0])
         if abs(float(np.dot(e_u, e_v_provisional))) > 0.7:
-            fallback_u = np.cross(e_v_provisional, normal)
+            fallback_used = True
+            # 2026-09-28 (RIGHT facade 실사용 발견, LEFT과 대조 검증): cross(normal, e_v_provisional),
+            # NOT cross(e_v_provisional, normal) -- swapped order (=negated) from the original. Both
+            # LEFT(맞게 나옴)과 RIGHT(좌우 뒤집혀 나옴)를 UTM 정렬된 재구성으로 직접 검증: 원래
+            # 순서로 계산한 fallback_u는 두 facade 모두 정답의 반대 부호였고(즉 이 공식 자체가
+            # 원래부터 부호가 뒤집혀 있었음), 아래의 "촬영 순서" 타이브레이크가 LEFT는 우연히 다시
+            # 뒤집어 정답을 냈지만 RIGHT는 안 뒤집어서 오답이 남았음 -- 이 순서 뒤집기 + 아래
+            # 타이브레이크 생략으로 둘 다 실측 정답과 정확히 일치(코사인 유사도 1.000)함을 확인.
+            fallback_u = np.cross(normal, e_v_provisional)
             e_u = fallback_u / np.linalg.norm(fallback_u)
 
     # Fix e_u's sign to a deterministic, run-independent convention -- SVD
@@ -384,8 +393,18 @@ def facade_plane_from_reconstruction(
     # mid-facade isn't monotonic in the first place, but that's already an
     # unusual capture pattern this convention has no worse an answer for than
     # the previous (literally random) one did.
+    #
+    # 2026-09-28: this tiebreak is SKIPPED when `fallback_used` -- a near-vertical flight track (the
+    # very condition that triggers the fallback above) makes "capture order vs position" an
+    # unreliable coin-flip (a pure vertical climb's horizontal drift is noise, not a real "which way
+    # did the drone move along the wall" signal): confirmed real, RIGHT facade, this exact tiebreak
+    # left `fallback_u`'s already-correct sign untouched on LEFT (coincidentally, since it re-flipped
+    # what was already backwards from the old cross() order) but WRONGLY flipped RIGHT's -- both
+    # facades' fallback_u (with the corrected cross() order above) is already deterministic and
+    # correctly-signed from `normal` alone, so re-deciding the sign from noisy flight position is
+    # pure regression risk once the fallback path was used.
     image_ids = [Path(img.name).stem for img in reconstruction.images.values()]
-    if len(image_ids) >= 2:
+    if len(image_ids) >= 2 and not fallback_used:
         order = np.argsort(image_ids)  # capture order, stable across runs/exclusions
         capture_index = np.empty(len(image_ids))
         capture_index[order] = np.arange(len(image_ids))

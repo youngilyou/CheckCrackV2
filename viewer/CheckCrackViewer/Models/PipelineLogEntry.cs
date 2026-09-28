@@ -7,12 +7,25 @@ namespace CheckCrackViewer.Models;
 
 /// <summary>
 /// One line of logs/pipeline.log (src/common/logging.py's JsonFormatter).
-/// The Python logger never writes a timestamp field, so <see cref="ObservedAt"/>
-/// is when this app read the line, not when the event actually happened —
-/// keep it labeled that way in the UI, don't imply precision that isn't there.
+/// 2026-09-28부터 Python 쪽이 실제 기록 시각을 "timestamp" 필드로 남기므로 <see cref="Timestamp"/>가
+/// 있으면 그게 진짜 발생 시각이다. 이 필드가 없는 줄(이 변경 전에 이미 메모리에 떠 있던 구버전
+/// 파이프라인 프로세스가 찍은 줄)만 <see cref="ObservedAt"/>(이 앱이 그 줄을 읽은 시각, 실제 발생
+/// 시각과 다를 수 있음)로 대신한다 — UI에서 둘을 구분해서 표시할 것, 없는 정밀도를 있는 것처럼
+/// 보여주지 말 것.
 /// </summary>
 public class PipelineLogEntry
 {
+    [JsonPropertyName("timestamp")]
+    public string? TimestampRaw { get; set; }
+
+    /// <summary>Parsed <see cref="TimestampRaw"/>, or null if absent/unparsable (구버전 로그 줄).</summary>
+    public DateTime? Timestamp =>
+        DateTime.TryParse(TimestampRaw, out var dt) ? dt : null;
+
+    /// <summary>표시용: 실제 발생 시각이 있으면 그것, 없으면 이 앱이 읽은 시각(관찰 시각)에 물음표를
+    /// 붙여 구분. LIVE LOG 템플릿이 이 하나만 바인딩하면 된다.</summary>
+    public string DisplayTime => Timestamp is { } t ? t.ToString("HH:mm:ss.fff") : ObservedAt.ToString("HH:mm:ss") + "?";
+
     [JsonPropertyName("level")]
     public string Level { get; set; } = "INFO";
 

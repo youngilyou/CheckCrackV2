@@ -174,31 +174,95 @@ class DepthCanvasMapper:
             path = candidates[0] if candidates else path
         if path.exists():
             try:
-                depth = self._fill_small_holes(read_colmap_array(path).astype(np.float32), self.fill_max_px)
+                depth = self._fill_small_holes(
+                    read_colmap_array(path).astype(np.float32), self.fill_max_px,
+                    self.wide_fill_max_px, self.fill_agree_tolerance_m,
+                )
             except (OSError, ValueError):
                 depth = None
         self._depth_cache[image_id] = depth
         return depth
 
     @staticmethod
-    def _fill_small_holes(depth: np.ndarray, max_px: float) -> np.ndarray:
+    def _fill_small_holes(
+        depth: np.ndarray, max_px: float, wide_max_px: float = 0.0, agree_tolerance_m: float = 0.3,
+    ) -> np.ndarray:
         """COLMAP's geometric depth map zeroes every pixel that fails the multi-view consistency
         check -- on FRONT ~35-40% of a photo, concentrated on textureless / weathered wall, exactly
         where cracks and stains are. A wall's depth is locally smooth, so a hole is filled with the
         NEAREST measured depth, but only within `max_px` depth-map pixels (1 depth px = 2 raw px at
         the 2640-wide undistorted size): anything farther from a real measurement stays invalid and
-        the caller falls back to the flat homography, flagged -- never a guess."""
+        the caller falls back to the flat homography, flagged -- never a guess.
+
+        `wide_max_px` (2026-09-28, 사용자 제안 -- BACK 실사용 "측정 불가" 지점 여러 건에서 확인): a
+        gap up to `max_px` from its single NEAREST valid neighbour is one thing, but a wider gap
+        BRACKETED by valid depth on two independent sides is a stronger, differently-justified case --
+        if the two sides agree, the surface between them is almost certainly one continuous real wall
+        patch (not a guess: it's two real measurements bounding the same value), and if they disagree
+        it's a real discontinuity (wall meeting sky/parapet) that must NOT be bridged. Measured on
+        DJI_0067 (BACK): pixels with a valid neighbour on both sides split cleanly in two -- 91,089
+        agreed within 3mm (median) / 9mm (p90), 52,041 disagreed by 12.9m (median) / 19.8m (p90) -- no
+        ambiguous middle ground, so `agree_tolerance_m` only has to sit anywhere between those two
+        clusters. Checks vertical (column) and horizontal (row) bracketing independently and accepts
+        either; a pixel with only a one-sided (or no) valid neighbour within `wide_max_px` is left
+        exactly as `max_px`-only filling would leave it."""
         invalid = ~(depth > 0)
-        if max_px <= 0 or not invalid.any() or invalid.all():
+        if not invalid.any() or invalid.all():
             return depth
         from scipy import ndimage
 
-        dist, (iy, ix) = ndimage.distance_transform_edt(invalid, return_indices=True)
-        filled = depth[iy, ix]
-        filled[dist > max_px] = 0.0
-        return filled.astype(np.float32)
+        out = depth.astype(np.float32).copy()
+        if max_px > 0:
+            dist, (iy, ix) = ndimage.distance_transform_edt(invalid, return_indices=True)
+            near_ok = invalid & (dist <= max_px)
+            out[near_ok] = depth[iy, ix][near_ok]
 
-    fill_max_px: float = 40.0  # ~20 cm of wall at ~0.5 cm per depth px on this FRONT
+        remaining = ~(out > 0)
+        if wide_max_px > max_px and remaining.any():
+            def forward_fill(arr: np.ndarray, axis: int) -> tuple[np.ndarray, np.ndarray]:
+                """(value, gap_px) of the nearest valid pixel at an EARLIER index along `axis` in
+                `arr` (NaN / 0 where none yet), via one cumulative forward pass. Pure-Python loop over
+                one axis length (~2000-2600 for these depth maps), each step one vectorised row/column
+                op -- `bracket` below flips `arr` to get the "later index" side from the same helper."""
+                val = np.where(arr > 0, arr, np.nan)
+                gap = np.zeros(val.shape, dtype=np.float32)
+                for i in range(1, val.shape[axis]):
+                    prev_v, cur_v = np.take(val, i - 1, axis=axis), np.take(val, i, axis=axis)
+                    hole = np.isnan(cur_v)
+                    new_v = np.where(hole, prev_v, cur_v)
+                    new_g = np.where(hole, np.take(gap, i - 1, axis=axis) + 1, 0.0)
+                    if axis == 0:
+                        val[i], gap[i] = new_v, new_g
+                    else:
+                        val[:, i], gap[:, i] = new_v, new_g
+                return val, gap
+
+            def bracket(axis: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+                """Nearest valid neighbour on EACH side along `axis`: (lo_val, lo_gap, hi_val, hi_gap)
+                -- lo = earlier index (e.g. above/left), hi = later index (below/right)."""
+                lo_val, lo_gap = forward_fill(out, axis)
+                flip = tuple(slice(None, None, -1) if a == axis else slice(None) for a in range(out.ndim))
+                hi_val_rev, hi_gap_rev = forward_fill(out[flip], axis)
+                return lo_val, lo_gap, hi_val_rev[flip], hi_gap_rev[flip]
+
+            def accept(lo_val, lo_gap, hi_val, hi_gap):
+                have_both = ~np.isnan(lo_val) & ~np.isnan(hi_val) & ((lo_gap + hi_gap) <= wide_max_px)
+                agree = have_both & (np.abs(lo_val - hi_val) <= agree_tolerance_m)
+                return agree, (lo_val + hi_val) / 2.0
+
+            v_ok, v_mean = accept(*bracket(0))
+            h_ok, h_mean = accept(*bracket(1))
+
+            fill_v = remaining & v_ok
+            out[fill_v] = v_mean[fill_v]
+            fill_h = remaining & ~fill_v & h_ok
+            out[fill_h] = h_mean[fill_h]
+
+        return out
+
+    fill_max_px: float = 40.0       # ~20 cm of wall at ~0.5 cm per depth px on this FRONT
+    wide_fill_max_px: float = 150.0  # ~75 cm total gap (both sides combined) -- see _fill_small_holes
+    fill_agree_tolerance_m: float = 0.3  # real disagreement seen was 12m+; this only has to clear that
 
     def map_points(
         self, image_id: str, xy_raw: np.ndarray, depth_radius: int = 2,

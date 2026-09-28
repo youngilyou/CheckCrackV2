@@ -111,6 +111,8 @@
             <DataTemplate x:Key="LogEntryTemplate" DataType="{x:Type models:PipelineLogEntry}">
                 <StackPanel>
                     <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding DisplayTime}" FontFamily="Consolas" FontSize="10" Foreground="{StaticResource Text2}" Width="66"
+                                   ToolTip="시:분:초 -- 물음표(?)가 붙으면 실제 발생 시각이 아니라 이 앱이 그 로그 줄을 읽은 시각(구버전 파이프라인 프로세스가 남긴 줄)"/>
                         <TextBlock Text="{Binding Level}" FontFamily="Consolas" FontSize="10" FontWeight="Bold"
                                    Foreground="{Binding Level, Converter={StaticResource LevelToColorConverter}}" Width="52"/>
                         <TextBlock Text="{Binding FacadeId}" FontFamily="Consolas" FontSize="10" Foreground="{StaticResource Accent}" Margin="4,0,0,0"/>
