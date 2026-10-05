@@ -100,3 +100,38 @@ def view_orthogonality(H: np.ndarray, point_raw_xy: tuple[float, float]) -> floa
     if s1 <= 1e-12:
         return 0.0
     return max(0.0, min(1.0, s2 / s1))
+
+
+# 폭 등급 판정 결과가 "해상도 부족"일 때 Crack.severity_note에 들어가는 고정 접두어 --
+# 보고서/뷰어가 이 문자열로 집계하므로 바꾸면 pdf_report.py도 같이 바꿀 것.
+SEVERITY_NOTE_LOW_RESOLUTION = "판정불가(해상도부족)"
+
+
+def grade_severity(
+    max_width_mm: float | None,
+    width_mm_per_px: float | None,
+    cfg,
+) -> tuple[str | None, str | None]:
+    """0.3mm 폭 기준 등급 -- (severity, severity_note).
+
+    2026-10-05 (사용자 확정): 현재 촬영 데이터는 원본 1px이 벽면 약 2.6mm라,
+    폭 측정(skeleton 거리변환 x2)의 최소값이 약 1px(=2~3mm)이다. 그래서
+    검출된 크랙은 실제 폭과 무관하게 거의 전부 0.3mm 이상으로 측정되고
+    "정밀점검대상"으로 분류돼 버린다 -- 근거 없는 판정이다(#9/#26).
+    폭 기준을 판정하려면 기준 폭이 최소 수 px에 걸쳐야 하므로, 그 크랙 위치의
+    해상도(mm/px)가 measurement.max_mm_per_px_for_severity보다 거칠면 등급을
+    매기지 않고 severity=None + note=SEVERITY_NOTE_LOW_RESOLUTION을 남긴다.
+    mm 값 자체는 그대로 출력하되 "추정값"이다(보고서에 명시).
+
+    - max_width_mm 없음(스케일 없음): (None, None) -- 기존 동작 그대로.
+    - 해상도 값을 모름: 판정 근거가 없으므로 해상도 부족과 같이 취급.
+    """
+    if max_width_mm is None:
+        return None, None
+    limit = float(getattr(cfg.measurement, "max_mm_per_px_for_severity", 0.15))
+    if width_mm_per_px is None or width_mm_per_px > limit:
+        if width_mm_per_px is None:
+            return None, f"{SEVERITY_NOTE_LOW_RESOLUTION}: 해상도 정보 없음"
+        return None, f"{SEVERITY_NOTE_LOW_RESOLUTION}: {width_mm_per_px:.2f} mm/px > 기준 {limit:.2f} mm/px"
+    threshold = float(cfg.measurement.crack_width_threshold_mm)
+    return ("정밀점검대상" if max_width_mm >= threshold else "경미"), None

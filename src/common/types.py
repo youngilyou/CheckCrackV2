@@ -208,6 +208,13 @@ class Crack:
     # calibration present). Never graded from px alone (CLAUDE.local.md #9/#26:
     # no calibration, no measurement-based judgment). See crack/pipeline.py.
     severity: Optional[str] = None
+    # Why severity is None even though max_width_mm exists -- e.g.
+    # "판정불가(해상도부족): 2.60 mm/px > 기준 0.15 mm/px" (crack/measurement.py::
+    # grade_severity). None when severity was graded or there is no mm at all.
+    severity_note: Optional[str] = None
+    # Resolution (mm per pixel) the max_width_mm was measured at -- the gate
+    # grade_severity uses. None when there is no calibrated scale.
+    width_mm_per_px: Optional[float] = None
     source_tile_ids: list = field(default_factory=list)
     source_image_ids: list = field(default_factory=list)  # facade-level provenance, see crack/pipeline.py
     # Which specific original photo(s) this crack is actually visible in, and

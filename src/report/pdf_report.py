@@ -139,6 +139,19 @@ class FacadeSnapshot:
     crack_mask_path: Path | None
 
 
+def _apply_resolution_gate(cracks: list[dict]) -> list[dict]:
+    """2026-10-05: 0.3mm 등급은 원본 해상도(mm/px)가 충분할 때만 유효하다
+    (crack/measurement.py::grade_severity). 그 이전에 만든 cracks.json은
+    해상도(width_mm_per_px)를 기록하지 않았고, 당시 등급은 약 2.6mm/px 사진에서
+    매겨져 근거가 없다 -- 보고서에서 그대로 쓰지 않고 판정불가로 바꿔 표시한다
+    (파일은 수정하지 않음, 크랙검사를 다시 돌리면 새 규칙으로 기록됨)."""
+    for c in cracks:
+        if c.get("max_width_mm") is not None and "width_mm_per_px" not in c and c.get("severity"):
+            c["severity"] = None
+            c["severity_note"] = "판정불가(해상도 미기록 -- 크랙검사 재실행 필요)"
+    return cracks
+
+
 def load_facade_snapshot(output_dir: str | Path, facade_id: str) -> FacadeSnapshot:
     output_dir = Path(output_dir)
     analysis_colmap = _pick(output_dir, facade_id, "_analysis_colmap.tif")
@@ -156,7 +169,7 @@ def load_facade_snapshot(output_dir: str | Path, facade_id: str) -> FacadeSnapsh
     # AI detection unchanged, exactly like before this feature existed.
     review = _read_json(output_dir / f"{facade_id}_crack_review.json")
     review = review if isinstance(review, dict) else None
-    cracks = apply_review(raw_cracks, review)
+    cracks = _apply_resolution_gate(apply_review(raw_cracks, review))
     # 2026-09-18, 사용자 요청: 보고서엔 신뢰도(confidence) 60% 이상인 크랙만 포함 --
     # 낮은 신뢰도 오탐이 본문/집계(평균 폭 등)에 섞여 왜곡시키는 걸 막는다(위 2차/구조물
     # 오탐 필터와 같은 취지, 별도 축의 필터). 리뷰어가 수동으로 승인/추가한 크랙은
@@ -319,6 +332,8 @@ def _crack_metrics(cracks: list[dict]) -> dict:
     has_calibration = any(c.get("max_width_mm") is not None for c in cracks)
     precision_count = sum(1 for c in cracks if c.get("severity") == "정밀점검대상")
     minor_count = sum(1 for c in cracks if c.get("severity") == "경미")
+    # mm 값은 있는데 해상도가 부족해 0.3mm 등급을 못 매긴 크랙 수.
+    ungraded_count = sum(1 for c in cracks if c.get("max_width_mm") is not None and not c.get("severity"))
     return {
         "count": len(cracks),
         "avg_confidence": sum(confidences) / len(confidences),
@@ -331,11 +346,31 @@ def _crack_metrics(cracks: list[dict]) -> dict:
         "has_calibration": has_calibration,
         "precision_count": precision_count,
         "minor_count": minor_count,
+        "ungraded_count": ungraded_count,
+        # mm 폭 구간(0.2/0.3/0.5mm) 차트는 실제로 등급을 매길 수 있었던 크랙이 있을 때만 의미가 있다.
+        "width_mm_gradable": (precision_count + minor_count) > 0,
         "observed": sum(1 for c in cracks if c.get("observation_state") == "OBSERVED"),
         "occluded": sum(1 for c in cracks if c.get("observation_state") == "OCCLUDED"),
         "high_confidence": sum(1 for c in confidences if c >= 0.7),
         "low_confidence": sum(1 for c in confidences if c < 0.4),
     }
+
+
+def _severity_resolution_limit() -> float:
+    """measurement.max_mm_per_px_for_severity (보고서 설명 문구용) -- 설정을 못 읽으면 기본 0.15."""
+    try:
+        from src.common.config import load_config
+        return float(getattr(load_config(Path(__file__).resolve().parents[2] / "config" / "pipeline.yaml").measurement, "max_mm_per_px_for_severity", 0.15))
+    except Exception:
+        return 0.15
+
+
+def _width_title(metrics: dict, suffix: str) -> str:
+    if metrics.get("width_mm_gradable"):
+        return f"균열 폭 분포 (mm 추정값{suffix})"
+    if metrics.get("has_calibration"):
+        return f"균열 폭 분포 (px{suffix}, 해상도 부족으로 mm 구간 미표시)"
+    return f"균열 폭 분포 (px{suffix}, calibration 없음)"
 
 
 def _fmt(value, pattern="{:.1f}", empty="-"):
@@ -424,7 +459,7 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
 
     mosaic_uri, crack_map_uri, crops = _mosaic_section_data(snapshot, cracks_sorted)
 
-    width_slices = build_width_distribution(snapshot.cracks, metrics.get("has_calibration", False)) if snapshot.cracks else []
+    width_slices = build_width_distribution(snapshot.cracks, metrics.get("width_mm_gradable", False)) if snapshot.cracks else []
     confidence_slices = build_confidence_tiers(snapshot.cracks) if snapshot.cracks else []
 
     for c in cracks_sorted:
@@ -454,9 +489,10 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
         "reviewed_by": snapshot.reviewed_by,
         "reviewed_at": snapshot.reviewed_at,
         "metrics": metrics,
+        "max_mm_per_px_for_severity": _severity_resolution_limit(),
         "width_chart_svg": donut_or_pie_svg(width_slices, inner_ratio=0.0) if width_slices else None,
         "width_legend": legend_rows(width_slices),
-        "width_title": "균열 폭 분포 (mm)" if metrics.get("has_calibration") else "균열 폭 분포 (px, calibration 없음)",
+        "width_title": _width_title(metrics, ""),
         "confidence_chart_svg": donut_or_pie_svg(confidence_slices, inner_ratio=0.6) if confidence_slices else None,
         "confidence_legend": legend_rows(confidence_slices),
         "deliverables": _facade_deliverables(snapshot),
@@ -532,7 +568,7 @@ def generate_building_report(manifest_path: str | Path, reports_dir: str | Path)
             "image_count": sum(e["snapshot"].quality.get("image_count", 0) if e["snapshot"].quality else 0 for e in group),
         })
 
-    width_slices = build_width_distribution(all_cracks, metrics.get("has_calibration", False)) if all_cracks else []
+    width_slices = build_width_distribution(all_cracks, metrics.get("width_mm_gradable", False)) if all_cracks else []
     confidence_slices = build_confidence_tiers(all_cracks) if all_cracks else []
     side_crack_counts = []
     for side, group in sorted(by_side.items()):
@@ -573,9 +609,10 @@ def generate_building_report(manifest_path: str | Path, reports_dir: str | Path)
         "cracks": top_cracks,
         "cracks_truncated": len(all_cracks) > 30,
         "metrics": metrics,
+        "max_mm_per_px_for_severity": _severity_resolution_limit(),
         "width_chart_svg": donut_or_pie_svg(width_slices, inner_ratio=0.0) if width_slices else None,
         "width_legend": legend_rows(width_slices),
-        "width_title": "균열 폭 분포 (mm, 전체)" if metrics.get("has_calibration") else "균열 폭 분포 (px, 전체, calibration 없음)",
+        "width_title": _width_title(metrics, ", 전체"),
         "confidence_chart_svg": donut_or_pie_svg(confidence_slices, inner_ratio=0.6) if confidence_slices else None,
         "confidence_legend": legend_rows(confidence_slices),
         "side_crack_counts": side_crack_counts,

@@ -203,6 +203,8 @@ def main() -> None:
             "observation_state": crack.observation_state,
             "source_image_ids": crack.source_image_ids,
             "severity": crack.severity,
+            "severity_note": crack.severity_note,
+            "width_mm_per_px": (round(crack.width_mm_per_px, 4) if crack.width_mm_per_px is not None else None),
             "building_id": crack.building_id,
             "position": {"pixel_x": round(cx, 1), "pixel_y": round(cy, 1), "u_m": None, "v_m": None},
             "bbox_px": [round(v, 1) for v in crack.bbox_px],

@@ -24,6 +24,10 @@ internal sealed class CrackJsonEntry
     [JsonPropertyName("confidence")] public double Confidence { get; set; }
     [JsonPropertyName("observation_state")] public string? ObservationState { get; set; }
     [JsonPropertyName("severity")] public string? Severity { get; set; }
+    // 2026-10-05: 0.3mm 등급은 원본 해상도(mm/px)가 충분할 때만 유효 -- 이 값이 없는(그 이전에
+    // 만든) cracks.json의 severity는 근거 없이 매겨진 것이라 DB에 넣지 않는다(보고서와 같은 규칙,
+    // src/report/pdf_report.py::_apply_resolution_gate).
+    [JsonPropertyName("width_mm_per_px")] public double? WidthMmPerPx { get; set; }
     [JsonPropertyName("position")] public CrackPositionJson? Position { get; set; }
     [JsonPropertyName("bbox_px")] public double[] BboxPx { get; set; } = Array.Empty<double>();
     [JsonPropertyName("polygon_px")] public double[][] PolygonPx { get; set; } = Array.Empty<double[]>();
@@ -342,7 +346,7 @@ public static class CrackVisionArchiveQueryService
                 cmd.Parameters.AddWithValue((object?)c.AreaMm2 ?? DBNull.Value);
                 cmd.Parameters.AddWithValue(c.Confidence);
                 cmd.Parameters.AddWithValue((object?)c.ObservationState ?? DBNull.Value);
-                cmd.Parameters.AddWithValue((object?)c.Severity ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)(c.WidthMmPerPx.HasValue ? c.Severity : null) ?? DBNull.Value);
                 cmd.Parameters.AddWithValue((object?)c.Position?.PixelX ?? DBNull.Value);
                 cmd.Parameters.AddWithValue((object?)c.Position?.PixelY ?? DBNull.Value);
                 cmd.Parameters.AddWithValue((object?)uM ?? DBNull.Value);

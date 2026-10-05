@@ -117,6 +117,11 @@ crack:
 measurement:
   require_calibration_for_mm: true
   crack_width_threshold_mm: 0.3  # 건설 크랙검사 기준 (0.2mm 기준은 채택 안 함); calibration 없으면 severity 자체를 매기지 않음
+  # 2026-10-05: 0.3mm 등급은 그 크랙 위치의 원본 해상도가 이 값(mm/px) 이하일 때만 매긴다.
+  # 0.15 = 0.3mm 크랙이 최소 2px에 걸치는 해상도. 현재 촬영(약 2.6 mm/px)은 전부 "판정불가(해상도부족)".
+  # 0.3mm 판정에는 크랙 후보 근접 촬영(목표 약 0.1 mm/px) + 폭을 아는 게이지/시편 Ground Truth 검증이 필요.
+  # 본 값은 초기 검증 기준이며, 실제 DJI/Matrice 외벽 촬영 데이터와 Ground Truth 기반 성능평가 후 최종 확정한다.
+  max_mm_per_px_for_severity: 0.15
   crack_id_match_iou_threshold: 0.3  # 같은 스티칭 버전 재검사 시 이전 crack_id 유지 판단 IoU 기준 (재스티칭 후에는 적용 안 됨)
   source_observation_min_overlap_px: 20  # 이 픽셀 수 미만으로 소유한 source image는 source_observations 후보에서 제외 (노이즈성 겹침 필터)
 

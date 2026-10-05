@@ -30,7 +30,7 @@ from shapely.ops import unary_union
 from src.common.config import Config
 from src.common.types import Crack, SourceObservation
 from src.crack.detector import CrackDetection, CrackDetector
-from src.crack.measurement import ScaleInfo, to_mm, to_mm2, view_orthogonality
+from src.crack.measurement import ScaleInfo, grade_severity, mm_per_px, to_mm, to_mm2, view_orthogonality
 from src.crack.merge_tiles import CrackPolygon, group_overlapping_polygons, match_crack_ids, merge_detections
 from src.crack.pipeline import _on_wall_fraction
 from src.crack.skeleton import measure_polygon
@@ -253,7 +253,6 @@ def detect_cracks_from_raw_images(
     id_match_threshold = float(getattr(cfg.measurement, "crack_id_match_iou_threshold", 0.3))
     match_crack_ids(merged_for_id_matching, previous_cracks, iou_threshold=id_match_threshold)
 
-    width_threshold_mm = float(cfg.measurement.crack_width_threshold_mm)
     source_image_ids = sorted(image_paths.keys())
 
     cracks: list[Crack] = []
@@ -267,6 +266,7 @@ def detect_cracks_from_raw_images(
         length_mm_values: list[float] = []
         width_mm_values: list[float] = []
         area_mm2_values: list[float] = []
+        mm_per_px_values: list[float] = []
         source_observations: list[SourceObservation] = []
         obs_orthogonality: list[float] = []
         for i in idxs:
@@ -285,6 +285,9 @@ def detect_cracks_from_raw_images(
                 length_mm_values.append(l_mm)
             if w_mm is not None:
                 width_mm_values.append(w_mm)
+                factor = mm_per_px(scale)
+                if factor is not None:
+                    mm_per_px_values.append(factor)
             if a_mm2 is not None:
                 area_mm2_values.append(a_mm2)
 
@@ -319,9 +322,9 @@ def detect_cracks_from_raw_images(
         max_width_mm = sum(width_mm_values) / len(width_mm_values) if width_mm_values else None
         area_mm2 = sum(area_mm2_values) / len(area_mm2_values) if area_mm2_values else None
 
-        severity = None
-        if max_width_mm is not None:
-            severity = "정밀점검대상" if max_width_mm >= width_threshold_mm else "경미"
+        # 폭은 관측 사진들의 평균이므로 해상도 판정은 그중 가장 거친 사진 기준(보수적).
+        width_mm_per_px = max(mm_per_px_values) if mm_per_px_values else None
+        severity, severity_note = grade_severity(max_width_mm, width_mm_per_px, cfg)
 
         x0, y0 = merged_poly.polygon_px.min(axis=0)
         x1, y1 = merged_poly.polygon_px.max(axis=0)
@@ -357,6 +360,8 @@ def detect_cracks_from_raw_images(
                 max_width_mm=max_width_mm,
                 area_mm2=area_mm2,
                 severity=severity,
+                severity_note=severity_note,
+                width_mm_per_px=width_mm_per_px,
                 source_tile_ids=[],  # 원본 기준 검출엔 모자이크 타일 개념이 없음
                 source_image_ids=source_image_ids,
                 source_observations=source_observations,

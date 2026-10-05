@@ -61,7 +61,7 @@ from shapely.strtree import STRtree
 from src.common.config import Config
 from src.common.types import Crack, SourceObservation
 from src.crack.detector import CrackDetection, CrackDetector
-from src.crack.measurement import ScaleInfo, to_mm, to_mm2
+from src.crack.measurement import ScaleInfo, grade_severity, mm_per_px, to_mm, to_mm2
 from src.crack.merge_tiles import CrackPolygon, merge_detections
 from src.crack.skeleton import measure_polygon
 from src.crack.tiler import Tile, tile_mosaic
@@ -467,13 +467,8 @@ def build_final_cracks(
         x0, y0 = polygon_px.min(axis=0)
         x1, y1 = polygon_px.max(axis=0)
         max_width_mm = to_mm(measurement.max_width_px, scale)
-        severity = None
-        if max_width_mm is not None:
-            severity = (
-                "정밀점검대상"
-                if max_width_mm >= float(cfg.measurement.crack_width_threshold_mm)
-                else "경미"
-            )
+        width_mm_per_px = mm_per_px(scale)
+        severity, severity_note = grade_severity(max_width_mm, width_mm_per_px, cfg)
 
         cracks.append(
             Crack(
@@ -493,6 +488,8 @@ def build_final_cracks(
                 max_width_mm=max_width_mm,
                 area_mm2=to_mm2(float(merged.area), scale),
                 severity=severity,
+                severity_note=severity_note,
+                width_mm_per_px=width_mm_per_px,
                 source_tile_ids=[],
                 source_image_ids=source_image_ids,
                 source_observations=source_observations,

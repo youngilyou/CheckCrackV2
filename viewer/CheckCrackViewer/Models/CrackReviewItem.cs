@@ -103,7 +103,7 @@ public partial class CrackReviewItem : ObservableObject
 
     public string ConfidenceText => Status == CrackReviewStatus.Manual ? "관리자 확인" : $"{Confidence:P0}";
     public string LengthText => LengthMm.HasValue ? $"{LengthMm:F1} mm ({LengthPx:F1} px)" : LengthPx.HasValue ? $"{LengthPx:F1} px" : "저장 후 계산";
-    public string WidthText => MaxWidthMm.HasValue ? $"{MaxWidthMm:F2} mm ({MaxWidthPx:F2} px)" : MaxWidthPx.HasValue ? $"{MaxWidthPx:F2} px" : "저장 후 계산";
+    public string WidthText => MaxWidthMm.HasValue ? $"{MaxWidthMm:F2} mm 추정 ({MaxWidthPx:F2} px)" : MaxWidthPx.HasValue ? $"{MaxWidthPx:F2} px" : "저장 후 계산";
     public string AreaText => AreaMm2.HasValue ? $"{AreaMm2:F1} mm² ({AreaPx:F0} px²)" : AreaPx.HasValue ? $"{AreaPx:F0} px²" : "저장 후 계산";
 
     /// <summary>What the on-canvas tag shows -- always includes the crack id

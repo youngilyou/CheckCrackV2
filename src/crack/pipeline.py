@@ -30,7 +30,7 @@ import numpy as np
 from src.common.config import Config
 from src.common.types import Crack, SourceObservation
 from src.crack.detector import CrackDetector
-from src.crack.measurement import ScaleInfo, to_mm, to_mm2
+from src.crack.measurement import ScaleInfo, grade_severity, mm_per_px, to_mm, to_mm2
 from src.crack.merge_tiles import match_crack_ids, merge_detections
 from src.crack.skeleton import measure_polygon
 from src.crack.tiler import tile_mosaic
@@ -200,7 +200,6 @@ def detect_cracks(
         getattr(cfg.measurement, "crack_id_match_iou_threshold", 0.3)
     )
     match_crack_ids(merged_polygons, previous_cracks, iou_threshold=id_match_threshold)
-    width_threshold_mm = float(cfg.measurement.crack_width_threshold_mm)
     min_overlap_px = int(getattr(cfg.measurement, "source_observation_min_overlap_px", 20))
 
     canvas_h, canvas_w = analysis_image.shape[:2]
@@ -225,9 +224,9 @@ def detect_cracks(
         max_width_mm = to_mm(measurement.max_width_px, scale)
         # Calibration-gated severity (건설 크랙검사 기준 0.3mm) -- never graded
         # from px alone, matching to_mm's own "no calibration, no mm" rule.
-        severity = None
-        if max_width_mm is not None:
-            severity = "정밀점검대상" if max_width_mm >= width_threshold_mm else "경미"
+        # 모자이크 타일링 경로는 캔버스 해상도(보통 1cm/px)로 재므로 거의 항상 해상도 부족.
+        width_mm_per_px = mm_per_px(scale)
+        severity, severity_note = grade_severity(max_width_mm, width_mm_per_px, cfg)
         source_observations = _compute_source_observations(
             poly.polygon_px, seam_owner_map, seam_owner_index, source_transforms, min_overlap_px
         )
@@ -249,6 +248,8 @@ def detect_cracks(
                 max_width_mm=max_width_mm,
                 area_mm2=to_mm2(poly.area_px, scale),
                 severity=severity,
+                severity_note=severity_note,
+                width_mm_per_px=width_mm_per_px,
                 source_tile_ids=poly.source_tile_ids,
                 source_image_ids=source_image_ids,
                 source_observations=source_observations,

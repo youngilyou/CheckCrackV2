@@ -425,6 +425,8 @@ def main() -> None:
                 "source_image_ids": crack.source_image_ids,
                 # extra provenance/overlay fields, not read by CrackResultModel today
                 "severity": crack.severity,
+                "severity_note": crack.severity_note,
+                "width_mm_per_px": (round(crack.width_mm_per_px, 4) if crack.width_mm_per_px is not None else None),
                 "building_id": crack.building_id,
                 "structure_type": structure_profile["structure_type"],
                 "structure_type_calibrated": structure_profile["calibrated"],

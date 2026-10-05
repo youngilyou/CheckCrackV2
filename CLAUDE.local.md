@@ -2372,3 +2372,42 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
 `blend_rectified_images`로 재렌더링해 원본 사진과 정확히 일치(배경-왼쪽/벽-오른쪽) 확인, LEFT는
 수정 전/후 픽셀이 **100% 동일**(회귀 없음, `np.abs(old-new).sum()==0`으로 직접 확인). FRONT/BACK은
 넓게 훑는 비행이라 이 fallback 분기 자체를 안 타므로 영향 없음(사용자 확인으로 재검증 생략).
+
+## 2026-10-05 세션 기록: 0.3mm 폭 등급을 "해상도가 충분할 때만" 매기도록 변경 + 보고서 "추정값"/※ 주석 (사용자 확정: "명확히 기록 하시고요, 진행 하세요")
+
+### 배경 -- 왜 지금의 0.3mm 판정은 근거가 없나 (실측)
+- 측정 방식(`src/crack/raw_pipeline.py`): 원본 사진 픽셀에서 skeleton 길이 / skeleton 각 점의 경계까지 거리 x2의 최대값(최대폭) -> 그 위치의
+  호모그래피 국소 배율로 mm/px 환산(`local_scale_info`) -> 같은 크랙을 본 사진들 평균.
+- 현재 테스트 데이터는 원본 1px이 벽면 약 2.6mm(스티칭 캔버스 1cm/px, 원본이 약 3.8배 세밀). 0.3mm 크랙은 약 1/9 px라 사진에서 잴 수 없고,
+  폭 측정의 최소값이 약 1px(=2~3mm)이라 **검출된 크랙은 실제 폭과 무관하게 거의 전부 0.3mm 이상 = "정밀점검대상"**이 된다.
+- 실측 확인: FRONT V010 `FRONT_cracks.json` 1002건 **전부** "정밀점검대상", max_width_mm 최소 14.5mm / 중앙값 40.6mm (마스크 폭 부풀림도 포함된 값).
+- 0.3mm를 재려면 크랙이 최소 2~3px에 걸쳐야 함 -> 약 0.1~0.15 mm/px (지금보다 약 20배 세밀). 벽 전체를 그 해상도로 찍으면 사진 수 약 400배라
+  비현실적 -> **2단계 촬영 권고**: (1) 지금처럼 전체 촬영으로 크랙 후보 위치 찾기, (2) 후보 위치만 줌/근접 촬영(약 0.1 mm/px)으로 폭 측정.
+  + 폭을 아는 크랙 게이지/시편을 함께 찍어 측정값 검증(Ground Truth). 이 둘(①근접 촬영, ②GT 검증)은 실제 드론/게이지가 필요해서 **미착수**
+  (실제 촬영은 제안서 승인 대기 -- 메모리 `real_photo_capture_pending_proposal`).
+
+### 이번에 구현한 것 (③ 보고서 문구, ④ 해상도 게이트)
+- `config/pipeline.yaml`: `measurement.max_mm_per_px_for_severity: 0.15` 신규 (0.3mm 크랙이 최소 2px에 걸치는 해상도, 초기 검증 기준 ※ 주석 포함).
+- `src/crack/measurement.py::grade_severity(max_width_mm, width_mm_per_px, cfg)` -> `(severity, severity_note)`. 세 검출 경로(raw_pipeline / 모자이크
+  타일링 pipeline.py / multiview.py)가 전부 이 함수 하나로 등급을 매김. 해상도가 기준보다 거칠거나 모르면 severity=None +
+  severity_note="판정불가(해상도부족): 2.60 mm/px > 기준 0.15 mm/px". mm 값 자체는 그대로 출력(=추정값). 스케일이 없으면 기존처럼 (None, None).
+  raw_pipeline은 폭이 관측 사진들의 평균이라 **가장 거친 사진의 mm/px**로 판정(보수적).
+- `Crack`(types.py)에 `severity_note`, `width_mm_per_px` 추가 -> `{facade}_cracks*.json`에 같은 이름으로 기록(detect_cracks_folder.py,
+  detect_cracks_multiview_folder.py).
+- **기존(이번 변경 전) cracks.json**: `width_mm_per_px`가 없음 -> 보고서(`pdf_report.py::_apply_resolution_gate`)와 DB 적재(`CrackVisionArchiveQueryService`)가
+  그 severity를 쓰지 않음(보고서엔 "판정불가(해상도 미기록 -- 크랙검사 재실행 필요)"). 파일 자체는 안 고침. 크랙검사를 다시 돌리면 새 규칙으로 기록됨.
+- 보고서(`report.html`): 최대폭에 "mm 추정", 심각도 행에 "판정불가(해상도 부족) N건", 설명 문단에 GPS 기반 추정값/해상도 기준/근접 촬영 필요 +
+  ※ "본 값은 초기 검증 기준이며, 실제 DJI/Matrice 외벽 촬영 데이터와 Ground Truth 기반 성능평가 후 최종 확정한다." 카드에 "판정불가(해상도 부족)" 태그.
+  폭 분포 차트는 실제로 등급을 매긴 크랙이 있을 때만 mm 구간(0.2/0.3/0.5/1.0mm), 아니면 px 구간 + "해상도 부족으로 mm 구간 미표시".
+- 뷰어: 최대폭 표시를 "X mm 추정 (Y px)"로(`CrackReviewItem.WidthText`).
+
+### 검증
+- `grade_severity` 단위 확인(2.6 mm/px -> 판정불가, 0.1 mm/px + 0.5mm -> 정밀점검대상, 0.2mm -> 경미, 스케일 없음 -> None).
+- FRONT V010 결과(하드링크 임시 폴더, 원본 폴더 미변경, 확인 후 삭제)로 보고서 생성 -> 20건 전부 "판정불가(해상도 부족)", 문구/주석/차트 제목 육안 확인.
+- `dotnet build` 성공. **미검증**: 새 코드로 실제 크랙검사(GPU)를 다시 돌려 `width_mm_per_px`가 기록되는 것 -- 다음 크랙검사 실행 때 확인.
+
+### 다음 할 일 (실제 촬영 장비 확보 후, 사용자 결정 대기)
+1. 운영자 촬영 가이드에 "크랙 후보 근접 촬영 절차"(목표 0.1 mm/px, 거리/줌, 장수) 추가.
+2. 근접 사진을 해당 크랙에 연결(GPS/짐벌/영상 정합), 측정 우선순위: 근접 사진 > 전체 사진(추정 표시).
+3. 2~3px 폭 크랙용 서브픽셀 폭 측정(경계 밝기 변화 기반) -- 지금 방식(거리변환 x2)은 이 폭에서 오차가 큼.
+4. 게이지/시편 GT로 측정값 검증 후 `max_mm_per_px_for_severity`/0.3mm 기준 확정. 검증 전까지 보고서에 0.3mm 판정 근거를 단정하지 말 것.
