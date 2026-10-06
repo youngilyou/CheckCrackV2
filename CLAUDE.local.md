@@ -2474,6 +2474,10 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
 ### 주의
 - "분석 시작" 배정이 오면 CheckCrackViewer는 다운로드 **전에** archive_id를 `remote_downloads\processed_archive_ids.txt`에 기록함 ->
   다운로드가 실패해도 같은 archive를 다시 보내면 "중복 무시". 재시도하려면 그 줄을 지워야 함.
+- 새 서버(.43)는 archive_id가 1부터 다시 시작함(DB 확인: #1 10-05 429장, #2 10-07 422장). 예전 서버 기록 `71`이
+  남아 있으면 새 서버 #71이 "중복 무시"됨 -> 2026-10-07 `processed_archive_ids.txt`를 비우고 예전 값은
+  `processed_archive_ids.old_server_192.168.100.224.bak`로 백업(gitignore 대상). 뷰어는 시작할 때 이 파일을 읽으므로 재시작 후 반영.
+  서버를 또 옮기면 같은 처리 필요(기록이 서버 구분 없이 archive_id만 저장).
 - Postgres가 안 돼도 다운로드/분석은 진행됨(배정 메시지에 zip 경로가 들어 있음). 실패하는 건 보고서 후 결과 write-back뿐(경고만).
 - 결과 write-back은 버전 폴더 전체를 zip으로 올림 -- Dense 중간 파일 자동 삭제 이후 FRONT 기준 약 6~7 GB(이전 약 40 GB).
   최종 산출물만 올릴지 등 보관 범위는 사용자 결정 대기.
