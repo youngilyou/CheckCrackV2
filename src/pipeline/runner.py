@@ -352,6 +352,12 @@ def _restrict_reconstruction_to_images(sparse_dir: str | Path, keep_names: set[s
     return out_dir
 
 
+def _dense_cleanup_enabled(cfg: Config) -> bool:
+    """colmap.dense_cleanup_intermediate (default true) -- false keeps every dense intermediate
+    (e.g. to re-run stereo_fusion alone while debugging)."""
+    return bool(getattr(cfg.colmap, "dense_cleanup_intermediate", True))
+
+
 def _run_dense_hybrid_stage(
     facade_id: str,
     native_sparse_dir: str | Path,
@@ -363,6 +369,7 @@ def _run_dense_hybrid_stage(
     output_dir: Path,
     logger,
     edge_margin_m: float | None = None,
+    cleanup_intermediate: bool = True,
 ) -> bool:
     """Dense stereo (patch_match_stereo + stereo_fusion) on the NATIVE-scale
     reconstruction, then the dense + flat-mosaic hybrid, written as the
@@ -459,6 +466,23 @@ def _run_dense_hybrid_stage(
             num_points_total=dense_result.num_points_total,
             coverage_ratio=hybrid.quality.coverage_ratio,
         )
+        # 2026-10-06 (사용자 확정, 데이터 관리): every output above is written, so the dense
+        # intermediates nothing reads any more (~90% of the run folder) can go. Only after full
+        # success -- an earlier failure returns/raises before this and leaves them for diagnosis.
+        if cleanup_intermediate:
+            try:
+                from src.geometry.dense_stereo import cleanup_dense_intermediates
+
+                info = cleanup_dense_intermediates(output_dir / "colmap_dense" / "dense")
+                log_event(
+                    logger, "info",
+                    f"Dense 중간 파일 정리: {info['bytes_freed'] / 1e9:.1f} GB 삭제"
+                    if info["skipped_reason"] is None else f"Dense 중간 파일 정리 안 함: {info['skipped_reason']}",
+                    stage="DENSE_CLEANUP", facade_id=facade_id,
+                    deleted=info["deleted"], bytes_freed=info["bytes_freed"],
+                )
+            except Exception as exc:  # outputs are already written; a failed cleanup only costs disk space
+                log_event(logger, "warning", "Dense 중간 파일 정리 실패", facade_id=facade_id, error=str(exc))
         return True
     except ImportError:
         log_event(logger, "warning", "pycolmap dense-stereo API not available, skipping", facade_id=facade_id)
@@ -636,6 +660,7 @@ def _run_dense_only_track(
     # full pipeline) -- it is logged as DENSE_STEREO_FAILED/EMPTY, not turned into a failed run.
     _run_dense_hybrid_stage(
         facade_id, native_dir, aligned, plane, rect_result, sim3d, images_dir, output_dir, logger,
+        cleanup_intermediate=_dense_cleanup_enabled(cfg),
     )
     return True
 
@@ -762,7 +787,7 @@ def _run_reference_track(
     )
     _run_dense_hybrid_stage(
         facade_id, colmap_result.sparse_dir, aligned, plane, flat, sim3d, images_dir, output_dir, logger,
-        edge_margin_m=0.0,
+        edge_margin_m=0.0, cleanup_intermediate=_dense_cleanup_enabled(cfg),
     )
     return True
 
@@ -1205,6 +1230,7 @@ def _run_facade_pipeline(
                         _run_dense_hybrid_stage(
                             facade_id, colmap_result.sparse_dir, reconstruction, plane, rect_result,
                             colmap_sim3d, colmap_images_dir, output_dir, logger,
+                            cleanup_intermediate=_dense_cleanup_enabled(cfg),
                         )
             except ImportError:
                 log_event(

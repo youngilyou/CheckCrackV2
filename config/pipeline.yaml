@@ -56,6 +56,11 @@ colmap:
   max_coverage_gap_ratio: 0.5
   use_loftr_matching: true  # SIFT(match_exhaustive)를 LoFTR로 대체 (src/matching/loftr_colmap_bridge.py) -- 반복 패턴(창/환기구/발코니 패널) 오정합 근본 해결책. 2026-09-17 최초 확정, 2026-09-24 재확인: FRONT facade(422장) 기준 SuperPoint+LightGlue보다도 등록률/재투영오차 우수, 라이선스도 깨끗함(Apache 2.0). 이 설정은 09-13 baseline 되돌리기로 잠시 유실됐다가 이번에 재적용.
   use_dense_stereo: true  # COLMAP dense stereo(patch_match_stereo+stereo_fusion, pycolmap 순수 호출) + 같은 평면 flat mosaic hole-fill 하이브리드 (src/geometry/dense_stereo.py) -- 2026-09-23/24 gsplat3d PoC에서 검증, flat 단독의 발코니/돌출부 왜곡을 해결. 면 하나당 여러 시간(dense stereo 자체가 수 시간) 추가 소요 -- 2026-09-24 사용자 확정("UI와 모두 연결"): 시간보다 정확성 우선.
+  # 2026-10-06 (데이터 관리): Dense 결과/깊이 사이드카까지 전부 저장된 뒤 이후 아무것도 읽지 않는 중간 파일 삭제
+  # (normal_maps, photometric 깊이 맵, fused.ply.vis, 왜곡 보정 사진 -- FRONT 기준 69 GB -> 약 11 GB).
+  # 남는 것: geometric 깊이 맵 + sparse + fused.ply (크랙 깊이 배치/클릭 위치/깊이 재샘플용). 디버깅으로 융합만 다시
+  # 돌려야 할 때만 false. 기존 실행 폴더 정리: tools/cleanup_dense_intermediates.py
+  dense_cleanup_intermediate: true
   # 2026-09-26: 촬영 위치(GPS)가 한 줄로 늘어선 촬영(예: LEFT -- 드론이 벽을 따라 수직으로 오르내림)은 평평한 벽 +
   # 좁은 이동이라 COLMAP이 사진마다 초점거리를 따로 최적화하다 재구성이 휜다(LEFT 실측: 한 카메라의 초점거리가
   # 581~18642 px로 흩어짐, FRONT는 3730~3835 px). single_camera: auto(기본) = 그런 촬영일 때만 카메라 하나를

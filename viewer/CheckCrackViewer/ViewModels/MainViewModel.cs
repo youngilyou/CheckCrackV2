@@ -65,6 +65,7 @@ public partial class MainViewModel : ObservableObject
         ["DENSE_STEREO_PATCHMATCH"] = "Dense Stereo Depth 계산 시작",
         ["DENSE_STEREO_PROGRESS"] = "Dense Stereo Depth 계산 중",
         ["DENSE_STEREO_FUSION"] = "Dense Stereo 포인트 융합 중",
+        ["DENSE_CLEANUP"] = "Dense 중간 파일 정리",
         ["DENSE_STEREO_EMPTY"] = "Dense Stereo 결과 없음 (Flat 결과 유지)",
         ["DENSE_STEREO_FAILED"] = "Dense Stereo 실패 (Flat 결과 유지)",
         ["RECTIFIED_COLMAP_DENSE"] = "Dense Stereo 하이브리드 완료",
@@ -288,7 +289,11 @@ public partial class MainViewModel : ObservableObject
         _analysisBridge.StopReceived += s => _remoteJobs.MarkControlReceived(s.ArchiveId, "정지 요청됨 (미구현)");
 
         var workerId = string.IsNullOrWhiteSpace(CrackVisionWorkerId) ? Environment.MachineName : CrackVisionWorkerId;
-        _analysisBridge.Start(domainId: 31, workerId: workerId);
+        // 2026-10-07: the DDS-Router host (.42) is on another subnet and its domain-31 participant
+        // listens on 15166 (participant index 3), not the native default 7400+250*31+10=15160 --
+        // CRACKVIEWER_DDS_INITIAL_PEER now also accepts "ip:port". A bare "ip" keeps the old default.
+        var (peerHost, peerPort) = ParseDdsInitialPeer(Environment.GetEnvironmentVariable("CRACKVIEWER_DDS_INITIAL_PEER"));
+        _analysisBridge.Start(domainId: 31, workerId: workerId, initialPeerHost: peerHost, initialPeerPort: peerPort);
 
         _heartbeatTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _heartbeatTimer.Tick += (_, _) => _analysisBridge.SendHeartbeat(
@@ -302,6 +307,19 @@ public partial class MainViewModel : ObservableObject
         _elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _elapsedTimer.Tick += (_, _) => UpdateElapsedLabels();
         _elapsedTimer.Start();
+    }
+
+    /// <summary>"ip" or "ip:port" -> (host, port). Port 0 = native default (7400+250*domain+10);
+    /// empty/blank -> ("", 0), which leaves the native side on multicast-only discovery.</summary>
+    private static (string Host, int Port) ParseDdsInitialPeer(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return ("", 0);
+        var v = value.Trim();
+        var colon = v.LastIndexOf(':');
+        if (colon > 0 && int.TryParse(v[(colon + 1)..], out var port) && port is > 0 and <= 65535)
+            return (v[..colon], port);
+        return (v, 0);
     }
 
     private void UpdateElapsedLabels()

@@ -2411,3 +2411,73 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
 2. 근접 사진을 해당 크랙에 연결(GPS/짐벌/영상 정합), 측정 우선순위: 근접 사진 > 전체 사진(추정 표시).
 3. 2~3px 폭 크랙용 서브픽셀 폭 측정(경계 밝기 변화 기반) -- 지금 방식(거리변환 x2)은 이 폭에서 오차가 큼.
 4. 게이지/시편 GT로 측정값 검증 후 `max_mm_per_px_for_severity`/0.3mm 기준 확정. 검증 전까지 보고서에 0.3mm 판정 근거를 단정하지 말 것.
+
+## 2026-10-06 세션 기록: Dense Stereo 중간 파일 자동 삭제 (사용자 확정, 데이터 관리 목적)
+
+### 배경 (실측, FRONT V010)
+- 실행 폴더 69 GB 중 약 63 GB가 Dense 계산이 끝난 뒤 **아무 코드도 읽지 않는** 중간 파일: `stereo/normal_maps/` 52.9 GB, `stereo/depth_maps/*.photometric.bin`
+  8.8 GB, `fused.ply.vis` 1.0 GB, `dense/images/`(왜곡 보정 사진) 0.5 GB. 통째 압축해도 약 40~44 GB(float 노이즈라 압축 잘 안 됨, 샘플 실측).
+- 산출물 이후 분석(크랙검사, 뷰어, 보고서)에 필요한 것: 최종 산출물 약 0.3 GB + 원본 사진 0.5 GB + geometric 깊이 맵 8.8 GB + sparse + fused.ply
+  = **facade당 약 11 GB**. 깊이 파일이 없으면 크랙 위치/클릭 위치가 평면 방식(오차 약 2 px -> 7~15 px)으로 떨어질 뿐 분석 자체는 됨.
+- 실행 중 최대 사용량(약 69 GB)은 줄지 않음 -- 사용자: 상관없음(데이터 관리 관점 검토).
+
+### 구현
+- `src/geometry/dense_stereo.py`: `dense_intermediate_paths()`(삭제 대상 정의 -- 위 4종 + `consistency_graphs/`), `cleanup_dense_intermediates(dense_dir, dry_run)`
+  -- geometric 깊이 맵/sparse/fused.ply가 없으면 아무것도 안 지움(미완료 실행은 진단용으로 보존).
+- `src/pipeline/runner.py::_run_dense_hybrid_stage`: 하이브리드 모자이크 + 깊이 재샘플 + 산출물 저장 + `_depth_mapping.json` 저장이 **전부 성공한 뒤에만** 호출.
+  stage `DENSE_CLEANUP` 로그(삭제 GB). 정리 실패는 경고만(산출물은 이미 저장됨). 세 트랙(full/dense_only/reference) 모두 적용.
+- `config/pipeline.yaml`: `colmap.dense_cleanup_intermediate: true`(기본). 융합만 다시 돌리는 디버깅이 필요하면 `false`
+  (지우면 그런 경우 patch_match부터 수 시간 재실행 필요 -- 단 정상 재실행은 원래 `dense/`를 통째로 지우고 처음부터 계산하므로 영향 없음).
+- 기존 실행 폴더용: `tools/cleanup_dense_intermediates.py` / `cleanup_dense.bat <폴더> [--apply]` (기본 미리보기, 하위 폴더 재귀 탐색,
+  `*_analysis_colmap_dense.tif`가 없는 미완료 실행은 건너뜀). 뷰어 StageLabels에 `DENSE_CLEANUP` 추가.
+
+### 검증
+- 미리보기: BACK V002 64.2 GB / FRONT V010 63.2 GB / LEFT V003 7.1 GB / RIGHT V001 7.7 GB, 합계 142.3 GB 삭제 가능.
+- LEFT V003 하드링크 복사본에 실제 삭제(7.7 GB -> 1.1 GB, 원본 미변경 확인) 후: `DepthCanvasMapper.map_points` 결과가 원본과 **완전히 동일**(사진 5장 x 200점),
+  `click_locator.py` 클릭 2건의 깊이 마커/오차(2.47, 2.51 px)도 동일. 복사본은 삭제.
+- **미검증**: 파이프라인 안에서의 자동 호출(실제 Dense 전체 실행은 수 시간) -- 다음 실행에서 `DENSE_CLEANUP` 로그로 확인.
+
+## 2026-10-07 세션 기록: 원격 분석 경로(FacadePreviewer -> DDS Router -> AnalysisLoadBalancer -> CheckCrackViewer) 접속 설정 재구성 -- 서버 .224 -> .43 이전 대응
+
+### 구성 (비밀번호는 기록하지 않음)
+| 역할 | 주소 | 비고 |
+|---|---|---|
+| CheckCrackViewer + FacadePreviewer (이 PC) | 192.168.100.219 | 이더넷. Router/MngData와 **다른 서브넷** |
+| DDS Router | 192.168.219.42 | 이 PC -> 192.168.219.x 트래픽이 이 PC를 거치며 **출발지가 .42로 NAT됨** (Postgres 로그로 실측) |
+| MngData (backend_core, PostgreSQL 16, SFTP 원본 zip 저장) | 192.168.219.43 | 원본 zip: `/home/yiyoudb/ManageData/MngData/backend_core/data/crackvision_archive/` |
+| AnalysisLoadBalancer | (사용자 확인: 실행 중) | 이 PC에서는 실행 안 함 |
+| 예전 서버 | 192.168.100.224 | 현재 접속 안 됨. Z: 드라이브(`\192.168.100.224\DDS_Mng`)도 여기를 가리켜 사용 불가 |
+
+흐름: FacadePreviewer "분석 시작"(도메인 30) -> DDS Router(.42) -> AnalysisLoadBalancer -> AnalysisAssignment(도메인 31) -> CheckCrackViewer가 SFTP(.43)로 zip 다운로드 -> 압축 해제 -> 분석 -> 보고서 후 결과 zip SFTP 업로드 + PostgreSQL(.43) write-back.
+
+### CheckCrackViewer 설정 (`%APPDATA%\SmartCrackViewer\crackvision_db_settings.json`, 설정 화면 > CrackVisionDB에서 저장)
+- PostgreSQL: Host `192.168.219.43`, Port 5432, DB `mngdata`, User `mngdata`
+- SFTP: Host `192.168.219.43`(.42 아님 -- zip은 MngData에 있음), Port 22, User `yiyoudb`
+- Worker ID: 비움(컴퓨터 이름 사용)
+- 검증: SFTP 로그인 성공, 오늘 업로드한 `예시_아파트_101동_FRONT_20261007_002031.zip`(507.3 MB) 확인.
+
+### DDS 초기 피어 (서브넷이 달라 멀티캐스트 탐색 불가 -> 필수)
+- 사용자 환경 변수 `CRACKVIEWER_DDS_INITIAL_PEER=192.168.219.42:15166` 설정. 15166 = Router의 도메인 31 참가자 포트(participant index 3).
+- 코드 수정: 네이티브 브리지는 포트를 `7400+250*31+10=15160`으로 고정하고 포트용 환경 변수가 없었음 ->
+  `MainViewModel.ParseDdsInitialPeer`가 `ip:port`를 받아 `AnalysisBridgeService.Start(initialPeerHost, initialPeerPort)`로 전달(`ip`만 주면 기존 기본 포트).
+- 환경 변수는 새로 시작한 프로세스에만 적용됨 -- 뷰어는 `run_viewer.bat`/바로가기로 실행(VS Code 터미널은 예전 환경).
+- **미확인**: Router(.42) 로그에서 도메인 31에 이 PC의 CheckCrackViewer가 탐지됐는지 -- Router 측 세션에서 확인 예정.
+
+### MngData PostgreSQL 외부 접속 (.43에서 사용자가 sudo 실행)
+- `scripts/allow_postgres_remote_access.sh`(MngData 저장소)는 `PG_VERSION="14"` 고정인데 서버는 **PostgreSQL 16** -> 버전만 바꿔 파이프 실행:
+  `sed 's/^PG_VERSION="14"/PG_VERSION="16"/' scripts/allow_postgres_remote_access.sh | sudo bash -s -- <IP>`
+- 1차: `192.168.100.219/32` 추가 -> listen_addresses='*', 5432 LISTEN 확인. 그러나 접속 시 서버가 본 출발지가 `192.168.219.42`(NAT)라
+  `no pg_hba.conf entry for host "192.168.219.42"`로 거부.
+- 2차(안내함, 실행 여부 확인 필요): 같은 명령을 `192.168.219.42`로 재실행. 이 경우 .42를 거쳐 오는 모든 PC가 mngdata 비밀번호로 접속 시도 가능(내부망 전제).
+- 후속(다른 저장소): MngData 스크립트가 설치된 PG 버전을 자동 탐지하도록 수정 권장.
+
+### 주의
+- "분석 시작" 배정이 오면 CheckCrackViewer는 다운로드 **전에** archive_id를 `remote_downloads\processed_archive_ids.txt`에 기록함 ->
+  다운로드가 실패해도 같은 archive를 다시 보내면 "중복 무시". 재시도하려면 그 줄을 지워야 함.
+- Postgres가 안 돼도 다운로드/분석은 진행됨(배정 메시지에 zip 경로가 들어 있음). 실패하는 건 보고서 후 결과 write-back뿐(경고만).
+- 결과 write-back은 버전 폴더 전체를 zip으로 올림 -- Dense 중간 파일 자동 삭제 이후 FRONT 기준 약 6~7 GB(이전 약 40 GB).
+  최종 산출물만 올릴지 등 보관 범위는 사용자 결정 대기.
+
+### 같은 기간 확인된 것
+- BACK 재실행(V003, 2026-10-06 20:46 완료): `DENSE_CLEANUP 64.2 GB 삭제`가 Dense 완료 직후 실제 실행에서 동작 확인.
+- 미커밋 변경: Dense 중간 파일 자동 삭제 + `cleanup_dense.bat`/도구, DDS 초기 피어 `ip:port` 파싱. 사용자가 결과 확인 후 커밋/푸시 예정.

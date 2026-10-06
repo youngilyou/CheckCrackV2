@@ -500,3 +500,60 @@ def build_hybrid_mosaic(
         seam_owner_map=owner_map,
         seam_owner_index=combined_index,
     )
+
+
+def dense_intermediate_paths(dense_dir: str | Path) -> list[Path]:
+    """Files under a finished `colmap_dense/dense` that NOTHING reads once the
+    `*_colmap_dense` outputs and `{facade}_depth_mapping.json` exist (2026-10-06,
+    사용자 확정 -- 데이터 관리: FRONT V010 69 GB 중 약 63 GB).
+
+    Kept (still read later): `stereo/depth_maps/*.geometric.bin` + `sparse/`
+    (src/geometry/depth_mapping.py -- crack depth placement, click locator,
+    depth_fill) and `fused.ply` (depth_fill.roof_zone_window).
+    Removed: `stereo/normal_maps/` (fusion input only), `stereo/depth_maps/
+    *.photometric.bin` (patch_match's first pass), `stereo/consistency_graphs/`,
+    `fused.ply.vis` (no reader), `images/` (undistorted copies -- later steps
+    read the original photos). A rerun never reuses any of these: run_dense_stereo
+    wipes `dense/` and recomputes from scratch."""
+    dense_dir = Path(dense_dir)
+    stereo = dense_dir / "stereo"
+    paths: list[Path] = []
+    for d in (stereo / "normal_maps", stereo / "consistency_graphs", dense_dir / "images"):
+        if d.is_dir():
+            paths.append(d)
+    if (stereo / "depth_maps").is_dir():
+        paths.extend(sorted((stereo / "depth_maps").glob("*.photometric.bin")))
+    vis = dense_dir / "fused.ply.vis"
+    if vis.is_file():
+        paths.append(vis)
+    return paths
+
+
+def _path_size(p: Path) -> int:
+    if p.is_file():
+        return p.stat().st_size
+    return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+
+
+def cleanup_dense_intermediates(dense_dir: str | Path, dry_run: bool = False) -> dict:
+    """Delete dense_intermediate_paths(dense_dir). Refuses (deletes nothing) unless
+    the files the later steps need are present -- a half-finished run is left
+    untouched for diagnosis. Returns {"deleted": n, "bytes_freed": b, "skipped_reason": str|None}."""
+    import shutil
+
+    dense_dir = Path(dense_dir)
+    depth_dir = dense_dir / "stereo" / "depth_maps"
+    has_geometric = depth_dir.is_dir() and any(depth_dir.glob("*.geometric.bin"))
+    if not (has_geometric and (dense_dir / "sparse").is_dir() and (dense_dir / "fused.ply").is_file()):
+        return {"deleted": 0, "bytes_freed": 0, "skipped_reason": "geometric depth maps / sparse / fused.ply 없음"}
+    paths = dense_intermediate_paths(dense_dir)
+    freed = 0
+    for p in paths:
+        size = _path_size(p)
+        if not dry_run:
+            if p.is_dir():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+        freed += size
+    return {"deleted": len(paths), "bytes_freed": freed, "skipped_reason": None}
