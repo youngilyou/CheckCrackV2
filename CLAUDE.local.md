@@ -2575,7 +2575,10 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
     `uploads/reports/`에 저장 후 Report.PdfUrl, 등급은 CheckCrackV2 severity 사용(해상도 부족은 미분류), 동기화 주기 10분.
 - 운영 반영에 필요한 것(미완): SmartCrackWeb 운영 서버(외부 smartcrack.ddns.net:8444 -> 121.64.93.72, 내부 호스트 미확인)에
   `ConnectionStrings:CrackVisionPostgres` + `CrackVision:Sftp*` 설정과 배포, `.43` pg_hba에 그 서버 IP 허용.
-- **미해결(결정 필요)**: 균열은 그 동의 신청 면(동/서/남/북)이 하나일 때만 연결됨. 한 동에 4면을 신청하면 촬영 방향(FRONT/BACK)이
-  어느 나침반 면인지 몰라 균열이 들어가지 않음(자동 환산 금지 원칙) -> 사람이 매핑을 정하는 위치(GenerateJson/FacadePreviewer/SmartCrackWeb) 결정 필요.
+- 촬영 면 -> 신청 면 연결(사용자 확정: 세 곳 모두): MySQL 표 `FacadeFaceMappings`(RequestId, DongNo, Direction, Face; SmartCrackWeb 마이그레이션
+  `AddFacadeFaceMappings`, AutoMigrate로 배포 시 생성). GenerateJson `8d6bf69`: 동별 FRONT/BACK/LEFT/RIGHT -> 동/서/남/북 지정, 확정 시 표 + JSON FaceMap 기록
+  (표가 없으면 JSON만). FacadePreviewer: 전송 창에 "→ 신청서 면: 1000동 남면" 표시(표시만). SmartCrackWeb `d2d09fe`: 동기화가 표로 균열을 신청 면에 붙임
+  (표 없으면 신청 면이 하나일 때만, 아니면 경고), 관리자 화면 `/app/admin/face-mappings`(Admin 역할만), 보고서 목록 다운로드가 데모 알림 -> 실제 PDF 열기로 수정.
+  MngData/DDS/CheckCrackV2는 변경 없음.
 - archive #3(오늘 분석 중)은 계약 없는 테스트 데이터라 SmartCrackWeb에는 나오지 않음 -- 새 GenerateJson 파일로 다시 촬영/전송 필요.
 - 미검증: 네 프로그램 모두 빌드만 확인(계약 조회 SQL은 실제 MySQL에서 확인). 사용자가 퇴근 후 검증 예정.
