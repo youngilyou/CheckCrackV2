@@ -21,14 +21,29 @@ public partial class LoginWindow : Window
             DialogResult = true;
             Close();
         };
+        PreviewKeyDown += LoginWindow_PreviewKeyDown;
+    }
+
+    // 2026-10-07 (사용자 결정): 비밀번호 재설정은 Ctrl+R로만 연다 -- 화면 어디에도 표시하지 않는다(아는 사람만 사용).
+    // 입력 칸에 포커스가 있어도 동작하도록 창 단위 PreviewKeyDown에서 받는다.
+    private void LoginWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            e.Handled = true;
+            new ResetPasswordWindow(ViewModel.Username) { Owner = this }.ShowDialog();
+        }
     }
 
     // 2026-10-07: 아이디/비밀번호 찾기 -- 이 PC의 로컬 계정(SQLite) 기준. 회사 계정(SmartOneFlow) 연동은 차후.
     private void FindId_Click(object sender, MouseButtonEventArgs e) =>
         new FindIdWindow { Owner = this }.ShowDialog();
 
+    // 비밀번호는 되돌릴 수 없는 형태(BCrypt)로만 저장돼 찾아서 보여줄 수 없고, 임시 비밀번호도 발급하지 않는다(사용자 결정).
     private void ResetPassword_Click(object sender, MouseButtonEventArgs e) =>
-        new ResetPasswordWindow(ViewModel.Username) { Owner = this }.ShowDialog();
+        MessageBox.Show(this,
+            "비밀번호는 암호화되어 저장되므로 찾아서 보여드릴 수 없습니다.\n관리자에게 문의하세요.",
+            "비밀번호 찾기", MessageBoxButton.OK, MessageBoxImage.Information);
 
     private void PasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
     {

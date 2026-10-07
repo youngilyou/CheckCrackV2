@@ -4,25 +4,24 @@ using CheckCrackViewer.Services;
 
 namespace CheckCrackViewer.Views;
 
+/// <summary>2026-10-07: 로그인 창 Ctrl+R(숨김)로만 여는 비밀번호 재설정 -- 화면 어디에도 이 기능을 표시하지 않는다.</summary>
 public partial class ResetPasswordWindow : Window
 {
     public ResetPasswordWindow(string? username = null)
     {
         InitializeComponent();
         TargetInput.Text = username ?? "";
-        // 계정이 하나뿐이면 확인해 줄 다른 관리자가 없다 -- 재설정 불가를 먼저 알린다.
-        if (UserStore.CountUsers() <= 1)
-        {
-            GuideText.Text = "이 PC에는 계정이 하나뿐이라 다른 관리자 확인으로 재설정할 수 없습니다. "
-                + "시스템 관리자에게 문의하세요. (평소에 관리자 계정을 하나 더 만들어 두면 여기서 재설정할 수 있습니다.)";
-            ResetButton.IsEnabled = false;
-        }
         Loaded += (_, _) => (string.IsNullOrEmpty(TargetInput.Text) ? (UIElement)TargetInput : NewPasswordInput).Focus();
     }
 
     private void Reset_Click(object sender, RoutedEventArgs e)
     {
         ResultText.Foreground = Brushes.IndianRed;
+        if (string.IsNullOrWhiteSpace(TargetInput.Text))
+        {
+            ResultText.Text = "아이디를 입력하세요.";
+            return;
+        }
         if (NewPasswordInput.Password.Length < 4)
         {
             ResultText.Text = "새 비밀번호는 4자 이상이어야 합니다.";
@@ -35,11 +34,9 @@ public partial class ResetPasswordWindow : Window
         }
         try
         {
-            var (ok, error) = UserStore.ResetPasswordByAdmin(TargetInput.Text, AdminInput.Text,
-                AdminPasswordInput.Password, NewPasswordInput.Password);
-            if (!ok)
+            if (!UserStore.ResetPassword(TargetInput.Text, NewPasswordInput.Password))
             {
-                ResultText.Text = error;
+                ResultText.Text = "해당 아이디가 없습니다.";
                 return;
             }
             ResultText.Foreground = Brushes.SeaGreen;
