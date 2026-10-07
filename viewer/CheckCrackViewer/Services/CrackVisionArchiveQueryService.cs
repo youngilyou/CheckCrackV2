@@ -68,9 +68,9 @@ internal sealed class ScaleColmapJson
 public sealed record FacadeAnalysisResultEntry(string FacadeId, string? StitchingZipPath, string? ReportPath, string? Status,
     string? ResultsDir = null)
 {
-    /// <summary>2026-10-07: results now live as individual files in ResultsDir (no zip) -- either form
-    /// counts as "stitching result available".</summary>
-    public bool HasStitchingResult => !string.IsNullOrEmpty(StitchingZipPath) || !string.IsNullOrEmpty(ResultsDir);
+    /// <summary>Legacy zip result (before 2026-10-07). New results (ResultsDir) are loaded with
+    /// "서버 결과 불러오기" instead (MainViewModel.LoadServerResults).</summary>
+    public bool HasStitchingResult => !string.IsNullOrEmpty(StitchingZipPath);
 }
 
 /// <summary>One row of MngData backend_core's crackvision_archives table (see
@@ -442,6 +442,21 @@ public static class CrackVisionArchiveQueryService
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
         await tx.CommitAsync(cancellationToken);
+    }
+
+    /// <summary>2026-10-07: 계약 종료 정리 후 이 PC의 로컬 데이터가 지워졌으므로 facade_analysis_results[facade]에서
+    /// dense_storage(이 PC 경로 기록)를 뺀다. 다른 키(보고서/결과 폴더 등)는 그대로.</summary>
+    public static async Task ClearDenseStorageAsync(CrackVisionDbSettings settings, long archiveId, string facadeId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = new NpgsqlConnection(BuildConnString(settings));
+        await conn.OpenAsync(cancellationToken);
+        await using var cmd = new NpgsqlCommand(
+            "UPDATE crackvision_archives SET facade_analysis_results = facade_analysis_results #- ARRAY[$1, 'dense_storage'] " +
+            "WHERE archive_id = $2", conn);
+        cmd.Parameters.AddWithValue(facadeId);
+        cmd.Parameters.AddWithValue(archiveId);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
     /// <summary>2026-10-07: retention_state + cleanup_due_at per archive (for DenseRetentionService).

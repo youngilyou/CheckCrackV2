@@ -31,7 +31,12 @@ public sealed partial class RemoteArchiveRowViewModel : ObservableObject
     /// <summary>2026-10-07: folder on .43 holding the facade's individually uploaded result files (new
     /// write-back, no zip) -- the most recent facade's, like StitchingZipPath.</summary>
     public string? ResultsDir => Record.FacadeResults.Select(f => f.ResultsDir).LastOrDefault(d => !string.IsNullOrEmpty(d));
-    public bool HasStitchingResult => !string.IsNullOrEmpty(Record.StitchingZipPath) || !string.IsNullOrEmpty(ResultsDir);
+    public bool HasStitchingResult => !string.IsNullOrEmpty(Record.StitchingZipPath);
+
+    /// <summary>2026-10-07: 서버(.43 analysis_results)에 파일별로 저장된 결과가 있는 면이 하나라도 있음 --
+    /// "서버 결과 불러오기"(원본 사진 + 결과를 받아 뷰어에 등록) 버튼 표시 조건.</summary>
+    public bool HasServerResults => Record.FacadeResults.Any(f => !string.IsNullOrEmpty(f.ResultsDir));
+    public bool CanLoadServerResults => HasServerResults && IsNotBusy;
     public bool HasReport => !string.IsNullOrEmpty(Record.ReportPath);
 
     /// <summary>2026-08-29: 방위(면)가 여러 개인 archive는 facade마다 결과가 따로 있음
@@ -53,6 +58,7 @@ public sealed partial class RemoteArchiveRowViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsNotBusy))]
     [NotifyPropertyChangedFor(nameof(CanDownloadStitchingResult))]
     [NotifyPropertyChangedFor(nameof(CanDownloadReport))]
+    [NotifyPropertyChangedFor(nameof(CanLoadServerResults))]
     private bool _isBusy;
 
     public bool IsNotBusy => !IsBusy;

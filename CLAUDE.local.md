@@ -2582,3 +2582,15 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
   MngData/DDS/CheckCrackV2는 변경 없음.
 - archive #3(오늘 분석 중)은 계약 없는 테스트 데이터라 SmartCrackWeb에는 나오지 않음 -- 새 GenerateJson 파일로 다시 촬영/전송 필요.
 - 미검증: 네 프로그램 모두 빌드만 확인(계약 조회 SQL은 실제 MySQL에서 확인). 사용자가 퇴근 후 검증 예정.
+
+## 2026-10-07 세션 기록 (4): 결과 보관/불러오기 정책 + 로그인 계정
+- **보관 정책(사용자 확정)**: 분석한 PC의 archive 폴더(사진 + output + Dense)는 **계약 종료까지 삭제하지 않는다**. 뷰어는 기본적으로 로컬 output을 읽는다.
+- **"서버 결과 불러오기"**(설정 > 수동 다운로드, 결과가 파일별로 저장된 archive에 표시): 원본 zip을 받아 `{다운로드 폴더}\extracted\{회사}_{동}_{archive}`에 풀고
+  (이미 있으면 재사용), 면마다 `.43 analysis_results/{archive}/{면}/`을 새 버전 폴더(Vnnn)로 받아 등록 -> 결과 보기/균열 검토/보고서 재생성(서버 반영) 그대로 사용.
+  Dense 깊이 데이터는 서버에 없어 깊이 기반 크랙 위치/클릭 위치는 평면 방식. 예전 zip 결과(stitching_zip_path)는 기존 "스티칭 결과" 버튼 그대로.
+- **계약 종료 정리**(DenseRetentionService, 시작 2분 후/6시간마다): retention_state가 `cleaned` 또는 (`cleanup_pending` + cleanup_due_at 지남)이면
+  BACK의 상위 폴더(= archive 폴더, 이름이 `_{archive_id}`로 끝날 때만) 통째로 삭제 + DB `facade_analysis_results[면].dense_storage` 삭제.
+  폴더 구조가 다르면 Dense 폴더만 지우고 경고. 원격 분석 저장 시와 서버 결과 불러오기 시 모두 등록. (다운로드한 원본 zip `zips\*.zip`은 대상 아님)
+- MngData 웹: "스티칭 결과" 열 제거(`012c581`). 모자이크는 SmartCrack Viewer에서 본다.
+- 로그인: "비밀번호 찾기"는 안내만(BCrypt라 원문 복구 불가, 임시 비밀번호 없음), **Ctrl+R(숨김)** = 아이디 + 새 비밀번호로 재설정.
+  아이디 찾기 = 이름으로 찾아 앞 2글자만 표시. users.db는 CheckCrackV2 폴더(`users.db`, git 제외)로 이동, 예전 %APPDATA% 계정은 첫 실행 때 자동 복사.

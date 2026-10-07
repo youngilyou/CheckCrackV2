@@ -566,11 +566,19 @@
                                                              이제 결과가 실제로 존재할 때만(HasStitchingResult/HasReport) 버튼
                                                              자체가 나타나고, IsEnabled는 그중에서도 다운로드 진행 중(IsBusy)일 때만
                                                              잠깐 비활성화하는 별개의 역할로 남겨둠. -->
-                                                        <Button Grid.Column="8" Content="스티칭 결과" Margin="6,0,0,0" Padding="8,4"
-                                                                Visibility="{Binding ShowSingleStitchingResult, Converter={StaticResource TruthyToVisibilityConverter}}"
-                                                                IsEnabled="{Binding CanDownloadStitchingResult}"
-                                                                Command="{Binding DataContext.DownloadStitchingResultCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                                CommandParameter="{Binding}"/>
+                                                        <StackPanel Grid.Column="8" Orientation="Horizontal">
+                                                            <Button Content="스티칭 결과" Margin="6,0,0,0" Padding="8,4"
+                                                                    Visibility="{Binding ShowSingleStitchingResult, Converter={StaticResource TruthyToVisibilityConverter}}"
+                                                                    IsEnabled="{Binding CanDownloadStitchingResult}"
+                                                                    Command="{Binding DataContext.DownloadStitchingResultCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                    CommandParameter="{Binding}"/>
+                                                            <!-- 2026-10-07: 서버(.43)에 파일별로 저장된 결과 + 원본 사진을 받아 뷰어에 등록. -->
+                                                            <Button Content="서버 결과 불러오기" Margin="6,0,0,0" Padding="8,4"
+                                                                    Visibility="{Binding HasServerResults, Converter={StaticResource TruthyToVisibilityConverter}}"
+                                                                    IsEnabled="{Binding CanLoadServerResults}"
+                                                                    Command="{Binding DataContext.LoadServerResultsCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                    CommandParameter="{Binding}"/>
+                                                        </StackPanel>
                                                         <Button Grid.Column="9" Content="보고서" Margin="6,0,0,0" Padding="8,4"
                                                                 Visibility="{Binding ShowSingleReport, Converter={StaticResource TruthyToVisibilityConverter}}"
                                                                 IsEnabled="{Binding CanDownloadReport}"

@@ -653,12 +653,7 @@ public partial class MainViewModel : ObservableObject
     {
         var remotePath = row.StitchingZipPath;
         if (string.IsNullOrEmpty(remotePath))
-        {
-            // 2026-10-07: new write-back stores files, not a zip -- fetch the results folder instead.
-            if (!string.IsNullOrEmpty(row.ResultsDir))
-                await DownloadResultsFolderAsync(row, row.ResultsDir, "");
             return;
-        }
         row.IsBusy = true;
         try
         {
@@ -678,25 +673,70 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>2026-10-07: 결과 폴더(.43 analysis_results/{archive}/{면}/) 전체를 받아
-    /// {다운로드 폴더}\analysis_results\{archive}\{면}\에 저장 -- 모자이크/크랙/보고서/균열 원본 사진.
-    /// 분석한 PC가 아니어도 결과를 볼 수 있게 하기 위함(예전 zip 대신).</summary>
-    private async Task DownloadResultsFolderAsync(RemoteArchiveRowViewModel row, string remoteDir, string label)
+    /// <summary>2026-10-07 (사용자 확정) "서버 결과 불러오기": 이 PC에 결과가 없을 때(다른 PC, 또는 로컬 output이
+    /// 없어진 경우) .43에서 원본 사진(zip)과 분석 결과(analysis_results/{archive}/{면}/)를 받아 뷰어에 등록한다 --
+    /// 그 뒤로는 분석한 PC와 똑같이 결과 보기/균열 검토/보고서 재생성(서버 반영)을 쓸 수 있다. 결과는 면마다 새
+    /// 버전 폴더(Vnnn)로 들어가 기존 로컬 결과를 덮어쓰지 않는다. Dense 깊이 데이터는 서버에 없으므로 깊이 기반
+    /// 크랙 위치/클릭 위치는 평면 방식으로 동작한다. 기본은 여전히 로컬 output을 그대로 읽는다(이 버튼은 필요할 때만).
+    /// 받은 데이터도 계약 종료 정리 대상으로 등록된다(DenseRetentionService).</summary>
+    [RelayCommand]
+    private async Task LoadServerResults(RemoteArchiveRowViewModel row)
     {
+        var archive = row.Record;
+        var withResults = archive.FacadeResults.Where(f => !string.IsNullOrEmpty(f.ResultsDir)).ToList();
+        if (withResults.Count == 0)
+            return;
         row.IsBusy = true;
         try
         {
-            row.Status = $"{label}스티칭 결과 다운로드 중...";
             var settings = BuildCrackVisionSettings();
-            var parts = remoteDir.TrimEnd('/').Split('/');
-            var facade = parts.Length > 0 ? parts[^1] : "result";
-            var localDir = Path.Combine(settings.DownloadFolder, "analysis_results", row.ArchiveId.ToString(), facade);
-            var count = await SftpDownloadService.DownloadFolderAsync(settings, remoteDir, localDir);
-            row.Status = $"{label}스티칭 결과 다운로드 완료 ({count}개): {localDir}";
+            var extractDir = Path.Combine(settings.DownloadFolder, "extracted",
+                $"{archive.Company}_{archive.Building}_{archive.ArchiveId}");
+            // 원본 사진이 이미 받아져 있으면 다시 받지 않는다(그 안의 기존 output도 그대로 둠).
+            if (!Directory.Exists(extractDir) || !Directory.EnumerateFileSystemEntries(extractDir).Any())
+            {
+                row.Status = "원본 사진 다운로드 중...";
+                var remoteFileName = Path.GetFileName(archive.ZipPath);
+                if (string.IsNullOrWhiteSpace(remoteFileName))
+                    remoteFileName = $"{archive.ArchiveId}.zip";
+                var localZipPath = Path.Combine(settings.DownloadFolder, "zips", remoteFileName);
+                await SftpDownloadService.DownloadAsync(settings, archive.ZipPath, localZipPath);
+                row.Status = "압축 해제 중...";
+                Directory.CreateDirectory(Path.GetDirectoryName(extractDir)!);
+                await Task.Run(() => System.IO.Compression.ZipFile.ExtractToDirectory(localZipPath, extractDir));
+            }
+
+            var facades = RegisterExtractedArchive(extractDir, archive.Company, archive.Building, archive.ArchiveId, archive.ZipPath);
+            var loaded = new List<string>();
+            foreach (var entry in withResults)
+            {
+                var facade = facades.FirstOrDefault(f => string.Equals(f.FacadeId, entry.FacadeId, StringComparison.OrdinalIgnoreCase));
+                if (facade == null)
+                {
+                    OnRemoteJobProgress("WARNING", $"[서버 결과] archive #{archive.ArchiveId} {entry.FacadeId}: 원본 사진에 그 면 폴더가 없어 건너뜀");
+                    continue;
+                }
+                row.Status = $"[{entry.FacadeId}] 서버 결과 받는 중...";
+                var baseDir = GetFacadeOutputDir(facade);
+                var (version, versionDir) = FacadeVersionStore.AllocateNextVersionDir(baseDir);
+                var count = await SftpDownloadService.DownloadFolderAsync(settings, entry.ResultsDir!, versionDir);
+                FacadeVersionStore.RecordVersionSuccess(baseDir, version, $"server:{LoggedInUsername}");
+                if (Directory.EnumerateFiles(versionDir, "*_cracks*.json").Any())
+                    FacadeVersionStore.UpdateStageStatus(baseDir, "crack", "OK");
+                if (Directory.EnumerateFiles(versionDir, "*_report.pdf").Any())
+                    FacadeVersionStore.UpdateStageStatus(baseDir, "report", "OK");
+                DenseRetentionService.Register(RootPath, archive.ArchiveId, facade.FacadeId, baseDir);
+                loaded.Add($"{entry.FacadeId}({count}개, {version})");
+            }
+            RescanFacadeOutputs();
+            row.Status = loaded.Count == 0
+                ? "불러온 면이 없습니다 (LIVE LOG 참고)."
+                : $"서버 결과 불러오기 완료: {string.Join(", ", loaded)} -- 왼쪽 목록/결과 보기에서 확인. 위치: {extractDir}";
+            OnRemoteJobProgress("INFO", $"[서버 결과] archive #{archive.ArchiveId}: {string.Join(", ", loaded)} 불러옴 ({extractDir})");
         }
         catch (Exception ex)
         {
-            row.Status = $"{label}실패: {ex.Message}";
+            row.Status = $"실패: {ex.Message}";
         }
         finally
         {
@@ -739,11 +779,7 @@ public partial class MainViewModel : ObservableObject
         var (row, entry) = (request.Row, request.Entry);
         var remotePath = entry.StitchingZipPath;
         if (string.IsNullOrEmpty(remotePath))
-        {
-            if (!string.IsNullOrEmpty(entry.ResultsDir))
-                await DownloadResultsFolderAsync(row, entry.ResultsDir, $"[{entry.FacadeId}] ");
             return;
-        }
         row.IsBusy = true;
         try
         {
@@ -1936,8 +1972,8 @@ public partial class MainViewModel : ObservableObject
             outputDir, facade.EffectiveAnalysisImagePath,
             facade.CoverageRatioColmap ?? facade.CoverageRatio, facade.NeedsRetake, facade.HasRectifiedMosaic);
 
-        if (denseDirs.Count > 0)
-            DenseRetentionService.Register(RootPath, archiveId, facade.FacadeId, baseOutputDir);
+        // 2026-10-07: 이 PC의 archive 폴더(사진 + output + Dense)는 계약 종료까지 보관 -> 종료 정리 대상으로 등록.
+        DenseRetentionService.Register(RootPath, archiveId, facade.FacadeId, baseOutputDir);
 
         OnRemoteJobProgress("INFO", $"[결과 저장] archive #{archiveId} {facade.FacadeId}: 파일 {records.Count}개 "
             + $"({records.Sum(r => r.SizeBytes) / 1e9:F2} GB) 업로드, Dense 데이터 {denseBytes / 1e9:F1} GB는 이 PC에 보관");
