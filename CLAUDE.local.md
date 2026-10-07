@@ -2590,7 +2590,8 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
   Dense 깊이 데이터는 서버에 없어 깊이 기반 크랙 위치/클릭 위치는 평면 방식. 예전 zip 결과(stitching_zip_path)는 기존 "스티칭 결과" 버튼 그대로.
 - **계약 종료 정리**(DenseRetentionService, 시작 2분 후/6시간마다): retention_state가 `cleaned` 또는 (`cleanup_pending` + cleanup_due_at 지남)이면
   BACK의 상위 폴더(= archive 폴더, 이름이 `_{archive_id}`로 끝날 때만) 통째로 삭제 + DB `facade_analysis_results[면].dense_storage` 삭제.
-  폴더 구조가 다르면 Dense 폴더만 지우고 경고. 원격 분석 저장 시와 서버 결과 불러오기 시 모두 등록. (다운로드한 원본 zip `zips\*.zip`은 대상 아님)
+  폴더 구조가 다르면 Dense 폴더만 지우고 경고. 원격 분석 저장 시와 서버 결과 불러오기 시 모두 등록. 다운로드한 원본 zip(`...\zips\{archive_id}.zip` 또는 서버 파일명)도 함께 삭제.
+- 같은 데이터를 다시 받을 때는 예전 파일을 먼저 지우고 받는다(SftpDownloadService.DownloadAsync).
 - MngData 웹: "스티칭 결과" 열 제거(`012c581`). 모자이크는 SmartCrack Viewer에서 본다.
 - 로그인: "비밀번호 찾기"는 안내만(BCrypt라 원문 복구 불가, 임시 비밀번호 없음), **Ctrl+R(숨김)** = 아이디 + 새 비밀번호로 재설정.
   아이디 찾기 = 이름으로 찾아 앞 2글자만 표시. users.db는 CheckCrackV2 폴더(`users.db`, git 제외)로 이동, 예전 %APPDATA% 계정은 첫 실행 때 자동 복사.

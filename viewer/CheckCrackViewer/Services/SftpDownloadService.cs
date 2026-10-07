@@ -44,6 +44,10 @@ public static class SftpDownloadService
         if (string.IsNullOrWhiteSpace(settings.SftpPassword))
             throw new InvalidOperationException("SFTP password가 설정되지 않았습니다 (설정 화면에서 CrackVisionDB/SFTP 접속 정보를 입력하세요).");
 
+        // 2026-10-07 (사용자 지시): 같은 데이터를 다시 받을 때는 예전 파일을 먼저 지우고 받는다.
+        if (File.Exists(localPath))
+            File.Delete(localPath);
+
         for (var attempt = 1; ; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();

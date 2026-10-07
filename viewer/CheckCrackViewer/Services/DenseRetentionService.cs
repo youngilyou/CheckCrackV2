@@ -126,6 +126,32 @@ public static class DenseRetentionService
         return archiveDir.FullName;
     }
 
+    /// <summary>Downloaded original zips of this archive: {...}\extracted\{archive folder} -> {...}\zips\ with
+    /// "{archive_id}.zip" (remote-analysis download) or the server's own file name (manual download, from
+    /// archive_link.json). Only when the archive folder really sits under an "extracted" folder.</summary>
+    private static List<string> DownloadedZipsOf(DenseRetentionEntry e, string archiveFolder)
+    {
+        var result = new List<string>();
+        var extracted = Directory.GetParent(archiveFolder);
+        if (extracted == null || !string.Equals(extracted.Name, "extracted", StringComparison.OrdinalIgnoreCase) || extracted.Parent == null)
+            return result;
+        var zipsDir = Path.Combine(extracted.Parent.FullName, "zips");
+        var names = new List<string> { $"{e.ArchiveId}.zip" };
+        var remoteZip = ArchiveLinkStore.TryLoad(e.BaseOutputDir)?.RemoteZipPath;
+        if (!string.IsNullOrEmpty(remoteZip))
+        {
+            var slash = remoteZip.LastIndexOf('/');
+            names.Add(slash >= 0 ? remoteZip[(slash + 1)..] : remoteZip);
+        }
+        foreach (var name in names.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var path = Path.Combine(zipsDir, name);
+            if (File.Exists(path))
+                result.Add(path);
+        }
+        return result;
+    }
+
     /// <summary>Checks every not-yet-deleted entry against MngData and deletes the local data of archives
     /// whose cleanup is due. Returns log lines (level, message).</summary>
     public static async Task<List<(string Level, string Message)>> RunOnceAsync(string rootPath,
@@ -159,11 +185,19 @@ public static class DenseRetentionService
             long freed = 0;
             var archiveFolder = ArchiveFolderOf(e);
             string what;
+            // 2026-10-07 (사용자 지시): 다운로드한 원본 zip(...\zips\)도 함께 삭제 -- 폴더를 지우기 전에 이름을 구한다
+            // (archive_link.json에 원격 zip 경로가 있음).
+            var zips = archiveFolder != null ? DownloadedZipsOf(e, archiveFolder) : new List<string>();
+            foreach (var zip in zips)
+            {
+                freed += new FileInfo(zip).Length;
+                File.Delete(zip);
+            }
             if (archiveFolder != null && Directory.Exists(archiveFolder))
             {
-                freed = FolderSize(archiveFolder);
+                freed += FolderSize(archiveFolder);
                 Directory.Delete(archiveFolder, recursive: true);
-                what = $"archive 폴더 삭제 ({archiveFolder})";
+                what = $"archive 폴더 삭제 ({archiveFolder})" + (zips.Count > 0 ? $" + 원본 zip {zips.Count}개" : "");
             }
             else if (archiveFolder != null)
             {
