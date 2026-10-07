@@ -37,7 +37,11 @@ def _project_photo_points(
     paths = list(image_dir.glob(f"{iid}.*"))
     if not paths:
         return None
-    img = cv2.imread(str(paths[0]), cv2.IMREAD_COLOR)
+    # 2026-10-08: imread_unicode -- cv2.imread returns None for non-ASCII paths on Windows (remote archives
+    # extract to e.g. ...\extracted\수목토_1100_1\...), which silently skipped EVERY photo here
+    # (log: WALL_FINISH_APPLIED texture_px=0 on both remote runs of 2026-10-07).
+    from src.common.imageio import imread_unicode
+    img = imread_unicode(str(paths[0]), cv2.IMREAD_COLOR)
     if img is None:
         return None
     dh, dw = depth.shape[:2]
