@@ -14,17 +14,39 @@ namespace CheckCrackViewer.Services;
 /// very first run just creates the file and its schema on the spot.</summary>
 public static class UserStore
 {
-    private static readonly string DbDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "SmartCrackViewer");
+    // 2026-10-07 (사용자 지시): users.db는 CheckCrackV2 폴더(예: D:\ClaudePr\CheckCrackV2\users.db)에서 관리한다.
+    // 예전 위치(%APPDATA%\SmartCrackViewer\users.db)에 있던 계정은 처음 한 번 그대로 복사해 온다(MigrateLegacyDb).
+    // git에는 올리지 않는다(.gitignore).
+    private static readonly string DbDir = AppRoot.Path;
 
     private static readonly string DbPath = Path.Combine(DbDir, "users.db");
 
+    private static readonly string LegacyDbPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SmartCrackViewer", "users.db");
+
+    private static bool _migrated;
+
     private static string ConnectionString => $"Data Source={DbPath}";
+
+    private static void MigrateLegacyDb()
+    {
+        if (_migrated)
+            return;
+        _migrated = true;
+        if (File.Exists(DbPath) || !File.Exists(LegacyDbPath))
+            return;
+        // WAL 모드라 최근 변경이 -wal 파일에 있을 수 있음 -- SQLite 백업 API로 하나의 일관된 파일로 복사.
+        using var source = new SqliteConnection($"Data Source={LegacyDbPath};Mode=ReadOnly");
+        source.Open();
+        using var target = new SqliteConnection($"Data Source={DbPath}");
+        target.Open();
+        source.BackupDatabase(target);
+    }
 
     private static SqliteConnection OpenConnection()
     {
         Directory.CreateDirectory(DbDir);
+        MigrateLegacyDb();
         var connection = new SqliteConnection(ConnectionString);
         connection.Open();
         using var pragma = connection.CreateCommand();

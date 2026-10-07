@@ -450,16 +450,8 @@ public partial class MainViewModel : ObservableObject
     private static string DiscoverDefaultRoot()
     {
         // Walk up from the exe's folder looking for CLAUDE.local.md (unique
-        // marker for this project) — falls back to the known dev path so the
-        // app is still useful for the one machine it's built on today.
-        var dir = AppDomain.CurrentDomain.BaseDirectory;
-        var probe = new DirectoryInfo(dir);
-        for (int i = 0; i < 8 && probe != null; i++, probe = probe.Parent)
-        {
-            if (File.Exists(Path.Combine(probe.FullName, "CLAUDE.local.md")))
-                return probe.FullName;
-        }
-        return @"D:\ClaudePr\CheckCrack";
+        // marker for this project) — see AppRoot (shared with UserStore).
+        return AppRoot.Path;
     }
 
     private void LoadDbSettings()

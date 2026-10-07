@@ -77,3 +77,8 @@ remote_downloads/
 # 2026-10-07: per-workstation registry of Dense Stereo data kept locally (DenseRetentionService)
 dense_retention.json
 dense_retention.json.tmp
+
+# 2026-10-07: CheckCrackViewer 로그인 계정 (이 PC 전용, 비밀번호 해시 포함) -- 커밋 금지
+users.db
+users.db-wal
+users.db-shm
