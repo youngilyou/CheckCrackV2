@@ -154,10 +154,14 @@ def _apply_resolution_gate(cracks: list[dict]) -> list[dict]:
 
 def load_facade_snapshot(output_dir: str | Path, facade_id: str) -> FacadeSnapshot:
     output_dir = Path(output_dir)
+    # 2026-10-07 (사용자 지적): Dense 결과가 있으면 그 모자이크를 쓴다 -- 크랙 검사(tools/detect_cracks_folder.py)가
+    # 같은 우선순위(_analysis_colmap_dense > _analysis_colmap > _analysis)로 그 위에서 크랙 위치를 잡으므로,
+    # 보고서의 전체 위치도/확대 이미지도 같은 모자이크여야 맞는다(예전엔 평면 _analysis_colmap을 써서 어긋남).
+    analysis_dense = _pick(output_dir, facade_id, "_analysis_colmap_dense.tif")
     analysis_colmap = _pick(output_dir, facade_id, "_analysis_colmap.tif")
     analysis_plain = _pick(output_dir, facade_id, "_analysis.tif")
-    used_colmap = analysis_colmap is not None
-    analysis_path = analysis_colmap or analysis_plain
+    used_colmap = analysis_dense is not None or analysis_colmap is not None
+    analysis_path = analysis_dense or analysis_colmap or analysis_plain
 
     quality = _read_json(output_dir / f"{facade_id}_quality_report.json")
     quality_colmap = _read_json(output_dir / f"{facade_id}_quality_report_colmap.json")
@@ -510,7 +514,7 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
 
 def _facade_deliverables(snapshot: FacadeSnapshot) -> list[tuple[str, bool, str]]:
     analysis_name = snapshot.analysis_path.name if snapshot.analysis_path else ""
-    visual_path = _pick(snapshot.output_dir, snapshot.facade_id, "_visual_colmap.tif", "_visual.tif")
+    visual_path = _pick(snapshot.output_dir, snapshot.facade_id, "_visual_colmap_dense.tif", "_visual_colmap.tif", "_visual.tif")
     return [
         ("외벽 스티칭 결과 (분석용)", snapshot.analysis_path is not None, analysis_name),
         ("외벽 스티칭 결과 (열람용)", visual_path is not None, visual_path.name if visual_path else ""),
