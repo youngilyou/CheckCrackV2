@@ -24,7 +24,7 @@
 12. 1 Facade = 1 Flight를 기본 운용 정책으로 한다.
 13. **(내규, 2026-10-08) 경로는 한글이든 영문이든 처리되어야 한다.** (a) 이미지 파일 읽기/쓰기는 반드시 `src/common/imageio.py`의
     `imread_unicode`/`imwrite_unicode`로 한다 -- Windows OpenCV의 `cv2.imread`/`cv2.imwrite`는 한글 경로에서 오류 없이 실패한다.
-    `tools/check_unicode_io.py`(check_env.bat에 포함)가 직접 호출을 찾으면 실패시킨다. (b) 프로그램이 만드는 작업 폴더 이름은 영문/숫자만
+    `tools/check_unicode_io.py`가 직접 호출을 찾으면 실패시킨다. **이 내규는 Claude만 관리한다**(사용자 지시) -- 코드 변경 커밋 전 Claude가 검사 실행, 운용자용 check_env.bat에는 넣지 않음. (b) 프로그램이 만드는 작업 폴더 이름은 영문/숫자만
     쓴다(받은 archive는 `extracted\A{archive_id}`, 뷰어 `ArchiveFolderName`). 회사·동 등 한글 이름은 화면/DB 표시용 정보로만 쓴다.
 
 ---

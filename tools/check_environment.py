@@ -102,17 +102,6 @@ def main() -> None:
     except Exception:  # noqa: BLE001
         pass
 
-    # 내규 (2026-10-08): 이미지 입출력은 imageio(imread_unicode/imwrite_unicode)로만 -- 한글 경로 안전.
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from check_unicode_io import find_violations
-
-        hits = find_violations()
-        report("OK" if not hits else "FAIL", "unicode-safe image I/O (내규)",
-               "" if not hits else "; ".join(hits[:5]) + " -- use src/common/imageio.py")
-    except Exception as exc:  # noqa: BLE001
-        report("WARN", "unicode-safe image I/O (내규)", f"check failed to run: {exc}")
-
     print()
     print("RESULT:", "READY" if failures == 0 else f"{failures} problem(s) -- fix the FAIL lines above")
     sys.exit(0 if failures == 0 else 1)
