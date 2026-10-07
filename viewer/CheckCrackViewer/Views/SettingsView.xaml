@@ -592,8 +592,8 @@
                                                                     <TextBlock Text="{Binding Status}" Foreground="{StaticResource Text2}" FontSize="10.5"
                                                                                Width="80" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                                                                     <Button Content="스티칭 결과" Padding="7,3" FontSize="10.5" Margin="0,0,4,0"
-                                                                            Visibility="{Binding StitchingZipPath, Converter={StaticResource TruthyToVisibilityConverter}}"
-                                                                            IsEnabled="{Binding StitchingZipPath, Converter={StaticResource TruthyToBoolConverter}}"
+                                                                            Visibility="{Binding HasStitchingResult, Converter={StaticResource TruthyToVisibilityConverter}}"
+                                                                            IsEnabled="{Binding HasStitchingResult, Converter={StaticResource TruthyToBoolConverter}}"
                                                                             Command="{Binding DataContext.DownloadFacadeStitchingResultCommand, RelativeSource={RelativeSource AncestorType=UserControl}}">
                                                                         <Button.CommandParameter>
                                                                             <MultiBinding Converter="{StaticResource RowAndFacadeToRequestConverter}">

@@ -28,7 +28,10 @@ public sealed partial class RemoteArchiveRowViewModel : ObservableObject
     public string ContractId => Record.ContractId ?? "";
     public string? StitchingZipPath => Record.StitchingZipPath;
     public string? ReportPath => Record.ReportPath;
-    public bool HasStitchingResult => !string.IsNullOrEmpty(Record.StitchingZipPath);
+    /// <summary>2026-10-07: folder on .43 holding the facade's individually uploaded result files (new
+    /// write-back, no zip) -- the most recent facade's, like StitchingZipPath.</summary>
+    public string? ResultsDir => Record.FacadeResults.Select(f => f.ResultsDir).LastOrDefault(d => !string.IsNullOrEmpty(d));
+    public bool HasStitchingResult => !string.IsNullOrEmpty(Record.StitchingZipPath) || !string.IsNullOrEmpty(ResultsDir);
     public bool HasReport => !string.IsNullOrEmpty(Record.ReportPath);
 
     /// <summary>2026-08-29: 방위(면)가 여러 개인 archive는 facade마다 결과가 따로 있음

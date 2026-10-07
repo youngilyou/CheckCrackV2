@@ -121,6 +121,58 @@ public static class SftpDownloadService
     }
 
     // Password auth only (2026-08-27 operator decision) -- no private-key option here.
+    /// <summary>2026-10-07: downloads a whole remote folder (recursively) -- analysis results are now stored
+    /// as individual files in analysis_results/{archive}/{facade}/ instead of one zip. Returns the number
+    /// of files downloaded. Same connect priority boost as DownloadAsync.</summary>
+    public static async Task<int> DownloadFolderAsync(CrackVisionDbSettings settings, string remoteDir, string localDir,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(settings.SftpHost) || string.IsNullOrWhiteSpace(settings.SftpPassword))
+            throw new InvalidOperationException("SFTP host/password가 설정되지 않았습니다 (설정 화면에서 CrackVisionDB/SFTP 접속 정보를 입력하세요).");
+
+        return await Task.Run(() =>
+        {
+            using var client = CreateClient(settings);
+            var originalPriority = Thread.CurrentThread.Priority;
+            Thread.CurrentThread.Priority = ThreadPriority.AboveNormal;
+            try
+            {
+                client.Connect();
+                var count = 0;
+                void Walk(string remote, string local)
+                {
+                    Directory.CreateDirectory(local);
+                    foreach (var entry in client.ListDirectory(remote))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (entry.Name is "." or "..")
+                            continue;
+                        var target = Path.Combine(local, entry.Name);
+                        if (entry.IsDirectory)
+                        {
+                            Walk(entry.FullName, target);
+                        }
+                        else if (entry.IsRegularFile)
+                        {
+                            var tmp = target + ".part";
+                            using (var fs = File.Create(tmp))
+                                client.DownloadFile(entry.FullName, fs);
+                            File.Move(tmp, target, overwrite: true);
+                            count++;
+                        }
+                    }
+                }
+                Walk(remoteDir, localDir);
+                return count;
+            }
+            finally
+            {
+                try { if (client.IsConnected) client.Disconnect(); } catch { }
+                Thread.CurrentThread.Priority = originalPriority;
+            }
+        }, cancellationToken);
+    }
+
     private static SftpClient CreateClient(CrackVisionDbSettings settings) =>
         new(settings.SftpHost, settings.SftpPort, settings.SftpUser, settings.SftpPassword);
 }

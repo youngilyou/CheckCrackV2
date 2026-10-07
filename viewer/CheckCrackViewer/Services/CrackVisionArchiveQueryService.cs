@@ -65,7 +65,13 @@ internal sealed class ScaleColmapJson
 /// the bug this replaced: flat stitching_zip_path/report_path/analysis_status alone meant only
 /// the last-finished facade's result survived). FacadeId matches FacadeItemViewModel.FacadeId /
 /// the facade_id already embedded in the uploaded file names.</summary>
-public sealed record FacadeAnalysisResultEntry(string FacadeId, string? StitchingZipPath, string? ReportPath, string? Status);
+public sealed record FacadeAnalysisResultEntry(string FacadeId, string? StitchingZipPath, string? ReportPath, string? Status,
+    string? ResultsDir = null)
+{
+    /// <summary>2026-10-07: results now live as individual files in ResultsDir (no zip) -- either form
+    /// counts as "stitching result available".</summary>
+    public bool HasStitchingResult => !string.IsNullOrEmpty(StitchingZipPath) || !string.IsNullOrEmpty(ResultsDir);
+}
 
 /// <summary>One row of MngData backend_core's crackvision_archives table (see
 /// backend_core/schemas/facade_archives.sql -- column names confirmed directly from that file,
@@ -140,7 +146,8 @@ public static class CrackVisionArchiveQueryService
                     prop.Name,
                     value.TryGetProperty("stitching_zip_path", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null,
                     value.TryGetProperty("report_path", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null,
-                    value.TryGetProperty("status", out var st) && st.ValueKind == JsonValueKind.String ? st.GetString() : null));
+                    value.TryGetProperty("status", out var st) && st.ValueKind == JsonValueKind.String ? st.GetString() : null,
+                    value.TryGetProperty("results_dir", out var rd) && rd.ValueKind == JsonValueKind.String ? rd.GetString() : null));
             }
             return list;
         }

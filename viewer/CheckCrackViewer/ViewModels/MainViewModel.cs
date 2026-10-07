@@ -661,7 +661,12 @@ public partial class MainViewModel : ObservableObject
     {
         var remotePath = row.StitchingZipPath;
         if (string.IsNullOrEmpty(remotePath))
+        {
+            // 2026-10-07: new write-back stores files, not a zip -- fetch the results folder instead.
+            if (!string.IsNullOrEmpty(row.ResultsDir))
+                await DownloadResultsFolderAsync(row, row.ResultsDir, "");
             return;
+        }
         row.IsBusy = true;
         try
         {
@@ -674,6 +679,32 @@ public partial class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             row.Status = $"실패: {ex.Message}";
+        }
+        finally
+        {
+            row.IsBusy = false;
+        }
+    }
+
+    /// <summary>2026-10-07: 결과 폴더(.43 analysis_results/{archive}/{면}/) 전체를 받아
+    /// {다운로드 폴더}\analysis_results\{archive}\{면}\에 저장 -- 모자이크/크랙/보고서/균열 원본 사진.
+    /// 분석한 PC가 아니어도 결과를 볼 수 있게 하기 위함(예전 zip 대신).</summary>
+    private async Task DownloadResultsFolderAsync(RemoteArchiveRowViewModel row, string remoteDir, string label)
+    {
+        row.IsBusy = true;
+        try
+        {
+            row.Status = $"{label}스티칭 결과 다운로드 중...";
+            var settings = BuildCrackVisionSettings();
+            var parts = remoteDir.TrimEnd('/').Split('/');
+            var facade = parts.Length > 0 ? parts[^1] : "result";
+            var localDir = Path.Combine(settings.DownloadFolder, "analysis_results", row.ArchiveId.ToString(), facade);
+            var count = await SftpDownloadService.DownloadFolderAsync(settings, remoteDir, localDir);
+            row.Status = $"{label}스티칭 결과 다운로드 완료 ({count}개): {localDir}";
+        }
+        catch (Exception ex)
+        {
+            row.Status = $"{label}실패: {ex.Message}";
         }
         finally
         {
@@ -716,7 +747,11 @@ public partial class MainViewModel : ObservableObject
         var (row, entry) = (request.Row, request.Entry);
         var remotePath = entry.StitchingZipPath;
         if (string.IsNullOrEmpty(remotePath))
+        {
+            if (!string.IsNullOrEmpty(entry.ResultsDir))
+                await DownloadResultsFolderAsync(row, entry.ResultsDir, $"[{entry.FacadeId}] ");
             return;
+        }
         row.IsBusy = true;
         try
         {
