@@ -96,6 +96,62 @@ public static class SftpUploadService
         }
     }
 
+    /// <summary>2026-10-07: uploads many files over ONE connection (result files are now uploaded
+    /// one by one instead of as a single zip -- see AnalysisResultUploadService). Same connect
+    /// priority boost and bounded connect retry as UploadAsync; a failure after connecting is not
+    /// retried (the caller reports it). Each item: (localPath, remoteDir, remoteFileName).</summary>
+    public static async Task UploadManyAsync(CrackVisionDbSettings settings,
+        IReadOnlyList<(string LocalPath, string RemoteDir, string RemoteFileName)> items,
+        CancellationToken cancellationToken = default)
+    {
+        if (items.Count == 0)
+            return;
+        if (string.IsNullOrWhiteSpace(settings.SftpHost))
+            throw new InvalidOperationException("SFTP host가 설정되지 않았습니다 (설정 화면에서 CrackVisionDB/SFTP 접속 정보를 입력하세요).");
+        if (string.IsNullOrWhiteSpace(settings.SftpPassword))
+            throw new InvalidOperationException("SFTP password가 설정되지 않았습니다 (설정 화면에서 CrackVisionDB/SFTP 접속 정보를 입력하세요).");
+
+        for (var attempt = 1; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var client = new SftpClient(settings.SftpHost, settings.SftpPort, settings.SftpUser, settings.SftpPassword);
+            var connected = false;
+            try
+            {
+                await Task.Run(() =>
+                {
+                    var originalPriority = Thread.CurrentThread.Priority;
+                    Thread.CurrentThread.Priority = ThreadPriority.AboveNormal;
+                    try
+                    {
+                        client.Connect();
+                        connected = true;
+                        var madeDirs = new HashSet<string>();
+                        foreach (var (localPath, remoteDir, remoteFileName) in items)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            if (madeDirs.Add(remoteDir))
+                                EnsureRemoteDirectory(client, remoteDir);
+                            using var localStream = File.OpenRead(localPath);
+                            client.UploadFile(localStream, RemotePathFor(remoteDir, remoteFileName), true);
+                        }
+                    }
+                    finally
+                    {
+                        try { if (client.IsConnected) client.Disconnect(); } catch { }
+                        Thread.CurrentThread.Priority = originalPriority;
+                    }
+                }, cancellationToken);
+                return;
+            }
+            catch (Exception ex) when (!connected && attempt < MaxAttempts
+                                       && ex is SshOperationTimeoutException or SocketException or SshConnectionException)
+            {
+                await Task.Delay(RetryDelay, cancellationToken);
+            }
+        }
+    }
+
     /// <summary>Returns the final uploaded remote path (remoteDir + "/" + remoteFileName) for
     /// convenience, so callers don't have to reassemble it themselves before writing it to DB.</summary>
     public static string RemotePathFor(string remoteDir, string remoteFileName) =>

@@ -244,6 +244,7 @@ public partial class MainViewModel : ObservableObject
 
     private readonly AnalysisBridgeService _analysisBridge = new();
     private readonly DispatcherTimer _heartbeatTimer;
+    private readonly DispatcherTimer _denseRetentionTimer;
     private readonly DispatcherTimer _elapsedTimer;
 
     /// <summary>Drives the automatic remote-analysis pipeline (FacadePreviewer dispatch ->
@@ -267,6 +268,7 @@ public partial class MainViewModel : ObservableObject
         AiTraining.RootPath = RootPath;
         OriginalAi.RootPath = RootPath;
         ResultsCompare.RootPath = RootPath;
+        ResultsCompare.AfterReportRegenerated = WriteBackAfterReviewAsync;
         LoadDbSettings();
         LoadCrackVisionSettings();
         AttachToRoot();
@@ -292,13 +294,33 @@ public partial class MainViewModel : ObservableObject
         // 2026-10-07: the DDS-Router host (.42) is on another subnet and its domain-31 participant
         // listens on 15166 (participant index 3), not the native default 7400+250*31+10=15160 --
         // CRACKVIEWER_DDS_INITIAL_PEER now also accepts "ip:port". A bare "ip" keeps the old default.
-        var (peerHost, peerPort) = ParseDdsInitialPeer(Environment.GetEnvironmentVariable("CRACKVIEWER_DDS_INITIAL_PEER"));
+        // Also read the user-level value straight from the registry: a viewer launched from an app that
+        // was already open when the variable was set (Visual Studio, a terminal) inherits the OLD
+        // environment and silently ran multicast-only (confirmed 2026-10-07: router saw no packets).
+        var peerValue = Environment.GetEnvironmentVariable("CRACKVIEWER_DDS_INITIAL_PEER");
+        if (string.IsNullOrWhiteSpace(peerValue))
+            peerValue = Environment.GetEnvironmentVariable("CRACKVIEWER_DDS_INITIAL_PEER", EnvironmentVariableTarget.User);
+        var (peerHost, peerPort) = ParseDdsInitialPeer(peerValue);
         _analysisBridge.Start(domainId: 31, workerId: workerId, initialPeerHost: peerHost, initialPeerPort: peerPort);
+        OnRemoteJobProgress("INFO", string.IsNullOrEmpty(peerHost)
+            ? "[DDS] 초기 피어 없음 (CRACKVIEWER_DDS_INITIAL_PEER 미설정) -- 같은 서브넷 멀티캐스트로만 탐색"
+            : $"[DDS] 도메인 31, worker '{workerId}', Router {peerHost}:{(peerPort > 0 ? peerPort : 7400 + 250 * 31 + 10)}");
 
         _heartbeatTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _heartbeatTimer.Tick += (_, _) => _analysisBridge.SendHeartbeat(
             _concurrency.MaxConcurrent, (uint)Math.Max(0, _concurrency.RunningCount), (uint)_concurrency.QueuedCount);
         _heartbeatTimer.Start();
+
+        // 2026-10-07: Dense Stereo data of remote-analysis facades stays on this workstation while the
+        // contract runs and is deleted once MngData marks the archive for cleanup (DenseRetentionService).
+        // Checked shortly after startup, then every 6 hours -- contract ends are dates, not seconds.
+        _denseRetentionTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(2) };
+        _denseRetentionTimer.Tick += async (_, _) =>
+        {
+            _denseRetentionTimer.Interval = TimeSpan.FromHours(6);
+            await RunDenseRetentionCheckAsync();
+        };
+        _denseRetentionTimer.Start();
 
         // 실행 중인 facade의 "실행 중…" 라벨 옆에 경과 시간을 표시하기 위한 1초 틱 --
         // RescanFacadeOutputs(2초 주기)와 별개로 둔 이유는 그쪽은 디스크 I/O(리포트 JSON
@@ -320,6 +342,73 @@ public partial class MainViewModel : ObservableObject
         if (colon > 0 && int.TryParse(v[(colon + 1)..], out var port) && port is > 0 and <= 65535)
             return (v[..colon], port);
         return (v, 0);
+    }
+
+    /// <summary>Fills ArchiveId/RemoteZipPath from {base}rchive_link.json when they are not in
+    /// memory (viewer restarted since the archive was registered).</summary>
+    private static void RestoreArchiveLink(FacadeItemViewModel facade, string baseOutputDir)
+    {
+        if (facade.ArchiveId is not null && !string.IsNullOrEmpty(facade.RemoteZipPath))
+            return;
+        var link = ArchiveLinkStore.TryLoad(baseOutputDir);
+        if (link == null)
+            return;
+        facade.ArchiveId ??= link.ArchiveId;
+        if (string.IsNullOrEmpty(facade.RemoteZipPath))
+            facade.RemoteZipPath = link.RemoteZipPath;
+    }
+
+    /// <summary>2026-10-07: called by 결과 보기's "최종 보고서 재생성" (ResultsCompareViewModel) after the
+    /// report was regenerated from the operator's review edits -- pushes the updated results to the
+    /// server the same way the analysis tab's 보고서 생성 does. Returns a short status for the UI, or
+    /// null when this facade is not linked to a server archive (local-only folder).</summary>
+    private async Task<string?> WriteBackAfterReviewAsync(string versionOutputDir, string facadeId)
+    {
+        var baseOutputDir = Path.GetDirectoryName(versionOutputDir.TrimEnd('\\', '/'));
+        if (string.IsNullOrEmpty(baseOutputDir))
+            return null;
+        var facade = Facades.FirstOrDefault(f => string.Equals(f.FacadeId, facadeId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Path.GetFullPath(GetFacadeOutputDir(f)), Path.GetFullPath(baseOutputDir), StringComparison.OrdinalIgnoreCase));
+        if (facade == null)
+            return null;
+        RestoreArchiveLink(facade, baseOutputDir);
+        if (facade.ArchiveId is not long archiveId)
+            return null;
+        try
+        {
+            await WriteBackAnalysisResultsAsync(facade, versionOutputDir, baseOutputDir, archiveId);
+            return $"서버(archive #{archiveId})에 반영했습니다.";
+        }
+        catch (Exception ex)
+        {
+            facade.AddIssue($"[WARN] 분석 결과를 CrackVisionDB에 반영하지 못했습니다: {ex.Message}");
+            return $"서버 반영 실패: {ex.Message}";
+        }
+    }
+
+    private bool _denseRetentionRunning;
+
+    private async Task RunDenseRetentionCheckAsync()
+    {
+        if (_denseRetentionRunning)
+            return;
+        _denseRetentionRunning = true;
+        try
+        {
+            var settings = BuildCrackVisionSettings();
+            var lines = await Task.Run(() => DenseRetentionService.RunOnceAsync(RootPath, settings));
+            foreach (var (level, message) in lines)
+                OnRemoteJobProgress(level, message);
+        }
+        catch (Exception ex)
+        {
+            // DB unreachable etc. -- nothing is deleted on missing information; try again next tick.
+            OnRemoteJobProgress("WARNING", $"[Dense 보관] 계약 상태 확인 실패 (다음 주기에 재시도): {ex.Message}");
+        }
+        finally
+        {
+            _denseRetentionRunning = false;
+        }
     }
 
     private void UpdateElapsedLabels()
@@ -1046,6 +1135,10 @@ public partial class MainViewModel : ObservableObject
                 facade.ArchiveId = archiveId;
             if (remoteZipPath is not null)
                 facade.RemoteZipPath = remoteZipPath;
+            // 2026-10-07: persisted next to the results so a report regenerated after a restart
+            // (e.g. after review edits) still updates the server -- see ArchiveLinkStore.
+            if (archiveId is long linkedId)
+                ArchiveLinkStore.Save(GetFacadeOutputDir(facade), linkedId, remoteZipPath);
             facades.Add(facade);
         }
         RebuildFacadeTree();
@@ -1730,11 +1823,12 @@ public partial class MainViewModel : ObservableObject
             // facade가 CrackVisionDB archive에서 왔으면(ArchiveId 있음) 결과를 그 row에
             // write-back. 이 실패가 방금 성공한 보고서 생성 자체를 실패로 되돌리면 안 되므로
             // 별도 try/catch(succeeded는 이미 위에서 확정됨, 여기서 안 건드림).
+            RestoreArchiveLink(facade, baseOutputDir);
             if (succeeded && facade.ArchiveId is long archiveId)
             {
                 try
                 {
-                    await WriteBackAnalysisResultsAsync(facade, outputDir, archiveId);
+                    await WriteBackAnalysisResultsAsync(facade, outputDir, baseOutputDir, archiveId);
                 }
                 catch (Exception ex)
                 {
@@ -1754,16 +1848,19 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>Zips outputDir(스티칭/COLMAP 이미지 + 기타 산출물, 보고서 PDF 포함) and uploads
-    /// it alongside the report PDF to a sibling "analysis_results/" folder next to the original
-    /// image zip on the same SFTP host (see FacadeItemViewModel.RemoteZipPath), then writes both
-    /// remote paths + "검사완료" back to crackvision_archives via
-    /// CrackVisionArchiveQueryService.UpdateAnalysisResultAsync. No-op (returns immediately) if
-    /// RemoteZipPath is unknown -- can't compute an upload destination without it (e.g. a facade
-    /// registered before this feature existed, or a plain local Browse-added folder that was
-    /// never tagged with ArchiveId at all -- though the caller already checked ArchiveId is set,
-    /// RemoteZipPath could in principle still be missing from an older in-memory facade).</summary>
-    private async Task WriteBackAnalysisResultsAsync(FacadeItemViewModel facade, string outputDir, long archiveId)
+    /// <summary>2026-10-07 (사용자 확정 "권장 구성", CLAUDE.local.md 2026-10-07): writes a finished
+    /// facade's results to MngData (.43) the way MngData's schemas/crackvision_storage.sql defines it --
+    /// replaces the old "zip the whole version folder" upload (~6-7 GB per facade even after the Dense
+    /// cleanup):
+    ///  1. result files uploaded one by one to {원본 zip 폴더}/analysis_results/{archive_id}/{facade}/
+    ///     and registered in crackvision_result_files (AnalysisResultUploadService decides kind/keep);
+    ///  2. crackvision_archives: report path, "검사완료", last_analyzed_at, and per facade
+    ///     results_dir + dense_storage (worker/path/size of the Dense data kept on THIS workstation);
+    ///  3. crack rows (crackvision_facades/cracks/crack_sources) as before;
+    ///  4. the Dense data is registered locally (DenseRetentionService) so it is deleted here once the
+    ///     archive's contract-end cleanup is due.
+    /// No-op if RemoteZipPath is unknown (no upload destination).</summary>
+    private async Task WriteBackAnalysisResultsAsync(FacadeItemViewModel facade, string outputDir, string baseOutputDir, long archiveId)
     {
         if (string.IsNullOrEmpty(facade.RemoteZipPath))
             return;
@@ -1775,43 +1872,48 @@ public partial class MainViewModel : ObservableObject
         var lastSlash = facade.RemoteZipPath.LastIndexOf('/');
         if (lastSlash < 0)
             throw new InvalidOperationException($"원격 zip 경로 형식이 예상과 다릅니다: {facade.RemoteZipPath}");
-        var remoteResultsDir = facade.RemoteZipPath[..lastSlash] + "/analysis_results";
+        var remoteResultsDir = facade.RemoteZipPath[..lastSlash] + $"/analysis_results/{archiveId}/{facade.FacadeId}";
 
-        var localStitchingZip = Path.Combine(Path.GetTempPath(), $"{facade.FacadeId}_{archiveId}_stitching_{Guid.NewGuid():N}.zip");
-        try
+        var uploads = await Task.Run(() =>
         {
-            System.IO.Compression.ZipFile.CreateFromDirectory(outputDir, localStitchingZip);
+            var list = AnalysisResultUploadService.BuildUploadList(outputDir, facade.FacadeId, remoteResultsDir);
+            return list.Select(u => (u, Size: new FileInfo(u.LocalPath).Length,
+                Sha: AnalysisResultUploadService.Sha256Of(u.LocalPath))).ToList();
+        });
+        await SftpUploadService.UploadManyAsync(settings,
+            uploads.Select(x => (x.u.LocalPath, x.u.RemoteDir, x.u.FileName)).ToList());
+        var records = uploads.Select(x => new ResultFileRecord(x.u.Kind, x.u.FileName,
+            SftpUploadService.RemotePathFor(x.u.RemoteDir, x.u.FileName), x.Size, x.Sha, x.u.Keep)).ToList();
+        await CrackVisionArchiveQueryService.UpsertResultFilesAsync(settings, archiveId, facade.FacadeId, records);
 
-            var stitchingRemoteName = $"{archiveId}_{facade.FacadeId}_stitching.zip";
-            await SftpUploadService.UploadAsync(settings, localStitchingZip, remoteResultsDir, stitchingRemoteName);
-            var stitchingRemotePath = SftpUploadService.RemotePathFor(remoteResultsDir, stitchingRemoteName);
-
-            string? reportRemotePath = null;
-            if (!string.IsNullOrEmpty(facade.ReportPath) && File.Exists(facade.ReportPath))
-            {
-                var reportRemoteName = $"{archiveId}_{facade.FacadeId}_report.pdf";
-                await SftpUploadService.UploadAsync(settings, facade.ReportPath, remoteResultsDir, reportRemoteName);
-                reportRemotePath = SftpUploadService.RemotePathFor(remoteResultsDir, reportRemoteName);
-            }
-
-            await CrackVisionArchiveQueryService.UpdateAnalysisResultAsync(settings, archiveId, facade.FacadeId,
-                stitchingRemotePath, reportRemotePath, "검사완료");
-
-            // 2026-09-12: crackvision_facades/crackvision_cracks/crackvision_crack_sources
-            // (schemas/crackvision_cracks.sql) 적재 -- 위 write-back은 zip/report 경로와 상태만
-            // 기록하고 균열 개별 geometry는 어디에도 저장하지 않던 갭을 닫음. outputDir은 방금
-            // 로컬 스티칭 결과가 쓰인 그 폴더 그대로(위에서 이미 zip으로 묶기 전) -- 압축을 다시
-            // 풀 필요 없이 {facade.FacadeId}_cracks.json을 바로 읽는다. HasCrackResults가
-            // false인 facade(스티칭만 하고 크랙검사 안 돌린 경우)는 이 파일이 없으므로
-            // UpsertFacadeCracksAsync 내부에서 조용히 no-op.
-            await CrackVisionArchiveQueryService.UpsertFacadeCracksAsync(settings, archiveId, facade.FacadeId,
-                outputDir, facade.EffectiveAnalysisImagePath,
-                facade.CoverageRatioColmap ?? facade.CoverageRatio, facade.NeedsRetake, facade.HasRectifiedMosaic);
-        }
-        finally
+        var reportRemotePath = records.FirstOrDefault(r => r.Kind == "report_pdf")?.RemotePath;
+        var (denseDirs, denseBytes) = await Task.Run(() => DenseRetentionService.Measure(baseOutputDir));
+        object? denseStorage = denseDirs.Count == 0 ? null : new
         {
-            try { File.Delete(localStitchingZip); } catch (Exception) { /* best-effort cleanup */ }
-        }
+            worker_id = string.IsNullOrWhiteSpace(CrackVisionWorkerId) ? Environment.MachineName : CrackVisionWorkerId,
+            machine_name = Environment.MachineName,
+            base_output_dir = baseOutputDir,
+            dirs = denseDirs,
+            size_bytes = denseBytes,
+            policy = "kept on this workstation while the contract runs; deleted when retention_state is cleaned or cleanup_pending past cleanup_due_at",
+            recorded_at = DateTime.UtcNow.ToString("O"),
+        };
+        await CrackVisionArchiveQueryService.UpdateAnalysisResultAsync(settings, archiveId, facade.FacadeId,
+            stitchingZipPath: null, reportRemotePath, "검사완료", resultsDir: remoteResultsDir, denseStorage: denseStorage);
+
+        // 2026-09-12: crackvision_facades/crackvision_cracks/crackvision_crack_sources
+        // (schemas/crackvision_cracks.sql) 적재 -- {facade.FacadeId}_cracks.json을 outputDir에서 바로
+        // 읽는다. HasCrackResults가 false인 facade(스티칭만 하고 크랙검사 안 돌린 경우)는 이 파일이
+        // 없으므로 UpsertFacadeCracksAsync 내부에서 조용히 no-op.
+        await CrackVisionArchiveQueryService.UpsertFacadeCracksAsync(settings, archiveId, facade.FacadeId,
+            outputDir, facade.EffectiveAnalysisImagePath,
+            facade.CoverageRatioColmap ?? facade.CoverageRatio, facade.NeedsRetake, facade.HasRectifiedMosaic);
+
+        if (denseDirs.Count > 0)
+            DenseRetentionService.Register(RootPath, archiveId, facade.FacadeId, baseOutputDir);
+
+        OnRemoteJobProgress("INFO", $"[결과 저장] archive #{archiveId} {facade.FacadeId}: 파일 {records.Count}개 "
+            + $"({records.Sum(r => r.SizeBytes) / 1e9:F2} GB) 업로드, Dense 데이터 {denseBytes / 1e9:F1} GB는 이 PC에 보관");
     }
 
     /// <summary>Recursively collects every FacadeItemViewModel leaf under a

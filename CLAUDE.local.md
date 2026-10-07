@@ -2485,3 +2485,75 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
 ### 같은 기간 확인된 것
 - BACK 재실행(V003, 2026-10-06 20:46 완료): `DENSE_CLEANUP 64.2 GB 삭제`가 Dense 완료 직후 실제 실행에서 동작 확인.
 - 미커밋 변경: Dense 중간 파일 자동 삭제 + `cleanup_dense.bat`/도구, DDS 초기 피어 `ip:port` 파싱. 사용자가 결과 확인 후 커밋/푸시 예정.
+
+## 2026-10-07 세션 기록 (2): 분석 결과 저장 방식 변경 -- 파일별 업로드 + Dense 데이터는 이 PC에 보관, 계약 종료 시 자동 삭제 (사용자 확정 "권장 구성")
+
+### 배경
+- 기존 write-back(`WriteBackAnalysisResultsAsync`)은 버전 폴더 **전체를 zip 한 개**로 `.43`에 업로드(Dense 정리 후에도 1면당 약 6~7 GB,
+  그 전엔 약 40 GB) + `crackvision_archives`에 경로/상태 기록 + 균열 행 적재.
+- MngData 쪽 설계(`backend_core/schemas/crackvision_storage.sql`, 2026-10-05)는 **파일별 업로드 + `crackvision_result_files` 등록 +
+  계약 기반 보관**(`retention_state`: active -> cleanup_pending -> cleaned, 계약 종료 후 유예 뒤 보고서와 균열 원본 사진만 남김)인데
+  CheckCrackV2 쪽은 미구현이었음(`crackvision_result_files`/`last_analyzed_at` 미사용).
+- 사용자 제안: Dense Stereo 산출물은 DB/서버에 올리지 말고 경로만 DB에 기록, 계약 중에는 CheckCrackV2 PC에 두고 종료되면 삭제
+  -- 다시 만들기(5~6시간)나 다운로드+압축 해제 시간을 없애기 위함. MngData 설계는 깊이 데이터도 `.43`에 올리는 것이라 이 부분만 다름.
+
+### 확정 구성
+| 대상 | 저장 위치 | 계약 종료 후 |
+|---|---|---|
+| 버전 폴더 최상위 결과 파일(모자이크/크랙 json·mask/보고서/사이드카, FRONT 기준 48개 약 0.28 GB) | `.43` `{원본 zip 폴더}/analysis_results/{archive_id}/{facade}/`에 파일별 업로드 + `crackvision_result_files` 등록 | MngData 정리 규칙대로 (report_pdf, crack_source_photo만 keep) |
+| crack_source_photo: 보고서 카드가 가리키는 원본 사진(`_report_cards.json`의 image_id) | 같은 폴더 `source_photos/` | 보관(keep_after_contract=true) |
+| Dense 데이터(각 버전 폴더의 `colmap_dense/`, `colmap_stage1/`, 1면당 약 10 GB) | **이 PC에 보관**, 위치는 DB `facade_analysis_results[facade].dense_storage`(worker_id, machine_name, base_output_dir, dirs, size_bytes)에만 기록 | CheckCrackViewer가 자동 삭제 |
+| 폴더 전체 zip 업로드 | 폐지 (`stitching_zip_path`는 더 이상 갱신 안 함, COALESCE로 예전 값 유지) | - |
+
+- 스키마 변경 없이 구현: Dense 위치는 기존 JSONB(`facade_analysis_results`)에 넣음 -- `crackvision_result_files.file_path`는 ".43의 절대 경로"
+  정의라 로컬 경로를 넣지 않음. 나중에 MngData가 별도 컬럼으로 승격 가능.
+- `crackvision_archives.last_analyzed_at = now()`도 갱신. facade별 JSON에 `results_dir` 추가.
+
+### 구현 (viewer)
+- `Services/AnalysisResultUploadService.cs`(신규): 파일 종류 분류(MngData kind 목록과 동기화 필요), 업로드 목록, sha256. 하위 폴더(`colmap_dense`,
+  `colmap_stage1`, `_backup_*`)는 업로드 안 함.
+- `SftpUploadService.UploadManyAsync`(신규): 연결 한 번으로 여러 파일 업로드(기존과 같은 연결 우선순위 상승/연결 재시도).
+- `CrackVisionArchiveQueryService`: `UpsertResultFilesAsync`(ON CONFLICT 갱신, deleted_at 초기화, 한 트랜잭션), `GetRetentionStatesAsync`,
+  `UpdateAnalysisResultAsync`에 `resultsDir`/`denseStorage` + `last_analyzed_at`.
+- `Services/DenseRetentionService.cs`(신규): 로컬 등록부 `RootPath\dense_retention.json`(gitignore). 뷰어 시작 2분 후, 이후 6시간마다
+  DB의 `retention_state`를 확인 -> `cleaned` 또는 (`cleanup_pending` 이고 `cleanup_due_at` 지남)이면 그 facade의 **모든 버전** Dense 폴더 삭제.
+  `active`/알 수 없는 상태/DB에 archive 없음/DB 접속 실패 -> **삭제 안 함**(정보 없이 지우지 않음). 결과는 LIVE LOG(`[Dense 보관]`).
+- `MainViewModel.WriteBackAnalysisResultsAsync` 재작성: 업로드 -> result_files 등록 -> archives 갱신 -> 균열 행 적재(기존) -> Dense 등록부 등록
+  -> LIVE LOG `[결과 저장] 파일 N개 (X GB) 업로드, Dense Y GB는 이 PC에 보관`. 원격 분석은 스티칭->크랙검사->보고서->이 저장까지 자동.
+
+### 검증
+- 업로드 목록: FRONT V010 48개(모자이크 4, 크랙 json/mask 4, 보고서 1, 균열 원본 사진 19 등) 약 0.28 GB, Dense 9.9 GB 로컬 / BACK V003 21개(크랙검사 전),
+  Dense 20.2 GB(V002+V003 두 버전 모두 대상).
+- 실제 `.43`에 `UploadManyAsync`로 2개 파일 업로드 -> 크기 일치 -> 테스트 폴더 삭제 확인.
+- 실제 DB에서 result_files upsert(두 번째 값으로 갱신 확인), archives 갱신(dense_storage JSON, last_analyzed_at), retention 조회 -- 전부 트랜잭션 롤백, 남은 변경 없음.
+- `DenseRetentionService.RunOnceAsync`: archive #2(active) -> 보관, 없는 archive -> 경고 후 보관.
+- **미검증**: 실제 삭제 경로(`cleaned`/`cleanup_pending` 상태 archive가 아직 없음), 실제 원격 분석 끝까지의 write-back(다음 실행에서 LIVE LOG로 확인).
+
+### 남은 일 / 주의
+- 다른 워크스테이션이 같은 archive를 재분석하면 그 PC엔 Dense가 없어 새로 만듦(DB의 dense_storage로 어느 PC에 있는지는 알 수 있음).
+- 디스크 용량 경고는 아직 없음(1면 약 10 GB, 건물 1동 4면 약 40 GB; 현재 여유 약 740 GB).
+- MngData 쪽: `crackvision_storage.sql` 주석의 "depth_maps/sparse를 .43에 저장" 부분을 이 결정에 맞게 갱신 필요(다른 저장소/세션).
+- 이전 결과(`analysis_results/{archive}_{facade}_stitching.zip`)는 그대로 남음.
+
+### 추가 (같은 날): 보고서 재생성 시 서버 반영 + archive 연결 영구 저장
+- 확인된 빈틈: (1) 결과 보기의 "최종 보고서 재생성"(ResultsCompareViewModel, 리뷰 수정 후)은 서버 저장을 **하지 않았음**.
+  (2) `FacadeItemViewModel.ArchiveId/RemoteZipPath`가 메모리에만 있어 뷰어 재시작 후엔 분석 탭 "보고서 생성"도 서버 저장이 빠졌음.
+- 수정: `Services/ArchiveLinkStore.cs`(신규) -- archive 등록 시 `{facade 결과 base 폴더}\archive_link.json`(archive_id, remote_zip_path) 저장,
+  보고서 생성/재생성 때 메모리에 없으면 여기서 복원. `ResultsCompareViewModel.AfterReportRegenerated` 콜백 -> `MainViewModel.WriteBackAfterReviewAsync`가
+  같은 write-back(파일별 업로드 + DB 갱신 + 균열 행 교체) 실행, 완료 메시지에 "서버(archive #N)에 반영했습니다" 표시. 서버에 연결되지 않은 로컬 폴더는 그대로 로컬만.
+  (참고: 2026-08-28 "로컬 Browse는 DB에 쓰지 않음" 규칙은 같은 FacadeId 객체에 옛 ArchiveId가 남는 문제 때문이었음 -- 이제 연결 정보가 그 폴더 자체에
+  붙어 있으므로, archive에서 받은 폴더를 Browse로 다시 열어도 그 archive로 반영됨.)
+- 흐름 정리: 원격 분석 = 스티칭 -> 크랙검사 -> 보고서 -> 서버 저장(자동). 사용자가 리뷰 수정 -> "최종 보고서 재생성" -> 서버 내용 갱신(같은 행/파일 덮어씀).
+- MngData 쪽 화면(확인): Remote Viewer 웹 `http://192.168.219.43:18090`(MngData Remote Viewer, `/api/crackvision/facades|cracks`로 facade/균열 표시),
+  backend `:18080`. `crackvision_result_files`를 보여 주는 화면은 아직 없음(스키마만). viewer_qt의 archive 다운로드 `field=stitching`은
+  `stitching_zip_path`를 쓰는데 이제 zip을 만들지 않으므로 새 분석에서는 갱신되지 않음(예전 값 유지) -- MngData 쪽 화면 수정 필요(다른 저장소).
+
+### 추가 (같은 날): DDS 초기 피어가 적용되지 않던 원인
+- Router(.42) 로그에 CheckCrackViewer(도메인 31) 연결이 전혀 없었음 -> 원인: 뷰어를 **Visual Studio에서 실행**했는데 그 VS는 환경 변수를 넣기 전(00:23)에
+  열려 있어 `CRACKVIEWER_DDS_INITIAL_PEER`를 물려받지 못함(멀티캐스트로만 탐색). 수정: 프로세스 환경에 없으면 사용자 환경 변수(레지스트리)를 직접 읽음.
+  시작 시 LIVE LOG에 `[DDS] 도메인 31, worker '…', Router IP:포트` 출력.
+- 값은 반드시 `192.168.219.42:15166`(포트 포함). 포트를 빼면 15160으로 가서 Router에 닿지 않음. `CRACKVIEWER_DDS_INTERFACE_WHITELIST`는 비워 둠
+  (이 PC -> .219.x 경로는 Tailscale 인터페이스).
+- 남은 문제(미해결): FacadePreviewer "분석 시작" 요청에 LB(.41)가 응답하지 않음. 추정(LB 코드 기준, Router 로그 미확인): LB는 분석 요청을 도메인 30에서
+  FacadePreviewer로부터 직접 받는데, 둘 다 같은 Router 도메인 30 참가자에 붙어 있고 Router는 같은 도메인 안은 중계하지 않음 + 서브넷/NAT 차이로 직접 탐색 불가.
+  해결안: A) LB를 이 PC에서 실행, B) Router에 LB 전용 도메인(30<->32, 31<->33) 추가 + LB를 `LOADBALANCER_DOMAIN_30=32`, `LOADBALANCER_DOMAIN_31=33`으로 실행.

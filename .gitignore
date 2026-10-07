@@ -73,3 +73,7 @@ remote_downloads/
 /preview_reference_track/
 /training_data_structural_fp_v2_gt/
 .vscode/
+
+# 2026-10-07: per-workstation registry of Dense Stereo data kept locally (DenseRetentionService)
+dense_retention.json
+dense_retention.json.tmp

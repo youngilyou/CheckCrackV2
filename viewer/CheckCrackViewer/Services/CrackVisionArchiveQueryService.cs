@@ -164,7 +164,8 @@ public static class CrackVisionArchiveQueryService
     /// before -- kept as a "most recently finished facade" summary for backward compat and the
     /// common single-direction case.</summary>
     public static async Task UpdateAnalysisResultAsync(CrackVisionDbSettings settings, long archiveId, string facadeId,
-        string? stitchingZipPath, string? reportPath, string? analysisStatus, CancellationToken cancellationToken = default)
+        string? stitchingZipPath, string? reportPath, string? analysisStatus, CancellationToken cancellationToken = default,
+        string? resultsDir = null, object? denseStorage = null)
     {
         if (string.IsNullOrWhiteSpace(settings.PostgresHost))
             throw new InvalidOperationException("PostgreSQL host가 설정되지 않았습니다 (설정 화면에서 CrackVisionDB 접속 정보를 입력하세요).");
@@ -185,6 +186,11 @@ public static class CrackVisionArchiveQueryService
                 report_path = reportPath,
                 status = analysisStatus,
                 updated_at = DateTime.UtcNow.ToString("O"),
+                // 2026-10-07: folder on .43 holding this facade's individually uploaded result files
+                // (rows in crackvision_result_files), and where the Dense Stereo data lives instead
+                // of being uploaded (this workstation; see AnalysisResultUploadService).
+                results_dir = resultsDir,
+                dense_storage = denseStorage,
             },
         });
 
@@ -193,7 +199,8 @@ public static class CrackVisionArchiveQueryService
             "facade_analysis_results = facade_analysis_results || $1::jsonb, " +
             "stitching_zip_path = COALESCE($2, stitching_zip_path), " +
             "report_path = COALESCE($3, report_path), " +
-            "analysis_status = COALESCE($4, analysis_status) " +
+            "analysis_status = COALESCE($4, analysis_status), " +
+            "last_analyzed_at = now() " +
             "WHERE archive_id = $5", conn);
         cmd.Parameters.AddWithValue(mergeFragment);
         cmd.Parameters.AddWithValue((object?)stitchingZipPath ?? DBNull.Value);
@@ -394,6 +401,62 @@ public static class CrackVisionArchiveQueryService
         {
             return null;
         }
+    }
+
+    /// <summary>2026-10-07: registers this facade's uploaded result files in crackvision_result_files
+    /// (MngData schemas/crackvision_storage.sql). Re-analysis overwrites the same rows in place
+    /// (PK archive_id, facade_id, kind, file_name) and clears deleted_at. Rows of THIS facade whose
+    /// file was not part of this upload are left as they are (their remote file is not touched either).</summary>
+    public static async Task UpsertResultFilesAsync(CrackVisionDbSettings settings, long archiveId, string facadeId,
+        IReadOnlyList<ResultFileRecord> files, CancellationToken cancellationToken = default)
+    {
+        if (files.Count == 0)
+            return;
+        await using var conn = new NpgsqlConnection(BuildConnString(settings));
+        await conn.OpenAsync(cancellationToken);
+        await using var tx = await conn.BeginTransactionAsync(cancellationToken);
+        foreach (var f in files)
+        {
+            await using var cmd = new NpgsqlCommand(
+                "INSERT INTO crackvision_result_files " +
+                "(archive_id, facade_id, kind, file_name, file_path, size_bytes, sha256, keep_after_contract, deleted_at, updated_at) " +
+                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULL,now()) " +
+                "ON CONFLICT (archive_id, facade_id, kind, file_name) DO UPDATE SET " +
+                "file_path = EXCLUDED.file_path, size_bytes = EXCLUDED.size_bytes, sha256 = EXCLUDED.sha256, " +
+                "keep_after_contract = EXCLUDED.keep_after_contract, deleted_at = NULL, updated_at = now()", conn, tx);
+            cmd.Parameters.AddWithValue(archiveId);
+            cmd.Parameters.AddWithValue(facadeId);
+            cmd.Parameters.AddWithValue(f.Kind);
+            cmd.Parameters.AddWithValue(f.FileName);
+            cmd.Parameters.AddWithValue(f.RemotePath);
+            cmd.Parameters.AddWithValue(f.SizeBytes);
+            cmd.Parameters.AddWithValue(f.Sha256);
+            cmd.Parameters.AddWithValue(f.KeepAfterContract);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await tx.CommitAsync(cancellationToken);
+    }
+
+    /// <summary>2026-10-07: retention_state + cleanup_due_at per archive (for DenseRetentionService).
+    /// Archives missing from the table are simply absent from the result.</summary>
+    public static async Task<Dictionary<long, (string State, DateTime? CleanupDueAt)>> GetRetentionStatesAsync(
+        CrackVisionDbSettings settings, IReadOnlyCollection<long> archiveIds, CancellationToken cancellationToken = default)
+    {
+        var result = new Dictionary<long, (string, DateTime?)>();
+        if (archiveIds.Count == 0)
+            return result;
+        await using var conn = new NpgsqlConnection(BuildConnString(settings));
+        await conn.OpenAsync(cancellationToken);
+        await using var cmd = new NpgsqlCommand(
+            "SELECT archive_id, retention_state, cleanup_due_at FROM crackvision_archives WHERE archive_id = ANY($1)", conn);
+        cmd.Parameters.AddWithValue(archiveIds.ToArray());
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result[reader.GetInt64(0)] = (reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetFieldValue<DateTime>(2));
+        }
+        return result;
     }
 
     private static string BuildConnString(CrackVisionDbSettings settings) =>

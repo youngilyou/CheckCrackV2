@@ -29,6 +29,10 @@ public partial class ResultsCompareViewModel : ObservableObject
 
     public string RootPath { get; set; } = "";
 
+    /// <summary>2026-10-07: set by MainViewModel -- (version output dir, facade id) -> status text, or null
+    /// when the facade is not linked to a server archive. Pushes regenerated results to the server.</summary>
+    public Func<string, string, Task<string?>>? AfterReportRegenerated { get; set; }
+
     private readonly DispatcherTimer _scanTimer;
 
     public ObservableCollection<FacadeSnapshot> Facades { get; } = new();
@@ -1415,7 +1419,15 @@ public partial class ResultsCompareViewModel : ObservableObject
                         LoadReportPage(Panel1);
                     if (Panel2.Mode == "보고서")
                         LoadReportPage(Panel2);
-                    MessageBox.Show("최종 보고서를 재생성했습니다.", "완료", MessageBoxButton.OK, MessageBoxImage.Information);
+                    var serverNote = "";
+                    if (AfterReportRegenerated != null)
+                    {
+                        ReviewStatusText = "최종 보고서를 재생성했습니다. 서버에 반영 중...";
+                        var status = await AfterReportRegenerated(outputDir, facade.FacadeId);
+                        serverNote = status == null ? "" : "\n" + status;
+                        ReviewStatusText = "최종 보고서를 재생성했습니다." + (status == null ? "" : " " + status);
+                    }
+                    MessageBox.Show("최종 보고서를 재생성했습니다." + serverNote, "완료", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
             }
             finally
