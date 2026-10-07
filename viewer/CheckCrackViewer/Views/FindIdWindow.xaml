@@ -1,0 +1,18 @@
+<Window x:Class="CheckCrackViewer.Views.FindIdWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="아이디 찾기" Width="420" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" Background="#EAF3FB">
+    <!-- 2026-10-07: 로그인 창 "아이디 찾기". 이 PC의 로컬 계정(SQLite)에서 이름으로 찾아 아이디 일부만 보여준다. -->
+    <StackPanel Margin="24">
+        <TextBlock Text="아이디 찾기" FontSize="18" FontWeight="Bold" Foreground="#17222C" Margin="0,0,0,6"/>
+        <TextBlock Text="계정을 만들 때 등록한 이름을 입력하세요. 이 PC에 저장된 계정에서 찾습니다." Foreground="#5B6B78"
+                   TextWrapping="Wrap" Margin="0,0,0,14"/>
+        <TextBlock Text="이름" Foreground="#5B6B78" Margin="0,0,0,4"/>
+        <TextBox x:Name="NameInput" Padding="8,6" FontSize="13" KeyDown="NameInput_KeyDown"/>
+        <Button Content="찾기" Click="Find_Click" Margin="0,12,0,0" Padding="10,8" Background="#3B7DF2"
+                Foreground="White" BorderThickness="0" FontWeight="Bold"/>
+        <TextBlock x:Name="ResultText" Foreground="#17222C" TextWrapping="Wrap" Margin="0,14,0,0" FontSize="13"/>
+        <Button Content="닫기" Click="Close_Click" HorizontalAlignment="Right" Margin="0,16,0,0" Padding="14,6"/>
+    </StackPanel>
+</Window>

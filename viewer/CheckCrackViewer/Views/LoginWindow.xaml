@@ -159,9 +159,9 @@
                     <CheckBox Grid.Column="0" Content="아이디 저장" Foreground="{StaticResource LoginTextMuted}" FontSize="12"
                               IsChecked="{Binding RememberLogin}"/>
                     <StackPanel Grid.Column="2" Orientation="Horizontal">
-                        <TextBlock Text="아이디 찾기" Style="{StaticResource FooterLink}"/>
-                        <TextBlock Text="  |  " Style="{StaticResource FooterLink}"/>
-                        <TextBlock Text="비밀번호 찾기" Style="{StaticResource FooterLink}"/>
+                        <TextBlock Text="아이디 찾기" Style="{StaticResource FooterLink}" MouseLeftButtonUp="FindId_Click"/>
+                        <TextBlock Text="  |  " Style="{StaticResource FooterLink}" Cursor="Arrow"/>
+                        <TextBlock Text="비밀번호 찾기" Style="{StaticResource FooterLink}" MouseLeftButtonUp="ResetPassword_Click"/>
                     </StackPanel>
                 </Grid>
 

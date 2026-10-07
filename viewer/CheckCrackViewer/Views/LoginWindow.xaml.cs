@@ -23,6 +23,13 @@ public partial class LoginWindow : Window
         };
     }
 
+    // 2026-10-07: 아이디/비밀번호 찾기 -- 이 PC의 로컬 계정(SQLite) 기준. 회사 계정(SmartOneFlow) 연동은 차후.
+    private void FindId_Click(object sender, MouseButtonEventArgs e) =>
+        new FindIdWindow { Owner = this }.ShowDialog();
+
+    private void ResetPassword_Click(object sender, MouseButtonEventArgs e) =>
+        new ResetPasswordWindow(ViewModel.Username) { Owner = this }.ShowDialog();
+
     private void PasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
     {
         if (DataContext is LoginViewModel vm)
