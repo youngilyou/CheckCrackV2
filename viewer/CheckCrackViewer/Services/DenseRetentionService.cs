@@ -29,7 +29,7 @@ public sealed class DenseRetentionEntry
 /// Deletion rule (mirrors MngData schemas/crackvision_storage.sql): retention_state = 'cleaned', or
 /// 'cleanup_pending' with cleanup_due_at reached. 'active', an unknown state, a missing archive row or a
 /// DB error -> keep (never delete on missing information). Safety: the folder is deleted only if its name
-/// ends with "_{archive_id}" (the extract naming both download paths use); otherwise only the Dense folders
+/// is "A{archive_id}" (ArchiveFolderName, since 2026-10-08) or ends with "_{archive_id}" (older extracts); otherwise only the Dense folders
 /// are removed and a warning is logged.</summary>
 public static class DenseRetentionService
 {
@@ -121,7 +121,7 @@ public static class DenseRetentionService
     {
         var facadeDir = Directory.GetParent(e.BaseOutputDir.TrimEnd('\\', '/'));
         var archiveDir = facadeDir?.Parent;
-        if (archiveDir == null || !archiveDir.Name.EndsWith($"_{e.ArchiveId}", StringComparison.Ordinal))
+        if (archiveDir == null || !ArchiveFolderName.Matches(archiveDir.Name, e.ArchiveId))
             return null;
         return archiveDir.FullName;
     }

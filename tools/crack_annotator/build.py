@@ -17,6 +17,9 @@ from pathlib import Path
 
 import cv2
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src.common.imageio import imread_unicode  # noqa: E402 -- 내규: 한글 경로 안전 입출력
+
 TEMPLATE_PATH = Path(__file__).parent / "template.html"
 OUTPUT_DIR = Path(__file__).parent / "output"
 MAX_DISPLAY_DIM = 2000
@@ -25,7 +28,7 @@ JPEG_QUALITY = 85
 
 def build(facade_id: str, mosaic_path: str | Path) -> Path:
     mosaic_path = Path(mosaic_path)
-    img = cv2.imread(str(mosaic_path))
+    img = imread_unicode(mosaic_path)
     if img is None:
         raise FileNotFoundError(f"could not read mosaic: {mosaic_path}")
     orig_h, orig_w = img.shape[:2]

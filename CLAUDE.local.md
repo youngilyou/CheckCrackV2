@@ -22,6 +22,10 @@
 10. COLMAP은 항상 필수가 아니다. Kornia 정합 품질이 부족할 때 정밀 보정 경로로 사용한다.
 11. 모든 Crack 결과는 원본 사진까지 provenance를 역추적할 수 있어야 한다.
 12. 1 Facade = 1 Flight를 기본 운용 정책으로 한다.
+13. **(내규, 2026-10-08) 경로는 한글이든 영문이든 처리되어야 한다.** (a) 이미지 파일 읽기/쓰기는 반드시 `src/common/imageio.py`의
+    `imread_unicode`/`imwrite_unicode`로 한다 -- Windows OpenCV의 `cv2.imread`/`cv2.imwrite`는 한글 경로에서 오류 없이 실패한다.
+    `tools/check_unicode_io.py`(check_env.bat에 포함)가 직접 호출을 찾으면 실패시킨다. (b) 프로그램이 만드는 작업 폴더 이름은 영문/숫자만
+    쓴다(받은 archive는 `extracted\A{archive_id}`, 뷰어 `ArchiveFolderName`). 회사·동 등 한글 이름은 화면/DB 표시용 정보로만 쓴다.
 
 ---
 
@@ -2606,3 +2610,12 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
   (참고: 그때 메모처럼 다시 다룬다면 수동 정면 영역(뷰어 "정면 영역 그리기") 같은 명시적 외곽선으로.)
 - 별개 버그 수정(`78acf2c`): depth_fill이 cv2.imread를 써서 한글 경로(원격 분석 폴더)의 사진을 못 읽어 벽 질감 보정이 0 px였음 -> imread_unicode.
 - 남은 대응: 재촬영(그 모서리 추가 촬영), 분석 전/후 영역별 사진 수·Dense 밀도 경고(제안, 사용자 결정 대기). 미리보기: preview_reference_track\left_edge_2026-10-08\ (git 제외).
+
+## 2026-10-08 세션 기록 (2): 한글 경로 내규 + 마감 재적용 + Dense 시간 측정
+- 사용자 지시: "한글로 들어오든 영어로 들어오든 처리할 수 있게, 영문으로 하는 규칙/내규 로직" -> 절대 원칙 13번으로 추가.
+  `tools/check_unicode_io.py`가 `tools/crack_annotator/build.py`의 cv2.imread도 찾아 수정. COLMAP/pycolmap과 .NET은 한글 경로 정상(원격 분석에서 재구성/깊이 계산 정상) --
+  문제는 OpenCV 직접 입출력뿐. 받은 archive 압축 해제 폴더를 `{회사}_{동}_{id}` -> `A{id}`로(원격/수동/서버 결과 불러오기 공통), 계약 종료 정리는 두 이름 모두 인식.
+  남은 위험: 촬영 면(방향) 폴더 이름이 한글이면(측정 장소 사용자 정의) facade_id/파일명이 한글이 됨 -- (a) 규칙으로 처리는 되지만, 측정 장소 이름은 영문 권장.
+- 수목토 BACK V001 "색칠한 그림" 원인 = 한글 경로로 원본 사진 마감이 0 px. `tools/apply_wall_finish.py`(신규)로 재분석 없이 마감만 적용 -> 11,992,411 px, 원본 백업 `_backup_before_wallfinish\`.
+  적용 후 질감은 V002와 같은 수준. 양쪽 모서리 형태(바깥 띠/옆면 조각)는 V002에도 동일하게 있음 = 촬영 데이터 한계(앞 기록).
+- Dense 시간: 6h33m 중 patch_match 5h29m(84%). 20장 실측 실험 중(해상도 2640/1600, 반복 5/3, 비교 사진 수 10) -- 결과는 다음 기록.

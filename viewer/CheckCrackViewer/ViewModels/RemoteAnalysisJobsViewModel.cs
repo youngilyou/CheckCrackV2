@@ -148,7 +148,7 @@ public sealed class RemoteAnalysisJobsViewModel
 
             SetStatus(job, "압축 해제 중");
             var extractDir = Path.Combine(_extractRoot,
-                $"{SafeName(assignment.Company)}_{SafeName(assignment.Building)}_{assignment.ArchiveId}");
+                ArchiveFolderName.For(assignment.ArchiveId));
             if (Directory.Exists(extractDir))
                 Directory.Delete(extractDir, recursive: true);
             Directory.CreateDirectory(Path.GetDirectoryName(extractDir)!);
@@ -186,9 +186,6 @@ public sealed class RemoteAnalysisJobsViewModel
         var downloadedMb = downloaded / 1024.0 / 1024.0;
         return total > 0 ? $"{downloadedMb:F1} MB / {total / 1024.0 / 1024.0:F1} MB" : $"{downloadedMb:F1} MB";
     }
-
-    private static string SafeName(string s) =>
-        string.Concat(s.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
 
     private void SetStatus(RemoteAnalysisJobViewModel job, string status) => RunOnUi(() => job.Status = status);
 

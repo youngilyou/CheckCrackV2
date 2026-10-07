@@ -625,7 +625,7 @@ public partial class MainViewModel : ObservableObject
 
             row.Status = "압축 해제 중...";
             var extractDir = Path.Combine(settings.DownloadFolder, "extracted",
-                $"{archive.Company}_{archive.Building}_{archive.ArchiveId}");
+                ArchiveFolderName.For(archive.ArchiveId));
             if (Directory.Exists(extractDir))
                 Directory.Delete(extractDir, recursive: true);
             Directory.CreateDirectory(Path.GetDirectoryName(extractDir)!);
@@ -691,7 +691,7 @@ public partial class MainViewModel : ObservableObject
         {
             var settings = BuildCrackVisionSettings();
             var extractDir = Path.Combine(settings.DownloadFolder, "extracted",
-                $"{archive.Company}_{archive.Building}_{archive.ArchiveId}");
+                ArchiveFolderName.For(archive.ArchiveId));
             // 원본 사진이 이미 받아져 있으면 다시 받지 않는다(그 안의 기존 output도 그대로 둠).
             if (!Directory.Exists(extractDir) || !Directory.EnumerateFileSystemEntries(extractDir).Any())
             {
