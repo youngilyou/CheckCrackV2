@@ -2557,3 +2557,25 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
 - 남은 문제(미해결): FacadePreviewer "분석 시작" 요청에 LB(.41)가 응답하지 않음. 추정(LB 코드 기준, Router 로그 미확인): LB는 분석 요청을 도메인 30에서
   FacadePreviewer로부터 직접 받는데, 둘 다 같은 Router 도메인 30 참가자에 붙어 있고 Router는 같은 도메인 안은 중계하지 않음 + 서브넷/NAT 차이로 직접 탐색 불가.
   해결안: A) LB를 이 PC에서 실행, B) Router에 LB 전용 도메인(30<->32, 31<->33) 추가 + LB를 `LOADBALANCER_DOMAIN_30=32`, `LOADBALANCER_DOMAIN_31=33`으로 실행.
+
+## 2026-10-07 세션 기록 (3): 계약 연결 -- GenerateJson -> FacadePreviewer -> MngData -> SmartCrackWeb (다른 저장소 4곳 수정)
+- 문제: SmartCrackWeb(고객 웹)은 MngData `crackvision_archives.contract_id` == MySQL `Contracts.ContractNo`로 결과를 연결하는데,
+  GenerateJson이 촬영지역 파일(`우리아파트.json`)에 계약 번호를 아예 쓰지 않았고, FacadePreviewer 전송 창은 별도 목록
+  (`config/facade_targets.json`)의 회사/동을 써서 archive #1~#3 모두 contract_id NULL, 회사/동도 계약과 무관("예시_아파트/101동").
+  SmartCrackWeb에는 검사(Inspection) 행을 만드는 코드가 없었고 보고서 PDF도 동기화 대상이 아니었음.
+- MySQL `smartcrack`(@.43:3306, SmartCrackWeb·SmartOneFlow(ERP) 공유): 계약 CT-2026-00001(활성, 10-06~10-31), 신청 SC-2026-00001,
+  건물 수목토(1000~1009동 x 4면). 동 번호는 숫자로 저장, 화면에서 "동"을 붙임.
+- 동 표기 결정(사용자 "A안"): 저장/연결 키는 숫자("1000"), 표시만 "1000동". "1000동"으로 입력해도 숫자로 정규화.
+- 수정/푸시:
+  - GenerateJsonOfScanArea `ee13878`: 확정 시 계약 조회 -> JSON Version 2(ContractId, CustomerName, BuildingName, Address, RequestNo,
+    ContractStart/End), 활성 계약 없으면 확정 차단, 동 목록 동 단위/`1000동동` 방지.
+  - FacadePreviewer `6b32113`: 전송 창이 촬영지역 파일 기준(회사=BuildingName, 동=Buildings), 파일 없음/계약 없음이면 팝업+전송 차단,
+    MngData로 동은 숫자로 전송.
+  - SmartCrackUserWeb `63d7c96`(동 정규화), `2fcd189`: 계약 붙은 archive가 오면 검사/면 자동 생성, 보고서 PDF를 SFTP로 받아
+    `uploads/reports/`에 저장 후 Report.PdfUrl, 등급은 CheckCrackV2 severity 사용(해상도 부족은 미분류), 동기화 주기 10분.
+- 운영 반영에 필요한 것(미완): SmartCrackWeb 운영 서버(외부 smartcrack.ddns.net:8444 -> 121.64.93.72, 내부 호스트 미확인)에
+  `ConnectionStrings:CrackVisionPostgres` + `CrackVision:Sftp*` 설정과 배포, `.43` pg_hba에 그 서버 IP 허용.
+- **미해결(결정 필요)**: 균열은 그 동의 신청 면(동/서/남/북)이 하나일 때만 연결됨. 한 동에 4면을 신청하면 촬영 방향(FRONT/BACK)이
+  어느 나침반 면인지 몰라 균열이 들어가지 않음(자동 환산 금지 원칙) -> 사람이 매핑을 정하는 위치(GenerateJson/FacadePreviewer/SmartCrackWeb) 결정 필요.
+- archive #3(오늘 분석 중)은 계약 없는 테스트 데이터라 SmartCrackWeb에는 나오지 않음 -- 새 GenerateJson 파일로 다시 촬영/전송 필요.
+- 미검증: 네 프로그램 모두 빌드만 확인(계약 조회 SQL은 실제 MySQL에서 확인). 사용자가 퇴근 후 검증 예정.
