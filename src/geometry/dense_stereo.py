@@ -94,6 +94,8 @@ def run_dense_stereo(
     logger=None,
     facade_id: str = "",
     progress_interval_s: float = 60.0,
+    max_image_size: int = DENSE_MAX_IMAGE_SIZE,
+    num_iterations: int = 5,
 ) -> DenseStereoResult | None:
     """Runs image_undistorter -> patch_match_stereo -> stereo_fusion via
     pycolmap directly (no native COLMAP.exe binary -- confirmed present in the
@@ -160,7 +162,7 @@ def run_dense_stereo(
         input_path=sparse_dir,
         image_path=str(images_dir),
         output_type="COLMAP",
-        undistort_options=pycolmap.UndistortCameraOptions(max_image_size=DENSE_MAX_IMAGE_SIZE),
+        undistort_options=pycolmap.UndistortCameraOptions(max_image_size=int(max_image_size)),
     )
 
     if logger:
@@ -192,7 +194,7 @@ def run_dense_stereo(
             workspace_format="COLMAP",
             # cache_size=16: run_dense_stereo_loftr.sh's `--PatchMatchStereo.cache_size 16`
             # (pycolmap default is 32 GB; the process grew to ~22 GB RSS on FRONT with it).
-            options=pycolmap.PatchMatchOptions(geom_consistency=True, cache_size=16.0),
+            options=pycolmap.PatchMatchOptions(geom_consistency=True, cache_size=16.0, num_iterations=int(num_iterations)),
         )
     finally:
         stop_polling.set()

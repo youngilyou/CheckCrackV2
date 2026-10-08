@@ -352,6 +352,17 @@ def _restrict_reconstruction_to_images(sparse_dir: str | Path, keep_names: set[s
     return out_dir
 
 
+def _dense_stereo_options(cfg: Config) -> dict:
+    """colmap.dense_max_image_size / colmap.dense_num_iterations (2026-10-08) -- patch_match is ~84% of a
+    facade's run time (BACK: 5h29m of 6h33m). Defaults keep the original behaviour (2640 px, 5 iterations);
+    see CLAUDE.local.md 2026-10-08 for the 20-photo measurement (1600 px: -44%, 1600 px + 3 it: -65%,
+    median depth difference < 0.05%)."""
+    return {
+        "dense_max_image_size": int(getattr(cfg.colmap, "dense_max_image_size", 2640)),
+        "dense_num_iterations": int(getattr(cfg.colmap, "dense_num_iterations", 5)),
+    }
+
+
 def _dense_cleanup_enabled(cfg: Config) -> bool:
     """colmap.dense_cleanup_intermediate (default true) -- false keeps every dense intermediate
     (e.g. to re-run stereo_fusion alone while debugging)."""
@@ -370,6 +381,8 @@ def _run_dense_hybrid_stage(
     logger,
     edge_margin_m: float | None = None,
     cleanup_intermediate: bool = True,
+    dense_max_image_size: int = 2640,
+    dense_num_iterations: int = 5,
 ) -> bool:
     """Dense stereo (patch_match_stereo + stereo_fusion) on the NATIVE-scale
     reconstruction, then the dense + flat-mosaic hybrid, written as the
@@ -400,6 +413,7 @@ def _run_dense_hybrid_stage(
         dense_result = run_dense_stereo(
             native_reconstruction, images_dir, output_dir / "colmap_dense",
             logger=logger, facade_id=facade_id,
+            max_image_size=dense_max_image_size, num_iterations=dense_num_iterations,
         )
         if dense_result is None:
             log_event(
@@ -660,7 +674,7 @@ def _run_dense_only_track(
     # full pipeline) -- it is logged as DENSE_STEREO_FAILED/EMPTY, not turned into a failed run.
     _run_dense_hybrid_stage(
         facade_id, native_dir, aligned, plane, rect_result, sim3d, images_dir, output_dir, logger,
-        cleanup_intermediate=_dense_cleanup_enabled(cfg),
+        cleanup_intermediate=_dense_cleanup_enabled(cfg), **_dense_stereo_options(cfg),
     )
     return True
 
@@ -787,7 +801,7 @@ def _run_reference_track(
     )
     _run_dense_hybrid_stage(
         facade_id, colmap_result.sparse_dir, aligned, plane, flat, sim3d, images_dir, output_dir, logger,
-        edge_margin_m=0.0, cleanup_intermediate=_dense_cleanup_enabled(cfg),
+        edge_margin_m=0.0, cleanup_intermediate=_dense_cleanup_enabled(cfg), **_dense_stereo_options(cfg),
     )
     return True
 
@@ -1230,7 +1244,7 @@ def _run_facade_pipeline(
                         _run_dense_hybrid_stage(
                             facade_id, colmap_result.sparse_dir, reconstruction, plane, rect_result,
                             colmap_sim3d, colmap_images_dir, output_dir, logger,
-                            cleanup_intermediate=_dense_cleanup_enabled(cfg),
+                            cleanup_intermediate=_dense_cleanup_enabled(cfg), **_dense_stereo_options(cfg),
                         )
             except ImportError:
                 log_event(

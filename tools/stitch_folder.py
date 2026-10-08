@@ -73,6 +73,17 @@ def main() -> None:
         structure_type_arg = argv[idx + 1]
         argv = argv[:idx] + argv[idx + 2 :]
 
+    # 2026-10-08: --config PATH -- run with a different pipeline config (e.g. a Dense speed test) without
+    # touching config/pipeline.yaml.
+    config_arg = "config/pipeline.yaml"
+    if "--config" in argv:
+        idx = argv.index("--config")
+        if idx + 1 >= len(argv):
+            print("--config requires a path")
+            sys.exit(1)
+        config_arg = argv[idx + 1]
+        argv = argv[:idx] + argv[idx + 2 :]
+
     args = [a for a in argv if a != "--in-place"]
 
     if len(args) < 1:
@@ -110,7 +121,7 @@ def main() -> None:
         facade_id=facade_name,
         images_dir=images_dir,
         output_root="facades",
-        config_path="config/pipeline.yaml",
+        config_path=config_arg,
         output_dir=output_dir,
         matcher_backend=matcher_backend_arg,
         structure_type=structure_type_arg,
