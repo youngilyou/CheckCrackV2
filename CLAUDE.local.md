@@ -2626,3 +2626,44 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
   육안: 양쪽 모서리의 옆면 조각이 기존보다 적음, 벽 질감은 약간 부드러움(원본 사진 마감 적용, 같은 사진 질감). 비교 이미지 preview_reference_track\dense_speed_2026-10-08\.
   **사용자 확정(2026-10-08): 운영 기본값을 1600 px · 반복 3회로 변경**(config/pipeline.yaml colmap.dense_max_image_size=1600, dense_num_iterations=3).
   **실제 드론 촬영 자료로 다시 검증 예정** -- 품질 문제가 보이면 기존 값(2640 / 5)으로 되돌리고 같은 방식(20장 실측 + 전체 절차 비교)으로 재측정.
+
+## 2026-10-09 세션 기록: SmartCrackWeb용 보고서 번호/표지/검토 상태를 MngData DB에 적재
+- 요청(SmartCrackWeb 쪽 세션): 보고서 No.N 순서, 크롭 영역, 판정 문구, 보고서 메타를 DB에서 바로 쓰고 싶음.
+- 발견한 불일치(수정): 보고서는 `_cracks.json`(1차)+검토, 뷰어 화면/검토/DB는 `_cracks_v2.json`(2차 우선) -- 검토에서 제외한 id가 보고서 목록과 안 맞을 수 있었음.
+  보고서도 2차 우선으로 통일(`pdf_report.load_facade_snapshot`), 사용한 파일명을 report_cards에 기록, DB 적재는 그 파일을 그대로 씀.
+- "업로드된 PDF가 샘플"은 오해: 실제 생성 보고서였고, 표지 의뢰자/주소/장비/카메라가 템플릿에 "작업중"으로 고정돼 있었음 ->
+  뷰어가 보고서 생성 직전 `{면}_report_meta.json`(archive의 company/building/contract_id/customer_name)을 쓰고, 장비/카메라는 사진 EXIF Make/Model.
+  값이 없으면 "미등록"/"미확인"(만들어 넣지 않음). 주소는 MngData archive에 없어 아직 "미등록". 보고서 번호 `CC-YYYYMMDD-A{archive}-{면}`.
+- `{면}_report_cards.json` version 2: `report`(번호/발행일/쪽수/사용 파일/모자이크/건수/검토자/표지 값) + `cracks`(No., crack_id, ai|manual, 카드 페이지,
+  확대/위치 크롭 사각형 [x0,y0,x1,y1) 모자이크 px, severity/severity_note, 수동 균열은 측정값 전체). `cards`는 기존 의미 그대로.
+- MngData `backend_core/schemas/crackvision_reports.sql`(신규, .43에 적용함): `crackvision_cracks`에 source/severity_note/width_mm_per_px,
+  `crackvision_reports`(면당 1행), `crackvision_report_cracks`(No.N -> crack, 크롭 사각형).
+- 뷰어 `UpsertFacadeCracksAsync`: 검토 제외 -> review_state false_positive + in_report false(행은 보존), 보고서 목록 -> in_report, 수동 균열 -> source manual/confirmed,
+  보고서 행/번호 행 같은 트랜잭션. 업로드에 보고서 균열의 모든 원본 사진 추가(카드 첫 장만 -> 전체).
+- 검증: archive #1 BACK V001 하드링크 복사본(runs/report_test_A1)으로 보고서 생성 + 실제 적재 코드로 .43 DB 적재 -> 보고서 1행, 번호 2행, 판정 문구 확인.
+  가짜 검토(제외 1, 수동 1)로 false_positive/manual 경로 확인 후 실제 검토 파일로 되돌려 재적재. Npgsql은 +09:00 시각을 거부 -> UTC 변환 수정.
+- 남은 것: 서버의 BACK_report.pdf는 변경 전(1차 목록) 보고서라 DB 번호와 다를 수 있음 -> 새 분석 또는 "최종 보고서 재생성"으로 교체 필요.
+- (같은 날 마무리) archive #1 BACK V001 보고서를 새 코드로 재생성해 .43에 저장(파일 31개 0.18 GB, DB 적재). 서버 PDF의 No.1 BACK_C000104 / No.2 BACK_C000049가
+  DB crackvision_report_cracks와 일치 확인, 표지 TEST/수목토 1100동/L2D-20c/CC-20261009-A1-BACK. 예전 PDF/cards는 V001\_backup_before_report_v2\.
+  시험 중 덮어쓴 coverage_ratio는 실제 값 0.9544로 복구. source_photos에는 예전(1차 목록) 보고서 때 올린 사진도 남아 있음(삭제 안 함).
+  커밋: CheckCrackV2 `90be73e`, MngData `6465a8c`. V002(10-08 재스티칭, 크랙검사 없음)는 손대지 않음.
+- (같은 날) .43 서버 MngData 갱신: 서버에서 수정 중이던 SFTP 예시 문구(.43/yiyoudb)를 커밋 `c603cb1`로 올리고, 서버는 GitHub 인증이 없어 git bundle로
+  최신(c603cb1)까지 fast-forward. Remote Viewer 웹(:18090) run_dev.sh로 재시작(nohup, 로그 /tmp/remote_viewer_db.log). backend_core는 10-07 14:50 빌드가 최신이라 재시작 안 함.
+  10-07부터 멈춰 있던 서버의 `git push`(인증 대기) 프로세스 정리.
+
+## 2026-10-09 세션 기록 (2): 층 표시 -- 자동 제안 + 담당자 확정 (사용자 확정 "권장 방식")
+- 배경: SmartCrackWeb 층이 전부 0(동기화 코드 고정값). 파이프라인에 층 개념이 없었고, 뷰어의 기존 층 라벨(FloorLabelCalculator)은
+  "모자이크 맨 위 = 최상층 천장" 가정이라 Dense 모자이크(위쪽 하늘/옥상 약 1.9 m)에서 약 0.8층씩 밀림 -> 삭제하고 대체.
+- 근거(실측): COLMAP/Dense 캔버스는 정사영 입면(100 px/m, 세로 = 실제 수직)이라 층 높이가 위아래 같음. 4개 면 모두 반복 주기 2.51~2.53 m(같은 건물이라 일치).
+  처음엔 옥상선을 벽 마스크 윗단으로 잡아 선이 창문 띠 중간을 지남 -> 행별 가로 엣지 세기의 "중앙값"(이음매는 모든 열, 창문은 일부 열)을 주기로 접어
+  위상을 찾으니 패널 이음매에 정확히 맞음(BACK/FRONT 육안 확인, mean/median/frac 세 방식 위상 일치).
+- 구현: `src/geometry/floor_estimate.py`(제안 + floor_number_at 규칙), `tools/suggest_floors.py`, 파이프라인이 flat COLMAP 후와 Dense 후 `{면}_floors.json` 자동 작성
+  (기존 confirmed 유지, 캔버스 크기 다르면 버림). 뷰어 그림 창(ImageViewerWindow)에 "층 설정" 패널: 총 층수/층 간격(m), 선 이동(맨 위 선=전체, 둘째 선=간격),
+  자동 제안으로, 확정 저장(동 정보 총 층수도 갱신, 서버 archive면 DB 즉시 갱신), 확정 해제. 미확정은 점선 + "자동 제안(미확정)".
+  층 번호는 **확정값만** 사용(보고서 카드 "층: 11~12층", DB). bbox 위/아래 행의 층 -> floor_min/max. 맨 위 선보다 위(파라펫 등)는 NULL.
+- MngData `schemas/crackvision_floors.sql`(.43 적용함): crackvision_facades.floor_total/floor_roof_row_px/floor_pitch_px/floor_confirmed_by/at,
+  crackvision_cracks.floor_min/floor_max. SmartCrackWeb: facade에 floor_total이 있으면 확정됨 -> 균열 floor_min/max 표시(NULL이면 "층 범위 밖(옥상 난간 등)"),
+  floor_total이 NULL이면 "미입력"(0 금지).
+- 검증: archive #1 복사본에 시험 확정값(총 12층)으로 보고서 "11~12층"(손계산 일치), DB 23건 중 9건 층, 14건은 파라펫 띠(행 170~290)라 NULL.
+  시험 후 DB는 미확정 상태로 되돌림. archive #1 V001/V002에 제안 파일 생성(미확정). **뷰어 패널을 실제 화면에서 눌러 본 확인은 안 함**(빌드만).
+- 주의: archive #1의 뷰어 현재 버전은 V002(크랙 없음 재스티칭)라 그림 창에서 확정하면 V002 폴더에 저장됨 -- 보고서/DB는 V001 기준이므로 V001을 현재 버전으로 바꾸거나 V001에서 확정해야 함.

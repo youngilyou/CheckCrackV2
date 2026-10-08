@@ -489,8 +489,75 @@ public static class CrackVisionArchiveQueryService
 
         if (reportCards?.Report is { } report)
             await UpsertReportAsync(conn, tx, facadeRowId, report, reportCards.Cracks, reportPath, cancellationToken);
+        await ApplyFloorsAsync(conn, tx, facadeRowId, FloorSettingStore.LoadConfirmed(outputDir, facadeId), cancellationToken);
 
         await tx.CommitAsync(cancellationToken);
+    }
+
+    /// <summary>2026-10-09: the operator-confirmed floor setting (FloorSettingStore) -> crackvision_facades.floor_* and
+    /// every crack's floor_min/floor_max from its bbox rows (schemas/crackvision_floors.sql). Same rule as
+    /// FloorSettingStore.FloorAt / src/geometry/floor_estimate.py::floor_number_at. A null setting clears them (NULL =
+    /// "미입력", never 0).</summary>
+    private static async Task ApplyFloorsAsync(NpgsqlConnection conn, NpgsqlTransaction? tx, long facadeRowId,
+        FloorConfirmed? setting, CancellationToken cancellationToken)
+    {
+        await using (var cmd = new NpgsqlCommand(
+            "UPDATE crackvision_facades SET floor_total = $2, floor_roof_row_px = $3, floor_pitch_px = $4, " +
+            "floor_confirmed_by = $5, floor_confirmed_at = $6 WHERE facade_row_id = $1", conn, tx))
+        {
+            cmd.Parameters.AddWithValue(facadeRowId);
+            cmd.Parameters.AddWithValue((object?)setting?.TotalFloors ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)setting?.RoofRowPx ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)setting?.PitchPx ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)setting?.ConfirmedBy ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)setting?.ConfirmedAt?.ToUniversalTime() ?? DBNull.Value);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        // floor of a row r: total - floor((r - roof) / pitch), valid only for r >= roof and 1..total.
+        // LEAST/GREATEST ignore NULLs, so a bbox poking above the top line still gets the floor of its lower edge.
+        const string floorOf = "(CASE WHEN {0} >= $2 AND $4 - floor(({0} - $2) / $3)::int BETWEEN 1 AND $4 " +
+                               "THEN $4 - floor(({0} - $2) / $3)::int END)";
+        var top = string.Format(floorOf, "(bbox_px->>1)::float8");
+        var bottom = string.Format(floorOf, "(bbox_px->>3)::float8");
+        await using (var cmd = new NpgsqlCommand(
+            setting == null
+                ? "UPDATE crackvision_cracks SET floor_min = NULL, floor_max = NULL WHERE facade_row_id = $1"
+                : $"UPDATE crackvision_cracks SET floor_min = LEAST({top}, {bottom}), floor_max = GREATEST({top}, {bottom}) " +
+                  "WHERE facade_row_id = $1 AND jsonb_array_length(bbox_px) = 4", conn, tx))
+        {
+            cmd.Parameters.AddWithValue(facadeRowId);
+            if (setting != null)
+            {
+                cmd.Parameters.AddWithValue(setting.RoofRowPx);
+                cmd.Parameters.AddWithValue(setting.PitchPx);
+                cmd.Parameters.AddWithValue(setting.TotalFloors);
+            }
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>Floor setting confirmed/changed in ImageViewerWindow -> DB right away (without re-uploading results).
+    /// Returns false when the facade has no rows in crackvision_facades yet (nothing written back so far).</summary>
+    public static async Task<bool> UpdateFloorsAsync(CrackVisionDbSettings settings, long archiveId, string facadeId,
+        FloorConfirmed? setting, CancellationToken cancellationToken = default)
+    {
+        await using var conn = new NpgsqlConnection(BuildConnString(settings));
+        await conn.OpenAsync(cancellationToken);
+        long facadeRowId;
+        await using (var cmd = new NpgsqlCommand(
+            "SELECT facade_row_id FROM crackvision_facades WHERE archive_id = $1 AND facade_id = $2", conn))
+        {
+            cmd.Parameters.AddWithValue(archiveId);
+            cmd.Parameters.AddWithValue(facadeId);
+            if (await cmd.ExecuteScalarAsync(cancellationToken) is not long id)
+                return false;
+            facadeRowId = id;
+        }
+        await using var tx = await conn.BeginTransactionAsync(cancellationToken);
+        await ApplyFloorsAsync(conn, tx, facadeRowId, setting, cancellationToken);
+        await tx.CommitAsync(cancellationToken);
+        return true;
     }
 
     private static ReportCardsJson? ReadReportCards(string outputDir, string facadeId)

@@ -502,6 +502,11 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
         c["_no"] = i
 
     mosaic_uri, crack_map_uri, crops = _mosaic_section_data(snapshot, cracks_sorted)
+    # 2026-10-09: floors only from the operator-confirmed floor setting ({facade}_floors.json "confirmed"),
+    # never from the automatic suggestion alone (memory floor_labeling_needs_bim).
+    from src.geometry.floor_estimate import load_floor_setting
+
+    floor_setting = load_floor_setting(snapshot.output_dir, facade_id)
 
     width_slices = build_width_distribution(snapshot.cracks, metrics.get("width_mm_gradable", False)) if snapshot.cracks else []
     confidence_slices = build_confidence_tiers(snapshot.cracks) if snapshot.cracks else []
@@ -511,6 +516,7 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
         c["_context_uri"] = crop.context_uri if crop else None
         c["_zoom_uri"] = crop.zoom_uri if crop else None
         c["_zoom_rect_px"] = crop.zoom_rect_px if crop else None
+        c["_floor_min"], c["_floor_max"], c["_floor_text"] = _crack_floors(c, floor_setting)
         c["_context_rect_px"] = crop.context_rect_px if crop else None
         c["_source_preview"] = ", ".join(c.get("source_image_ids", [])[:2]) + (
             " \uc678" if len(c.get("source_image_ids", [])) > 2 else ""
@@ -589,6 +595,21 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
     return out_path
 
 
+def _crack_floors(crack: dict, setting: dict | None) -> tuple[int | None, int | None, str | None]:
+    """(lowest floor, highest floor, "3층" / "3~4층") covered by the crack's bbox rows, from the confirmed setting."""
+    from src.geometry.floor_estimate import floor_number_at
+
+    bbox = crack.get("bbox_px")
+    if setting is None or not bbox or len(bbox) != 4:
+        return None, None, None
+    args = (float(setting["roof_row_px"]), float(setting["pitch_px"]), int(setting["total_floors"]))
+    floors = [f for f in (floor_number_at(float(bbox[1]), *args), floor_number_at(float(bbox[3]), *args)) if f is not None]
+    if not floors:
+        return None, None, None
+    lo, hi = min(floors), max(floors)
+    return lo, hi, f"{lo}층" if lo == hi else f"{lo}~{hi}층"
+
+
 def _building_name(meta: dict) -> str | None:
     """"수목토 1100동" from the archive's company + building (동 is stored as a number, shown with "동")."""
     company = (meta.get("company") or "").strip()
@@ -632,6 +653,8 @@ def _report_crack_entry(crack: dict, cards: list[dict]) -> dict:
         "context_rect_px": crack.get("_context_rect_px"),
         "severity": crack.get("severity"),
         "severity_note": crack.get("severity_note"),
+        "floor_min": crack.get("_floor_min"),
+        "floor_max": crack.get("_floor_max"),
     }
     if entry["source"] == "manual":
         entry["crack"] = {k: v for k, v in crack.items() if not k.startswith("_")}

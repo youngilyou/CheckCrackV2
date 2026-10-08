@@ -42,13 +42,21 @@ public partial class ImageViewerWindow : Window
     private bool _userHasZoomedOrPanned;
     private readonly FacadeItemViewModel? _liveFacade;
 
-    // 층수 라벨(2026-09-17, 사용자 요청) -- 둘 다 있어야 그릴 수 있음: 건물의 총 층수/층고
-    // (BuildingMetadataStore, 사용자 수동 입력) + 이 facade의 px_per_m(스케일 보정 여부 포함).
-    // rootPath가 없으면(예: ResultsCompareView 쪽 호출 경로) 조용히 생략 -- 플로어 라벨은
-    // "있으면 보너스" 기능이지 필수 경로가 아니라서, 이 정보 없이도 뷰어 자체는 항상 정상 동작해야 함.
+    // 층 선 (2026-10-09, 사용자 확정 "권장 방식"): {facade}_floors.json의 자동 제안(옥상 아래 첫 층 경계 + 층 간격)을
+    // 담당자가 확인/조정하고 총 층수를 넣어 확정한다. 확정값만 층 번호의 근거(보고서/DB) -- 예전 방식(모자이크 맨 위 =
+    // 최상층 천장 가정)은 Dense 모자이크 위쪽의 하늘/옥상 때문에 층이 밀려서 대체됨. 좌표는 전부 모자이크 원본 픽셀
+    // (_floorFile의 캔버스)이고, 화면에는 _floorScale(디코드 축소 비율)을 곱해 그린다.
     private FacadeItemViewModel? _facadeContext;
     private string? _rootPath;
-    private List<FloorRow> _floorRows = new();
+    private int _nativeWidth, _nativeHeight;
+    private FloorSettingFile? _floorFile;
+    private double _floorRoof, _floorPitch; // working values, native px
+    private int? _floorTotal;
+    private bool _floorConfirmed;
+    private bool _floorDirty;
+    private bool _suppressFloorInput;
+    private int _draggingFloorLine = -1; // 0 = top line (moves all), 1 = second line (changes the pitch)
+    private double FloorScale => _nativeHeight > 0 ? (double)_pixelHeight / _nativeHeight : 1.0;
 
     // 2026-09-19: 정면 영역 지정(다각형 그리기) 상태. 좌표는 전부 "이미지 자신의 픽셀 공간"
     // (파이썬 쪽 manual_region.json이 읽는 것과 같은 좌표계) -- 화면 좌표는 줌/팬마다 바뀌므로
@@ -179,7 +187,9 @@ public partial class ImageViewerWindow : Window
         {
             var probeDecoder = BitmapDecoder.Create(probeStream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
             nativeWidth = probeDecoder.Frames[0].PixelWidth;
+            _nativeHeight = probeDecoder.Frames[0].PixelHeight;
         }
+        _nativeWidth = nativeWidth;
 
         var bitmap = new BitmapImage();
         bitmap.BeginInit();
@@ -192,7 +202,7 @@ public partial class ImageViewerWindow : Window
         TheImage.Source = bitmap;
         _pixelWidth = bitmap.PixelWidth;
         _pixelHeight = bitmap.PixelHeight;
-        TryLoadFloorRows();
+        FloorTool_Init();
 
         if (!_userHasZoomedOrPanned && Viewport.ActualWidth > 0 && Viewport.ActualHeight > 0)
         {
@@ -238,75 +248,305 @@ public partial class ImageViewerWindow : Window
         RedrawRegionOverlay(left, top);
     }
 
-    /// <summary>총 층수/층고(BuildingMetadataStore, 사용자 수동 입력) + 이 facade의
-    /// px_per_m(scale_colmap.json, calibrated=true일 때만)이 둘 다 있어야 층수를 계산할 수
-    /// 있음 -- 하나라도 없으면 _floorRows가 빈 채로 남고(RedrawFloorLabels가 아무것도 안 그림),
-    /// 뷰어 자체는 평소처럼 동작한다(floor_labeling_needs_bim.md: 이 값들이 없는 게 정상적인
-    /// 기본 상태, 에러 아님).</summary>
-    private void TryLoadFloorRows()
+    // =====================================================================
+    // 2026-10-09: 층 설정 (자동 제안 -> 담당자 확인/조정 -> 확정 저장 -> 보고서/DB)
+    // =====================================================================
+
+    private bool FloorToolAvailable => _floorFile != null;
+
+    /// <summary>Loads {facade}_floors.json when this window shows that facade's COLMAP/Dense mosaic (same canvas size
+    /// as the file). Any other image (H체인 모자이크, 미리보기, 원본 사진) gets no floor tool and no floor lines.</summary>
+    private void FloorTool_Init()
     {
-        _floorRows = new List<FloorRow>();
+        _floorFile = null;
         var facade = _facadeContext;
-        if (facade is null || string.IsNullOrEmpty(_rootPath) || string.IsNullOrEmpty(facade.OutputDir)
-            || string.IsNullOrEmpty(facade.ComplexId) || string.IsNullOrEmpty(facade.BuildingId) || _pixelHeight <= 0)
+        if (facade != null && !string.IsNullOrEmpty(facade.OutputDir) && !string.IsNullOrEmpty(facade.FacadeId)
+            && (_liveFacade is null || !_liveFacade.IsRunning))
+        {
+            var file = FloorSettingStore.Load(facade.OutputDir, facade.FacadeId);
+            if (file != null && file.CanvasWidth == _nativeWidth && file.CanvasHeight == _nativeHeight)
+                _floorFile = file;
+        }
+        FloorToolPanel.Visibility = FloorToolAvailable ? Visibility.Visible : Visibility.Collapsed;
+        if (!FloorToolAvailable)
             return;
-
-        var building = BuildingMetadataStore.Get(_rootPath, facade.ComplexId, facade.BuildingId);
-        if (building?.TotalFloors is not int totalFloors || building.FloorHeightM is not double floorHeightM)
-            return;
-
-        var scale = FloorLabelCalculator.LoadScale(facade.OutputDir, facade.FacadeId);
-        if (scale is null)
-            return;
-
-        _floorRows = FloorLabelCalculator.ComputeFloorRows(totalFloors, floorHeightM, scale.PxPerM, _pixelHeight);
+        LoadFloorWorkingValues(preferConfirmed: true);
     }
 
-    /// <summary>_floorRows(이미지 자체의 픽셀 좌표)를 현재 줌/팬(left/top/_scale)에 맞춰
-    /// 화면 좌표로 다시 그림 -- ApplyTransform이 호출될 때마다(줌/드래그/최초 로드) 같이 불림.
-    /// 눈금선은 이미지 왼쪽 바깥으로 살짝 튀어나오게(실제 크랙 내용을 가리지 않도록), 층수
-    /// 라벨은 그 옆에.</summary>
+    private void LoadFloorWorkingValues(bool preferConfirmed)
+    {
+        var file = _floorFile!;
+        var confirmed = preferConfirmed ? file.Confirmed : null;
+        if (confirmed is { PitchPx: > 0, TotalFloors: > 0 })
+        {
+            _floorRoof = confirmed.RoofRowPx;
+            _floorPitch = confirmed.PitchPx;
+            _floorTotal = confirmed.TotalFloors;
+            _floorConfirmed = true;
+        }
+        else
+        {
+            _floorRoof = file.Suggested?.RoofRowPx ?? file.Suggested?.WallTopRowPx ?? 0;
+            _floorPitch = file.Suggested?.PitchPx ?? 0;
+            _floorTotal = file.Confirmed?.TotalFloors > 0 ? file.Confirmed.TotalFloors : BuildingTotalFloors();
+            _floorConfirmed = false;
+        }
+        _floorDirty = false;
+        _suppressFloorInput = true;
+        FloorTotalBox.Text = _floorTotal?.ToString() ?? "";
+        FloorPitchBox.Text = _floorPitch > 0 && file.PxPerM > 0 ? (_floorPitch / file.PxPerM).ToString("0.###") : "";
+        _suppressFloorInput = false;
+        UpdateFloorStatus();
+        RedrawFloorLabels(Canvas.GetLeft(TheImage), Canvas.GetTop(TheImage));
+    }
+
+    /// <summary>Total floor count entered for this building in "동 정보" (BuildingMetadataStore), as a prefill.</summary>
+    private int? BuildingTotalFloors()
+    {
+        var f = _facadeContext;
+        if (f == null || string.IsNullOrEmpty(_rootPath) || string.IsNullOrEmpty(f.ComplexId) || string.IsNullOrEmpty(f.BuildingId))
+            return null;
+        return BuildingMetadataStore.Get(_rootPath, f.ComplexId, f.BuildingId)?.TotalFloors;
+    }
+
+    private void UpdateFloorStatus(string? extra = null)
+    {
+        if (_floorFile == null)
+            return;
+        var pxPerM = _floorFile.PxPerM;
+        var pitchM = _floorPitch > 0 && pxPerM > 0 ? _floorPitch / pxPerM : (double?)null;
+        var lines = new List<string>();
+        if (_floorConfirmed && !_floorDirty && _floorFile.Confirmed is { } c)
+            lines.Add($"확정됨 ({c.ConfirmedBy ?? "-"}, {c.ConfirmedAt?.ToLocalTime():yyyy-MM-dd HH:mm}) · 총 {c.TotalFloors}층 · 층 간격 {pitchM:0.00} m. "
+                      + "보고서/DB 층 번호는 이 값으로 계산됩니다 (BIM/도면 아님, 담당자 확인값).");
+        else
+        {
+            var s = _floorFile.Suggested;
+            lines.Add(s?.PitchPx is > 0
+                ? $"자동 제안(미확정): 층 간격 {s.PitchM:0.00} m (반복 패턴 점수 {s.PatternScore:0.00}), 첫 층 경계 y={s.RoofRowPx:0}."
+                : "자동 제안 실패: 층이 반복되는 패턴을 찾지 못했습니다. 층 간격(m)을 직접 입력하세요.");
+            lines.Add("선이 슬래브 경계와 맞는지 확인하고(맞지 않으면 '선 이동'), 총 층수를 넣어 '확정 저장'해야 보고서/DB에 층이 나옵니다.");
+        }
+        if (pitchM is double pm && _facadeContext is { } f && !string.IsNullOrEmpty(_rootPath)
+            && !string.IsNullOrEmpty(f.ComplexId) && !string.IsNullOrEmpty(f.BuildingId)
+            && BuildingMetadataStore.Get(_rootPath, f.ComplexId, f.BuildingId)?.FloorHeightM is double entered
+            && Math.Abs(entered - pm) / entered > 0.05)
+            lines.Add($"주의: 동 정보에 입력된 층고 {entered:0.00} m와 이미지에서 잰 층 간격 {pm:0.00} m가 5% 넘게 다릅니다.");
+        if (_floorPitch > 0 && _floorTotal is int total && _floorFile.Suggested?.WallBottomRowPx is double wallBottom
+            && (wallBottom - _floorRoof) / _floorPitch > total + 0.5)
+            lines.Add($"주의: 사진에 보이는 층({(wallBottom - _floorRoof) / _floorPitch:0.0}개)이 총 층수 {total}보다 많습니다. 맨 위 선 위치나 총 층수를 확인하세요.");
+        if (extra != null)
+            lines.Add(extra);
+        FloorStatusText.Text = string.Join("\n", lines);
+    }
+
+    /// <summary>Floor boundary lines across the mosaic + "N층" labels at the left edge, in screen coordinates for the
+    /// current zoom/pan. Dashed while not confirmed. Without a total floor count only the lines are drawn.</summary>
     private void RedrawFloorLabels(double left, double top)
     {
         FloorLabelCanvas.Children.Clear();
-        if (_floorRows.Count == 0)
+        if (!FloorToolAvailable || _floorPitch <= 0 || double.IsNaN(left) || double.IsNaN(top))
             return;
 
-        foreach (var row in _floorRows)
+        var k2s = _scale * FloorScale; // native px -> screen px
+        var width = _nativeWidth * k2s;
+        var editing = FloorEditToggle.IsChecked == true;
+        var solid = _floorConfirmed && !_floorDirty;
+        var maxLines = _floorTotal is int t ? t + 1 : (int)Math.Ceiling((_nativeHeight - _floorRoof) / _floorPitch) + 1;
+        for (var k = 0; k < maxLines; k++)
         {
-            double midScreenY = top + (row.TopPx + row.BottomPx) / 2.0 * _scale;
-            if (midScreenY < -20 || midScreenY > Viewport.ActualHeight + 20)
-                continue; // 화면 밖 -- 그릴 필요 없음
-
-            var tick = new System.Windows.Shapes.Line
+            var yNative = _floorRoof + k * _floorPitch;
+            if (yNative > _nativeHeight)
+                break;
+            var y = top + yNative * k2s;
+            if (y >= -20 && y <= Viewport.ActualHeight + 20)
             {
-                X1 = left - 14, X2 = left, Y1 = midScreenY, Y2 = midScreenY,
-                Stroke = Brushes.Orange, StrokeThickness = 2,
-            };
-            FloorLabelCanvas.Children.Add(tick);
+                var line = new Line
+                {
+                    X1 = left - 14, X2 = left + width, Y1 = y, Y2 = y,
+                    Stroke = editing && k <= 1 ? Brushes.Yellow : Brushes.Orange,
+                    StrokeThickness = editing && k <= 1 ? 3 : 1.5,
+                    Opacity = 0.85,
+                };
+                if (!solid)
+                    line.StrokeDashArray = new DoubleCollection { 6, 4 };
+                FloorLabelCanvas.Children.Add(line);
+            }
 
-            var label = new TextBlock
+            if (_floorTotal is int total && k < total)
             {
-                Text = $"{row.FloorNumber}층",
-                Foreground = Brushes.Orange, FontFamily = new FontFamily("Consolas"), FontSize = 12, FontWeight = FontWeights.Bold,
-                Background = new SolidColorBrush(Color.FromArgb(160, 11, 13, 14)),
-            };
-            Canvas.SetLeft(label, left - 60);
-            Canvas.SetTop(label, midScreenY - 9);
-            FloorLabelCanvas.Children.Add(label);
+                var midY = top + (yNative + _floorPitch / 2) * k2s;
+                if (midY < -20 || midY > Viewport.ActualHeight + 20)
+                    continue;
+                var label = new TextBlock
+                {
+                    Text = $"{total - k}층",
+                    Foreground = Brushes.Orange, FontFamily = new FontFamily("Consolas"), FontSize = 12, FontWeight = FontWeights.Bold,
+                    Background = new SolidColorBrush(Color.FromArgb(170, 11, 13, 14)), Padding = new Thickness(3, 0, 3, 0),
+                };
+                Canvas.SetLeft(label, left - 58);
+                Canvas.SetTop(label, midY - 9);
+                FloorLabelCanvas.Children.Add(label);
+            }
         }
 
-        if (_floorRows.Count > 0)
+        var caption = new TextBlock
         {
-            var caption = new TextBlock
+            Text = solid ? "층 표시: 담당자 확정값 (BIM/설계도면 아님)" : "층 표시: 자동 제안 (미확정)",
+            Foreground = Brushes.Orange, FontSize = 10.5,
+            Background = new SolidColorBrush(Color.FromArgb(170, 11, 13, 14)), Padding = new Thickness(4, 2, 4, 2),
+        };
+        Canvas.SetLeft(caption, 14);
+        Canvas.SetTop(caption, Viewport.ActualHeight - 30);
+        FloorLabelCanvas.Children.Add(caption);
+    }
+
+    /// <summary>0 = near the top line, 1 = near the second line, null = neither (within 8 screen px).</summary>
+    private int? FloorHitTest(Point screen)
+    {
+        if (!FloorToolAvailable || _floorPitch <= 0)
+            return null;
+        var top = Canvas.GetTop(TheImage);
+        var k2s = _scale * FloorScale;
+        for (var k = 0; k <= 1; k++)
+            if (Math.Abs(top + (_floorRoof + k * _floorPitch) * k2s - screen.Y) <= 8)
+                return k;
+        return null;
+    }
+
+    private void FloorDragTo(Point screen)
+    {
+        var yNative = (screen.Y - Canvas.GetTop(TheImage)) / (_scale * FloorScale);
+        if (_draggingFloorLine == 0)
+            _floorRoof = Math.Clamp(yNative, 0, _nativeHeight);
+        else
+        {
+            var minPitch = _floorFile!.PxPerM > 0 ? 1.5 * _floorFile.PxPerM : 50; // never below 1.5 m
+            _floorPitch = Math.Max(minPitch, yNative - _floorRoof);
+            _suppressFloorInput = true;
+            FloorPitchBox.Text = _floorFile.PxPerM > 0 ? (_floorPitch / _floorFile.PxPerM).ToString("0.###") : "";
+            _suppressFloorInput = false;
+        }
+        _floorDirty = true;
+        UpdateFloorStatus();
+        RedrawFloorLabels(Canvas.GetLeft(TheImage), Canvas.GetTop(TheImage));
+    }
+
+    private void FloorInput_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (_suppressFloorInput || !FloorToolAvailable)
+            return;
+        _floorTotal = int.TryParse(FloorTotalBox.Text.Trim(), out var n) && n > 0 && n < 300 ? n : null;
+        _floorDirty = true;
+        UpdateFloorStatus();
+        RedrawFloorLabels(Canvas.GetLeft(TheImage), Canvas.GetTop(TheImage));
+    }
+
+    private void FloorPitchBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_suppressFloorInput || !FloorToolAvailable || _floorFile!.PxPerM <= 0)
+            return;
+        if (double.TryParse(FloorPitchBox.Text.Trim(), out var m) && m >= 1.5 && m <= 10)
+        {
+            _floorPitch = m * _floorFile.PxPerM;
+            _floorDirty = true;
+        }
+        else
+            FloorPitchBox.Text = _floorPitch > 0 ? (_floorPitch / _floorFile.PxPerM).ToString("0.###") : "";
+        UpdateFloorStatus();
+        RedrawFloorLabels(Canvas.GetLeft(TheImage), Canvas.GetTop(TheImage));
+    }
+
+    private void FloorEditToggle_Click(object sender, RoutedEventArgs e)
+    {
+        HintText.Text = FloorEditToggle.IsChecked == true
+            ? "노란 선을 끌어서 조정: 맨 위 선 = 전체 이동, 두 번째 선 = 층 간격 · 휠: 확대/축소 · Esc: 닫기"
+            : "휠: 확대/축소 · 드래그: 이동 · Esc: 닫기";
+        RedrawFloorLabels(Canvas.GetLeft(TheImage), Canvas.GetTop(TheImage));
+    }
+
+    private void FloorResetButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (FloorToolAvailable)
+            LoadFloorWorkingValues(preferConfirmed: false);
+    }
+
+    private async void FloorConfirmButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!FloorToolAvailable || _facadeContext is not { } facade || string.IsNullOrEmpty(facade.OutputDir))
+            return;
+        if (_floorTotal is not int total || _floorPitch <= 0)
+        {
+            UpdateFloorStatus("확정하려면 총 층수와 층 간격이 필요합니다.");
+            return;
+        }
+        var user = (Application.Current?.MainWindow?.DataContext as MainViewModel)?.LoggedInUsername;
+        var confirmed = new FloorConfirmed
+        {
+            RoofRowPx = Math.Round(_floorRoof, 1), PitchPx = Math.Round(_floorPitch, 2), TotalFloors = total,
+            ConfirmedBy = string.IsNullOrWhiteSpace(user) ? null : user, ConfirmedAt = DateTimeOffset.Now,
+        };
+        try
+        {
+            FloorSettingStore.SaveConfirmed(facade.OutputDir, facade.FacadeId, confirmed);
+            _floorFile!.Confirmed = confirmed;
+            _floorConfirmed = true;
+            _floorDirty = false;
+            // keep "동 정보" in step (prefill for the building's other facades)
+            if (!string.IsNullOrEmpty(_rootPath) && !string.IsNullOrEmpty(facade.ComplexId) && !string.IsNullOrEmpty(facade.BuildingId))
             {
-                Text = "층수 추정치 (BIM/설계도면 없음, 사용자 입력 기준)",
-                Foreground = Brushes.Orange, FontSize = 10.5,
-                Background = new SolidColorBrush(Color.FromArgb(160, 11, 13, 14)), Padding = new Thickness(4, 2, 4, 2),
-            };
-            Canvas.SetLeft(caption, 14);
-            Canvas.SetTop(caption, Viewport.ActualHeight - 30);
-            FloorLabelCanvas.Children.Add(caption);
+                var entry = BuildingMetadataStore.Get(_rootPath, facade.ComplexId, facade.BuildingId)
+                            ?? new BuildingMetadataEntry { ComplexId = facade.ComplexId, BuildingId = facade.BuildingId };
+                entry.TotalFloors = total;
+                BuildingMetadataStore.Upsert(_rootPath, entry);
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateFloorStatus($"저장 실패: {ex.Message}");
+            return;
+        }
+        UpdateFloorStatus("저장했습니다. 보고서에는 다음 '보고서 생성/최종 보고서 재생성' 때 반영됩니다." + await PushFloorsToServerAsync(facade, confirmed));
+        RedrawFloorLabels(Canvas.GetLeft(TheImage), Canvas.GetTop(TheImage));
+    }
+
+    private async void FloorClearButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!FloorToolAvailable || _facadeContext is not { } facade || string.IsNullOrEmpty(facade.OutputDir))
+            return;
+        try
+        {
+            FloorSettingStore.SaveConfirmed(facade.OutputDir, facade.FacadeId, null);
+            _floorFile!.Confirmed = null;
+        }
+        catch (Exception ex)
+        {
+            UpdateFloorStatus($"저장 실패: {ex.Message}");
+            return;
+        }
+        LoadFloorWorkingValues(preferConfirmed: false);
+        UpdateFloorStatus("확정을 해제했습니다 (층 번호 없음)." + await PushFloorsToServerAsync(facade, null));
+    }
+
+    /// <summary>When this result folder belongs to a MngData archive, writes the floor setting to the DB right away
+    /// (crackvision_facades.floor_*, crackvision_cracks.floor_min/max). Returns a status suffix.</summary>
+    private static async Task<string> PushFloorsToServerAsync(FacadeItemViewModel facade, FloorConfirmed? confirmed)
+    {
+        var baseDir = System.IO.Path.GetDirectoryName(facade.OutputDir!.TrimEnd('\\', '/'));
+        var archiveId = facade.ArchiveId ?? (baseDir != null ? ArchiveLinkStore.TryLoad(baseDir)?.ArchiveId : null);
+        if (archiveId is not long id)
+            return " (서버 archive와 연결되지 않은 폴더라 DB는 갱신하지 않았습니다.)";
+        try
+        {
+            var settings = CrackVisionDbSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(settings.PostgresHost))
+                return " (DB 접속 정보가 없어 서버는 갱신하지 않았습니다.)";
+            var ok = await Task.Run(() => CrackVisionArchiveQueryService.UpdateFloorsAsync(settings, id, facade.FacadeId, confirmed));
+            return ok ? $" 서버(archive #{id}) 층 정보도 갱신했습니다." : $" (서버 archive #{id}에 이 면의 결과가 아직 없어 DB는 다음 결과 저장 때 반영됩니다.)";
+        }
+        catch (Exception ex)
+        {
+            return $" (서버 갱신 실패: {ex.Message})";
         }
     }
 
@@ -337,6 +577,13 @@ public partial class ImageViewerWindow : Window
             RegionCanvas_MouseLeftButtonDown(e);
             return;
         }
+        if (FloorEditToggle.IsChecked == true && FloorHitTest(e.GetPosition(Viewport)) is int line)
+        {
+            _draggingFloorLine = line;
+            Viewport.CaptureMouse();
+            e.Handled = true;
+            return;
+        }
 
         _userHasZoomedOrPanned = true;
         _isDragging = true;
@@ -348,6 +595,11 @@ public partial class ImageViewerWindow : Window
 
     private void Canvas_MouseMove(object sender, MouseEventArgs e)
     {
+        if (_draggingFloorLine >= 0)
+        {
+            FloorDragTo(e.GetPosition(Viewport));
+            return;
+        }
         if (_draggingVertexPolygon != NotDraggingVertex)
         {
             var imagePoint = ScreenToImagePoint(e.GetPosition(Viewport));
@@ -366,10 +618,17 @@ public partial class ImageViewerWindow : Window
         double top = _panStartTop + (pos.Y - _dragStart.Y);
         Canvas.SetLeft(TheImage, left);
         Canvas.SetTop(TheImage, top);
+        RedrawFloorLabels(left, top);
     }
 
     private void Canvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (_draggingFloorLine >= 0)
+        {
+            _draggingFloorLine = -1;
+            Viewport.ReleaseMouseCapture();
+            return;
+        }
         if (_draggingVertexPolygon != NotDraggingVertex)
         {
             _draggingVertexPolygon = NotDraggingVertex;

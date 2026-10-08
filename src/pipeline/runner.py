@@ -15,6 +15,7 @@ Both delegate the per-facade MATCHED -> GEOMETRY_SOLVED -> STITCHED work to
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -460,6 +461,7 @@ def _run_dense_hybrid_stage(
         imwrite_unicode(output_dir / f"{facade_id}_observed_mask_colmap_dense.tif", hybrid.observed_mask)
         atomic_write_json(output_dir / f"{facade_id}_quality_report_colmap_dense.json", asdict(hybrid.quality))
         _write_source_transform_artifacts(output_dir, facade_id, "_colmap_dense", hybrid)
+        _write_floor_suggestion(output_dir, facade_id, logger)  # again, now on the Dense mosaic
         # 2026-09-26: crack detection must place each crack by its own depth, not by the flat-plane
         # homography (measured ~14 cm median mismatch vs this very mosaic) -- it needs the Sim3d and
         # plane this run used, plus the depth maps still on disk. See src/geometry/depth_mapping.py.
@@ -507,6 +509,20 @@ def _run_dense_hybrid_stage(
             elapsed_s=round(time.time() - t_dense, 2),
         )
     return False
+
+
+def _write_floor_suggestion(output_dir: Path, facade_id: str, logger) -> None:
+    """2026-10-09: automatic floor-line suggestion (`{facade}_floors.json`, src/geometry/floor_estimate.py) for the
+    operator to confirm in CheckCrackViewer. Optional -- a failure only means no suggestion."""
+    try:
+        from src.geometry.floor_estimate import write_floor_suggestion
+
+        path = write_floor_suggestion(output_dir, facade_id)
+        if path is not None:
+            suggested = json.loads(path.read_text(encoding="utf-8"))["suggested"]
+            log_event(logger, "info", "층 선 자동 제안", stage="FLOOR_SUGGESTED", facade_id=facade_id, **suggested)
+    except Exception as exc:
+        log_event(logger, "warning", "층 선 자동 제안 실패", facade_id=facade_id, error=str(exc))
 
 
 def _write_flat_colmap_outputs(
@@ -576,6 +592,7 @@ def _write_flat_colmap_outputs(
         key=lambda e: e["image_id"],
     )
     atomic_write_json(output_dir / f"{facade_id}_source_images.json", source_images)
+    _write_floor_suggestion(output_dir, facade_id, logger)
 
     log_event(
         logger, "info", "CM-rectified mosaic complete",

@@ -20,9 +20,8 @@
                      element's actual layout size equal to what's genuinely visible. -->
                 <Image x:Name="TheImage" RenderOptions.BitmapScalingMode="HighQuality" Stretch="Fill"/>
             </Canvas>
-            <!-- 층수 라벨(입면도 스타일, 왼쪽에 표시). BuildingMetadataStore에 총 층수/층고가
-                 입력돼 있고 이 facade의 px_per_m이 calibrated=true일 때만 채워짐(FloorLabels_Redraw).
-                 IsHitTestVisible=False라 줌/드래그 조작을 가로채지 않음. -->
+            <!-- 층 선/층 라벨 (2026-10-09): {facade}_floors.json의 자동 제안 또는 담당자 확정값으로 그림
+                 (RedrawFloorLabels). IsHitTestVisible=False, 선 드래그는 Viewport의 마우스 처리에서 함. -->
             <Canvas x:Name="FloorLabelCanvas" IsHitTestVisible="False"/>
 
             <!-- 2026-09-19 사용자 요청("다각형 그리기로 정면만 선택"): 운영자가 정면 벽에
@@ -38,6 +37,27 @@
                 <TextBlock x:Name="FileNameText" Foreground="#E7E9E4" FontFamily="Consolas" FontSize="12" VerticalAlignment="Center" Margin="0,0,16,0"/>
                 <TextBlock x:Name="ZoomText" Foreground="#9AA39C" FontFamily="Consolas" FontSize="12" VerticalAlignment="Center" Margin="0,0,16,0"/>
                 <TextBlock x:Name="HintText" Text="휠: 확대/축소 · 드래그: 이동 · Esc: 닫기" Foreground="#C7CDC8" FontSize="11" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Border>
+
+        <!-- 2026-10-09: 층 설정 (사용자 확정 "권장 방식"). COLMAP/Dense 모자이크에서만 표시(FloorTool_Init).
+             자동 제안(옥상 아래 첫 층 경계 + 층 간격)을 담당자가 확인하고 총 층수를 넣어 확정해야 층 번호가 생긴다. -->
+        <Border x:Name="FloorToolPanel" VerticalAlignment="Bottom" HorizontalAlignment="Right" Background="#E01C2124"
+                CornerRadius="10,0,0,0" Padding="14,10" Visibility="Collapsed">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="층 설정" Foreground="#E7E9E4" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                    <TextBlock Text="총 층수" Foreground="#C7CDC8" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                    <TextBox x:Name="FloorTotalBox" Width="44" Margin="0,0,10,0" TextChanged="FloorInput_Changed"/>
+                    <TextBlock Text="층 간격(m)" Foreground="#C7CDC8" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                    <TextBox x:Name="FloorPitchBox" Width="54" Margin="0,0,10,0" LostFocus="FloorPitchBox_LostFocus"/>
+                    <ToggleButton x:Name="FloorEditToggle" Content="선 이동" Padding="8,3" Margin="0,0,6,0" Click="FloorEditToggle_Click"
+                                  ToolTip="맨 위 선(최상층 위 경계)을 끌면 전체가 이동, 두 번째 선을 끌면 층 간격이 바뀝니다"/>
+                    <Button Content="자동 제안으로" Padding="8,3" Margin="0,0,6,0" Click="FloorResetButton_Click"/>
+                    <Button x:Name="FloorConfirmButton" Content="확정 저장" Padding="8,3" Margin="0,0,6,0" Click="FloorConfirmButton_Click"/>
+                    <Button x:Name="FloorClearButton" Content="확정 해제" Padding="8,3" Click="FloorClearButton_Click"/>
+                </StackPanel>
+                <TextBlock x:Name="FloorStatusText" Foreground="#F0B060" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap" MaxWidth="640"/>
             </StackPanel>
         </Border>
 
