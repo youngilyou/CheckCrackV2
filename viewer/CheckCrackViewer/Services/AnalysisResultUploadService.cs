@@ -112,6 +112,39 @@ public static class AnalysisResultUploadService
             if (resolved != null && seen.Add(resolved))
                 yield return resolved;
         }
+
+        // 2026-10-09: every photo each reported crack was seen in (crackvision_crack_sources), not only the card's
+        // first one -- SmartCrackWeb lists them all. Needs the version-2 report list (which cracks are in the report).
+        foreach (var path in ReportedCrackSourcePhotos(outputDir, facadeId, cardsPath, byId))
+            if (seen.Add(path))
+                yield return path;
+    }
+
+    private static List<string> ReportedCrackSourcePhotos(string outputDir, string facadeId, string cardsPath,
+        Dictionary<string, string?> byId)
+    {
+        var result = new List<string>();
+        try
+        {
+            var report = JsonSerializer.Deserialize<ReportCardsJson>(File.ReadAllText(cardsPath));
+            if (report is not { Version: >= 2, Report: not null })
+                return result;
+            var cracksPath = Path.Combine(outputDir, report.Report.CracksFile ?? $"{facadeId}_cracks.json");
+            if (!File.Exists(cracksPath))
+                return result;
+            var reported = report.Cracks.Select(c => c.CrackId).ToHashSet();
+            var cracks = JsonSerializer.Deserialize<List<CrackJsonEntry>>(File.ReadAllText(cracksPath)) ?? new();
+            foreach (var crack in cracks.Where(c => reported.Contains(c.CrackId)))
+                foreach (var obs in crack.SourceObservations)
+                    if (byId.TryGetValue(obs.ImageId, out var filePath) && filePath != null
+                        && SourceImagePathResolver.Resolve(filePath, outputDir) is { } resolved)
+                        result.Add(resolved);
+        }
+        catch (Exception)
+        {
+            // optional extra photos -- the card photos above are already in the list
+        }
+        return result;
     }
 
     public static string Sha256Of(string path)

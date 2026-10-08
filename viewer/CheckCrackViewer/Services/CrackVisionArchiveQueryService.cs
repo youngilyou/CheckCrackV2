@@ -28,6 +28,11 @@ internal sealed class CrackJsonEntry
     // 만든) cracks.json의 severity는 근거 없이 매겨진 것이라 DB에 넣지 않는다(보고서와 같은 규칙,
     // src/report/pdf_report.py::_apply_resolution_gate).
     [JsonPropertyName("width_mm_per_px")] public double? WidthMmPerPx { get; set; }
+    /// <summary>Why severity is null although mm values exist ("판정불가(해상도부족): ..."), exactly as written by
+    /// src/crack/measurement.py::grade_severity.</summary>
+    [JsonPropertyName("severity_note")] public string? SeverityNote { get; set; }
+    /// <summary>"ai" (detection) or "manual" (drawn by a reviewer; only appears in the report's crack list).</summary>
+    [JsonPropertyName("source")] public string? Source { get; set; }
     [JsonPropertyName("position")] public CrackPositionJson? Position { get; set; }
     [JsonPropertyName("bbox_px")] public double[] BboxPx { get; set; } = Array.Empty<double>();
     [JsonPropertyName("polygon_px")] public double[][] PolygonPx { get; set; } = Array.Empty<double[]>();
@@ -45,6 +50,50 @@ internal sealed class CrackSourceObservationJson
     [JsonPropertyName("image_id")] public string ImageId { get; set; } = "";
     [JsonPropertyName("bbox_px_in_source")] public double[] BboxPxInSource { get; set; } = Array.Empty<double>();
     [JsonPropertyName("owned_pixel_count")] public long OwnedPixelCount { get; set; }
+}
+
+/// <summary>{facade_id}_report_cards.json version 2 (src/report/pdf_report.py, 2026-10-09): the report's own facts and
+/// its No.N -> crack list with the exact crop rectangles. Version 1 files (no "report") are ignored for the DB.</summary>
+internal sealed class ReportCardsJson
+{
+    [JsonPropertyName("version")] public int Version { get; set; }
+    [JsonPropertyName("report")] public ReportFactsJson? Report { get; set; }
+    [JsonPropertyName("cracks")] public List<ReportCrackJson> Cracks { get; set; } = new();
+}
+
+internal sealed class ReportFactsJson
+{
+    [JsonPropertyName("report_no")] public string ReportNo { get; set; } = "";
+    [JsonPropertyName("issue_date")] public string? IssueDate { get; set; }
+    [JsonPropertyName("generated_at")] public DateTimeOffset? GeneratedAt { get; set; }
+    [JsonPropertyName("page_count")] public int? PageCount { get; set; }
+    [JsonPropertyName("cracks_file")] public string? CracksFile { get; set; }
+    [JsonPropertyName("mosaic_file")] public string? MosaicFile { get; set; }
+    [JsonPropertyName("crack_count")] public int CrackCount { get; set; }
+    [JsonPropertyName("raw_crack_count")] public int? RawCrackCount { get; set; }
+    [JsonPropertyName("min_confidence")] public double? MinConfidence { get; set; }
+    [JsonPropertyName("reviewed_by")] public string? ReviewedBy { get; set; }
+    [JsonPropertyName("reviewed_at")] public DateTimeOffset? ReviewedAt { get; set; }
+    [JsonPropertyName("client")] public string? Client { get; set; }
+    [JsonPropertyName("address")] public string? Address { get; set; }
+    [JsonPropertyName("building_name")] public string? BuildingName { get; set; }
+    [JsonPropertyName("contract_id")] public string? ContractId { get; set; }
+    [JsonPropertyName("equipment")] public string? Equipment { get; set; }
+    [JsonPropertyName("camera")] public string? Camera { get; set; }
+}
+
+internal sealed class ReportCrackJson
+{
+    [JsonPropertyName("no")] public int No { get; set; }
+    [JsonPropertyName("crack_id")] public string CrackId { get; set; } = "";
+    [JsonPropertyName("source")] public string? Source { get; set; }
+    [JsonPropertyName("page")] public int? Page { get; set; }
+    [JsonPropertyName("zoom_rect_px")] public int[]? ZoomRectPx { get; set; }
+    [JsonPropertyName("context_rect_px")] public int[]? ContextRectPx { get; set; }
+    [JsonPropertyName("severity")] public string? Severity { get; set; }
+    [JsonPropertyName("severity_note")] public string? SeverityNote { get; set; }
+    /// <summary>Full measured crack, only for a reviewer-drawn ("manual") crack -- it exists in no detection file.</summary>
+    [JsonPropertyName("crack")] public CrackJsonEntry? Crack { get; set; }
 }
 
 /// <summary>Deserialization shape for {facade_id}_scale_colmap.json -- mirrors src/crack/
@@ -234,14 +283,19 @@ public static class CrackVisionArchiveQueryService
     /// (src/crack/merge_tiles.py's own job, upstream of this method, in the CheckCrackV2 repo).</summary>
     public static async Task UpsertFacadeCracksAsync(CrackVisionDbSettings settings, long archiveId, string facadeId,
         string outputDir, string? mosaicPath, double? coverageRatio, bool needsRetake, bool usedColmap,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, string? reportPath = null)
     {
         // 2026-09-13: 2차("구조물 오탐 제외") 우선, 없으면 1차로 fallback -- 화면 표시
         // (FacadeSnapshot.DisplayCracks)와 동일한 우선순위. DB에 최종 저장되는 크랙 데이터도
         // 뷰어가 실제로 보여주는 것과 일치해야 SmartCrackWeb 등 다운스트림이 화면과 다른
         // 데이터를 보는 불일치가 생기지 않는다.
+        // 2026-10-09: the report now uses the same list (src/report/pdf_report.py), and records which file in
+        // {facade}_report_cards.json -- prefer exactly that file so the report's No.N rows match these rows.
+        var reportCards = ReadReportCards(outputDir, facadeId);
         var cracksV2Path = Path.Combine(outputDir, $"{facadeId}_cracks_v2.json");
         var cracksPath = File.Exists(cracksV2Path) ? cracksV2Path : Path.Combine(outputDir, $"{facadeId}_cracks.json");
+        if (reportCards?.Report?.CracksFile is { Length: > 0 } reportFile && File.Exists(Path.Combine(outputDir, reportFile)))
+            cracksPath = Path.Combine(outputDir, reportFile);
         if (!File.Exists(cracksPath))
             return;
 
@@ -331,7 +385,29 @@ public static class CrackVisionArchiveQueryService
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        foreach (var c in entries)
+        // 2026-10-09: review + report state per crack (columns from crackvision_storage.sql/crackvision_reports.sql):
+        //  - rejected in {facade}_crack_review.json -> review_state 'false_positive', in_report false (row kept for audit)
+        //  - in_report = in the report's No.N list (after review + the report's confidence filter); without a v2
+        //    report file it stays "not rejected", as before
+        //  - reviewer-drawn cracks exist only in the report list -> inserted with source 'manual', 'confirmed'
+        //  - severity/severity_note: the report's values when it lists the crack (same rule as the PDF)
+        var rejected = ReadRejected(outputDir, facadeId);
+        var reportById = reportCards?.Report != null
+            ? reportCards.Cracks.Where(r => !string.IsNullOrEmpty(r.CrackId)).GroupBy(r => r.CrackId).ToDictionary(g => g.Key, g => g.First())
+            : null;
+        var rows = entries.Select(c => (Crack: c, Manual: false)).ToList();
+        if (reportById != null)
+        {
+            foreach (var r in reportCards!.Cracks.Where(r => r.Source == "manual" && r.Crack != null))
+            {
+                if (rows.Any(x => x.Crack.CrackId == r.CrackId))
+                    continue;
+                r.Crack!.CrackId = r.CrackId;
+                rows.Add((r.Crack, true));
+            }
+        }
+
+        foreach (var (c, isManual) in rows)
         {
             double? uM = null, vM = null;
             if (pxPerM is > 0 && c.Position != null)
@@ -340,12 +416,32 @@ public static class CrackVisionArchiveQueryService
                 vM = c.Position.PixelY / pxPerM.Value;
             }
 
+            ReportCrackJson? inReportRow = null;
+            reportById?.TryGetValue(c.CrackId, out inReportRow);
+            rejected.TryGetValue(c.CrackId, out var rejection);
+            var inReport = reportById != null ? inReportRow != null : rejection == null;
+            var reviewState = rejection != null ? "false_positive" : isManual ? "confirmed" : "unreviewed";
+            string? severity, severityNote;
+            if (inReportRow != null)
+            {
+                severity = inReportRow.Severity;
+                severityNote = inReportRow.SeverityNote;
+            }
+            else
+            {
+                severity = c.WidthMmPerPx.HasValue ? c.Severity : null;
+                severityNote = c.SeverityNote
+                    ?? (c.MaxWidthMm != null && !c.WidthMmPerPx.HasValue && c.Severity != null ? "판정불가(해상도 미기록 -- 크랙검사 재실행 필요)" : null);
+            }
+
             await using (var cmd = new NpgsqlCommand(
                 "INSERT INTO crackvision_cracks " +
                 "(facade_row_id, crack_id, bbox_px, polygon_px, length_px, width_px, mean_width_px, area_px, " +
                 " length_mm, width_mm, area_mm2, confidence, observation_state, severity, " +
-                " position_pixel_x, position_pixel_y, position_u_m, position_v_m) " +
-                "VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)", conn, tx))
+                " position_pixel_x, position_pixel_y, position_u_m, position_v_m, " +
+                " source, severity_note, width_mm_per_px, review_state, reviewed_by, reviewed_at, review_note, in_report) " +
+                "VALUES ($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18," +
+                " $19,$20,$21,$22,$23,$24,$25,$26)", conn, tx))
             {
                 cmd.Parameters.AddWithValue(facadeRowId);
                 cmd.Parameters.AddWithValue(c.CrackId);
@@ -360,11 +456,19 @@ public static class CrackVisionArchiveQueryService
                 cmd.Parameters.AddWithValue((object?)c.AreaMm2 ?? DBNull.Value);
                 cmd.Parameters.AddWithValue(c.Confidence);
                 cmd.Parameters.AddWithValue((object?)c.ObservationState ?? DBNull.Value);
-                cmd.Parameters.AddWithValue((object?)(c.WidthMmPerPx.HasValue ? c.Severity : null) ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)severity ?? DBNull.Value);
                 cmd.Parameters.AddWithValue((object?)c.Position?.PixelX ?? DBNull.Value);
                 cmd.Parameters.AddWithValue((object?)c.Position?.PixelY ?? DBNull.Value);
                 cmd.Parameters.AddWithValue((object?)uM ?? DBNull.Value);
                 cmd.Parameters.AddWithValue((object?)vM ?? DBNull.Value);
+                cmd.Parameters.AddWithValue(isManual ? "manual" : "ai");
+                cmd.Parameters.AddWithValue((object?)severityNote ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)c.WidthMmPerPx ?? DBNull.Value);
+                cmd.Parameters.AddWithValue(reviewState);
+                cmd.Parameters.AddWithValue((object?)(rejection?.By ?? (isManual ? reportCards?.Report?.ReviewedBy : null)) ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)(rejection?.At ?? (isManual ? reportCards?.Report?.ReviewedAt?.ToUniversalTime() : null)) ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)rejection?.Note ?? DBNull.Value);
+                cmd.Parameters.AddWithValue(inReport);
                 await cmd.ExecuteNonQueryAsync(cancellationToken);
             }
 
@@ -383,7 +487,134 @@ public static class CrackVisionArchiveQueryService
             }
         }
 
+        if (reportCards?.Report is { } report)
+            await UpsertReportAsync(conn, tx, facadeRowId, report, reportCards.Cracks, reportPath, cancellationToken);
+
         await tx.CommitAsync(cancellationToken);
+    }
+
+    private static ReportCardsJson? ReadReportCards(string outputDir, string facadeId)
+    {
+        var path = Path.Combine(outputDir, $"{facadeId}_report_cards.json");
+        if (!File.Exists(path))
+            return null;
+        try
+        {
+            var file = JsonSerializer.Deserialize<ReportCardsJson>(File.ReadAllText(path));
+            return file is { Version: >= 2, Report: not null } ? file : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private sealed record Rejection(string? By, DateTimeOffset? At, string? Note);
+
+    /// <summary>crack_id -> who rejected it, from {facade}_crack_review.json (CrackReviewStore).</summary>
+    private static Dictionary<string, Rejection> ReadRejected(string outputDir, string facadeId)
+    {
+        var result = new Dictionary<string, Rejection>();
+        var path = Path.Combine(outputDir, $"{facadeId}_crack_review.json");
+        if (!File.Exists(path))
+            return result;
+        try
+        {
+            var review = JsonSerializer.Deserialize<Models.CrackReviewFile>(File.ReadAllText(path));
+            foreach (var r in review?.Rejected ?? new())
+                if (!string.IsNullOrEmpty(r.CrackId))
+                    result[r.CrackId] = new Rejection(r.ReviewedBy ?? review!.ReviewedBy, r.ReviewedAt.ToUniversalTime(), r.Note);
+        }
+        catch (JsonException)
+        {
+        }
+        return result;
+    }
+
+    /// <summary>crackvision_reports (one row per facade) + crackvision_report_cracks (No.N -> crack), schemas/
+    /// crackvision_reports.sql in MngData. The crack rows were just re-inserted in the same transaction, which
+    /// already removed the old numbering (FK cascade); numbering rows whose crack is missing are skipped.</summary>
+    private static async Task UpsertReportAsync(NpgsqlConnection conn, NpgsqlTransaction tx, long facadeRowId,
+        ReportFactsJson report, List<ReportCrackJson> numbering, string? reportPath, CancellationToken cancellationToken)
+    {
+        DateOnly? issueDate = DateOnly.TryParse(report.IssueDate, out var d) ? d : null;
+        await using (var cmd = new NpgsqlCommand(
+            "INSERT INTO crackvision_reports (facade_row_id, report_no, issue_date, generated_at, report_path, page_count, " +
+            " cracks_file, mosaic_file, crack_count, raw_crack_count, min_confidence, reviewed_by, reviewed_at, " +
+            " client, address, building_name, contract_id, equipment, camera, updated_at) " +
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now()) " +
+            "ON CONFLICT (facade_row_id) DO UPDATE SET report_no = EXCLUDED.report_no, issue_date = EXCLUDED.issue_date, " +
+            " generated_at = EXCLUDED.generated_at, report_path = COALESCE(EXCLUDED.report_path, crackvision_reports.report_path), " +
+            " page_count = EXCLUDED.page_count, cracks_file = EXCLUDED.cracks_file, mosaic_file = EXCLUDED.mosaic_file, " +
+            " crack_count = EXCLUDED.crack_count, raw_crack_count = EXCLUDED.raw_crack_count, min_confidence = EXCLUDED.min_confidence, " +
+            " reviewed_by = EXCLUDED.reviewed_by, reviewed_at = EXCLUDED.reviewed_at, client = EXCLUDED.client, " +
+            " address = EXCLUDED.address, building_name = EXCLUDED.building_name, contract_id = EXCLUDED.contract_id, " +
+            " equipment = EXCLUDED.equipment, camera = EXCLUDED.camera, updated_at = now()", conn, tx))
+        {
+            cmd.Parameters.AddWithValue(facadeRowId);
+            cmd.Parameters.AddWithValue(report.ReportNo);
+            cmd.Parameters.AddWithValue((object?)issueDate ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.GeneratedAt?.ToUniversalTime() ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)reportPath ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.PageCount ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.CracksFile ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.MosaicFile ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(report.CrackCount);
+            cmd.Parameters.AddWithValue((object?)report.RawCrackCount ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.MinConfidence ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.ReviewedBy ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.ReviewedAt?.ToUniversalTime() ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.Client ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.Address ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.BuildingName ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.ContractId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.Equipment ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.Camera ?? DBNull.Value);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var cmd = new NpgsqlCommand("DELETE FROM crackvision_report_cracks WHERE facade_row_id = $1", conn, tx))
+        {
+            cmd.Parameters.AddWithValue(facadeRowId);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+        foreach (var r in numbering.Where(r => !string.IsNullOrEmpty(r.CrackId)))
+        {
+            await using var cmd = new NpgsqlCommand(
+                "INSERT INTO crackvision_report_cracks (facade_row_id, order_no, crack_id, page, zoom_rect_px, context_rect_px) " +
+                "SELECT $1,$2,$3,$4,$5::jsonb,$6::jsonb " +
+                "WHERE EXISTS (SELECT 1 FROM crackvision_cracks WHERE facade_row_id = $1 AND crack_id = $3)", conn, tx);
+            cmd.Parameters.AddWithValue(facadeRowId);
+            cmd.Parameters.AddWithValue(r.No);
+            cmd.Parameters.AddWithValue(r.CrackId);
+            cmd.Parameters.AddWithValue((object?)r.Page ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(r.ZoomRectPx != null ? JsonSerializer.Serialize(r.ZoomRectPx) : DBNull.Value);
+            cmd.Parameters.AddWithValue(r.ContextRectPx != null ? JsonSerializer.Serialize(r.ContextRectPx) : DBNull.Value);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>Archive facts for the report cover ({facade}_report_meta.json, read by src/report/pdf_report.py):
+    /// company/building/contract_id/customer_name. Null if the archive row doesn't exist.</summary>
+    public static async Task<Dictionary<string, object?>?> GetReportMetaAsync(CrackVisionDbSettings settings, long archiveId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = new NpgsqlConnection(BuildConnString(settings));
+        await conn.OpenAsync(cancellationToken);
+        await using var cmd = new NpgsqlCommand(
+            "SELECT company, building, contract_id, customer_name FROM crackvision_archives WHERE archive_id = $1", conn);
+        cmd.Parameters.AddWithValue(archiveId);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            return null;
+        return new Dictionary<string, object?>
+        {
+            ["archive_id"] = archiveId,
+            ["company"] = reader.GetString(0),
+            ["building"] = reader.GetString(1),
+            ["contract_id"] = NullableString(reader, 2),
+            ["customer_name"] = NullableString(reader, 3),
+        };
     }
 
     /// <summary>Best-effort mosaic pixel size via a WPF BitmapDecoder header read

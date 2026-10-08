@@ -33,6 +33,10 @@ public partial class ResultsCompareViewModel : ObservableObject
     /// when the facade is not linked to a server archive. Pushes regenerated results to the server.</summary>
     public Func<string, string, Task<string?>>? AfterReportRegenerated { get; set; }
 
+    /// <summary>2026-10-09: called with (version output dir, facade id) right before generate_report.py runs, so
+    /// MainViewModel can write {facade}_report_meta.json (archive/contract facts for the report cover).</summary>
+    public Func<string, string, Task>? BeforeReportGenerate { get; set; }
+
     private readonly DispatcherTimer _scanTimer;
 
     public ObservableCollection<FacadeSnapshot> Facades { get; } = new();
@@ -1383,6 +1387,8 @@ public partial class ResultsCompareViewModel : ObservableObject
         ReviewStatusText = "최종 보고서 생성 중...";
         try
         {
+            if (BeforeReportGenerate != null)
+                await BeforeReportGenerate(outputDir, facade.FacadeId);
             var scriptPath = Path.Combine(RootPath, "tools", "generate_report.py");
             var psi = new ProcessStartInfo
             {

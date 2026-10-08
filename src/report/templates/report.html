@@ -301,11 +301,11 @@
     </div>
 
     <table class="cover-info-table">
-      <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("person") }}</span>의뢰자 (Client)</span></td><td>작업중</td></tr>
-      <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("pin") }}</span>주소 (Address)</span></td><td>작업중</td></tr>
+      <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("person") }}</span>의뢰자 (Client)</span></td><td>{{ client_value or "미등록" }}</td></tr>
+      <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("pin") }}</span>주소 (Address)</span></td><td>{{ address_value or "미등록" }}</td></tr>
       <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("building") }}</span>건물명 (Building Name)</span></td><td>{{ building_name_value }}</td></tr>
-      <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("camera") }}</span>사용장비 (Equipment)</span></td><td>작업중</td></tr>
-      <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("camera") }}</span>카메라 (Camera)</span></td><td>작업중</td></tr>
+      <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("camera") }}</span>사용장비 (Equipment)</span></td><td>{{ equipment_value or "미확인" }}</td></tr>
+      <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("camera") }}</span>카메라 (Camera)</span></td><td>{{ camera_value or "미확인" }}</td></tr>
       <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("target") }}</span>촬영기준 (Distance)</span></td><td>10 m 기준 (5 m 필요 시 별도 촬영)</td></tr>
       <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("clipboard") }}</span>보고서 용도 (Purpose)</span></td><td>건물 외벽 균열 점검</td></tr>
     </table>
@@ -404,8 +404,8 @@
   <div class="sub-heading">촬영 및 분석 기준</div>
   <table class="metric-table">
     <tr><td class="k">촬영거리</td><td>10 m 기준 (5 m 필요 시 별도 촬영)</td></tr>
-    <tr><td class="k">촬영장비</td><td>작업중</td></tr>
-    <tr><td class="k">카메라</td><td>작업중</td></tr>
+    <tr><td class="k">촬영장비</td><td>{{ equipment_value or "미확인" }}</td></tr>
+    <tr><td class="k">카메라</td><td>{{ camera_value or "미확인" }}</td></tr>
     <tr><td class="k">촬영방법</td><td>연속 촬영 (면별)</td></tr>
     <tr><td class="k">분석방법</td><td>AI 균열 탐지 + 원본 ROI 정밀 분석</td></tr>
   </table>

@@ -38,6 +38,10 @@ class CrackCrop:
     crack_id: str
     context_uri: str | None  # wider crop with a box marking the crack's location -- "where is it"
     zoom_uri: str | None  # tight crop with the mask filled in -- "what does it look like"
+    # 2026-10-08: the exact mosaic-pixel rectangles [x0, y0, x1, y1) those two images were cut from (after clipping
+    # to the mosaic), recorded in {facade}_report_cards.json so SmartCrackWeb can show the same crops as the PDF.
+    zoom_rect_px: list[int] | None = None
+    context_rect_px: list[int] | None = None
 
 
 def _to_data_uri(bgr_image: np.ndarray, quality: int = 88) -> str:
@@ -103,9 +107,11 @@ def generate_crack_crops(
         adaptive_context_pad = max(context_pad_px, int(0.35 * max(bbox_w, bbox_h)))
 
         zoom_uri = None
+        zoom_rect = None
         zoomed = _crop_region(analysis_image, bbox, zoom_pad_px)
         if zoomed is not None:
             crop, ox, oy = zoomed
+            zoom_rect = [ox, oy, ox + crop.shape[1], oy + crop.shape[0]]
             pts = np.array(polygon, dtype=np.float64)
             pts[:, 0] -= ox
             pts[:, 1] -= oy
@@ -118,9 +124,11 @@ def generate_crack_crops(
             zoom_uri = _to_data_uri(_downscale(crop, zoom_max_dim_px))
 
         context_uri = None
+        context_rect = None
         contexted = _crop_region(analysis_image, bbox, adaptive_context_pad)
         if contexted is not None:
             crop, ox, oy = contexted
+            context_rect = [ox, oy, ox + crop.shape[1], oy + crop.shape[0]]
             bx0, by0 = int(bbox[0] - ox), int(bbox[1] - oy)
             bx1, by1 = int(bbox[2] - ox), int(bbox[3] - oy)
             thickness = max(2, round(min(crop.shape[0], crop.shape[1]) / 150))
@@ -129,7 +137,10 @@ def generate_crack_crops(
 
         if zoom_uri is None and context_uri is None:
             continue
-        out[crack_id] = CrackCrop(crack_id=crack_id, context_uri=context_uri, zoom_uri=zoom_uri)
+        out[crack_id] = CrackCrop(
+            crack_id=crack_id, context_uri=context_uri, zoom_uri=zoom_uri,
+            zoom_rect_px=zoom_rect, context_rect_px=context_rect,
+        )
 
     return out
 

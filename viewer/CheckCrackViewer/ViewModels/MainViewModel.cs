@@ -269,6 +269,7 @@ public partial class MainViewModel : ObservableObject
         OriginalAi.RootPath = RootPath;
         ResultsCompare.RootPath = RootPath;
         ResultsCompare.AfterReportRegenerated = WriteBackAfterReviewAsync;
+        ResultsCompare.BeforeReportGenerate = WriteReportMetaForVersionAsync;
         LoadDbSettings();
         LoadCrackVisionSettings();
         AttachToRoot();
@@ -362,6 +363,43 @@ public partial class MainViewModel : ObservableObject
     /// report was regenerated from the operator's review edits -- pushes the updated results to the
     /// server the same way the analysis tab's 보고서 생성 does. Returns a short status for the UI, or
     /// null when this facade is not linked to a server archive (local-only folder).</summary>
+    /// <summary>Same facade lookup as WriteBackAfterReviewAsync, for ResultsCompare's "최종 보고서 재생성".</summary>
+    private async Task WriteReportMetaForVersionAsync(string versionOutputDir, string facadeId)
+    {
+        var baseOutputDir = Path.GetDirectoryName(versionOutputDir.TrimEnd('\\', '/'));
+        if (string.IsNullOrEmpty(baseOutputDir))
+            return;
+        var facade = Facades.FirstOrDefault(f => string.Equals(f.FacadeId, facadeId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Path.GetFullPath(GetFacadeOutputDir(f)), Path.GetFullPath(baseOutputDir), StringComparison.OrdinalIgnoreCase));
+        if (facade == null)
+            return;
+        RestoreArchiveLink(facade, baseOutputDir);
+        await WriteReportMetaAsync(facade, versionOutputDir);
+    }
+
+    /// <summary>2026-10-09: writes {facade}_report_meta.json (archive_id, company, building, contract_id,
+    /// customer_name from crackvision_archives) next to the results, for the report cover and report number
+    /// (src/report/pdf_report.py::_load_report_meta). A facade not linked to an archive, or an unreachable DB,
+    /// leaves no file -- the cover then says "미등록" rather than showing made-up values.</summary>
+    private async Task WriteReportMetaAsync(FacadeItemViewModel facade, string versionOutputDir)
+    {
+        var metaPath = Path.Combine(versionOutputDir, $"{facade.FacadeId}_report_meta.json");
+        if (facade.ArchiveId is not long archiveId)
+            return;
+        try
+        {
+            var meta = await CrackVisionArchiveQueryService.GetReportMetaAsync(BuildCrackVisionSettings(), archiveId);
+            if (meta == null)
+                return;
+            await File.WriteAllTextAsync(metaPath, System.Text.Json.JsonSerializer.Serialize(meta,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+        }
+        catch (Exception ex)
+        {
+            facade.AddIssue($"[WARN] 보고서 표지 정보(archive #{archiveId})를 가져오지 못했습니다 -- 표지는 '미등록'으로 표시됩니다: {ex.Message}");
+        }
+    }
+
     private async Task<string?> WriteBackAfterReviewAsync(string versionOutputDir, string facadeId)
     {
         var baseOutputDir = Path.GetDirectoryName(versionOutputDir.TrimEnd('\\', '/'));
@@ -1841,6 +1879,8 @@ public partial class MainViewModel : ObservableObject
         try
         {
             var outputDir = FacadeVersionStore.ResolveCurrentDir(baseOutputDir);
+            RestoreArchiveLink(facade, baseOutputDir);
+            await WriteReportMetaAsync(facade, outputDir);
             var scriptPath = Path.Combine(RootPath, "tools", "generate_report.py");
             var psi = new ProcessStartInfo
             {
@@ -1970,7 +2010,8 @@ public partial class MainViewModel : ObservableObject
         // 없으므로 UpsertFacadeCracksAsync 내부에서 조용히 no-op.
         await CrackVisionArchiveQueryService.UpsertFacadeCracksAsync(settings, archiveId, facade.FacadeId,
             outputDir, facade.EffectiveAnalysisImagePath,
-            facade.CoverageRatioColmap ?? facade.CoverageRatio, facade.NeedsRetake, facade.HasRectifiedMosaic);
+            facade.CoverageRatioColmap ?? facade.CoverageRatio, facade.NeedsRetake, facade.HasRectifiedMosaic,
+            reportPath: reportRemotePath);
 
         // 2026-10-07: 이 PC의 archive 폴더(사진 + output + Dense)는 계약 종료까지 보관 -> 종료 정리 대상으로 등록.
         DenseRetentionService.Register(RootPath, archiveId, facade.FacadeId, baseOutputDir);

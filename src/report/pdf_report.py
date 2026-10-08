@@ -137,6 +137,38 @@ class FacadeSnapshot:
     analysis_path: Path | None
     used_colmap: bool
     crack_mask_path: Path | None
+    # 2026-10-08: which detection file the report used ("{facade}_cracks_v2.json" or "{facade}_cracks.json") and the
+    # contract/equipment info shown on the cover (see _load_report_meta).
+    cracks_file: str = ""
+    report_meta: dict | None = None
+
+
+def _load_report_meta(output_dir: Path, facade_id: str, source_images: list[dict]) -> dict:
+    """Cover-page facts for this facade's report.
+
+    `{facade}_report_meta.json` is written by CheckCrackViewer right before it runs this report, from the
+    MngData archive row (company/building/contract_id/customer_name/address, archive_id). It is optional: a
+    purely local run has none, and the cover then says "미등록" -- never invented values.
+    Equipment/camera come from the first readable source photo's EXIF/XMP Make/Model (DJI writes the maker,
+    e.g. "DJI", in Make and the camera model, e.g. "L2D-20c", in Model)."""
+    meta = _read_json(output_dir / f"{facade_id}_report_meta.json")
+    meta = dict(meta) if isinstance(meta, dict) else {}
+    if "equipment" not in meta or "camera" not in meta:
+        from src.capture.dji_metadata import parse_dji_image
+        from src.common.paths import resolve_source_image
+
+        for entry in source_images[:20]:
+            path = resolve_source_image(entry.get("file_path", ""), output_dir) if isinstance(entry, dict) else None
+            if not path:
+                continue
+            try:
+                parsed = parse_dji_image(path)
+            except Exception:  # noqa: BLE001 -- a broken photo must not stop the report; try the next one
+                continue
+            meta.setdefault("equipment", parsed.drone_model)
+            meta.setdefault("camera", parsed.camera_model)
+            break
+    return meta
 
 
 def _apply_resolution_gate(cracks: list[dict]) -> list[dict]:
@@ -166,7 +198,13 @@ def load_facade_snapshot(output_dir: str | Path, facade_id: str) -> FacadeSnapsh
     quality = _read_json(output_dir / f"{facade_id}_quality_report.json")
     quality_colmap = _read_json(output_dir / f"{facade_id}_quality_report_colmap.json")
     colmap = _read_json(output_dir / f"{facade_id}_colmap_report.json")
-    raw_cracks = _read_json(output_dir / f"{facade_id}_cracks.json") or []
+    # 2026-10-08: same list the viewer shows and reviews (FacadeSnapshot.DisplayCracks: 2차 "구조물 오탐 제외"
+    # first, else 1차) -- the review file's rejected crack_ids refer to that list, and the DB write-back uses it too,
+    # so the report's No.N numbering lines up with what is stored in crackvision_cracks.
+    cracks_path = output_dir / f"{facade_id}_cracks_v2.json"
+    if not cracks_path.exists():
+        cracks_path = output_dir / f"{facade_id}_cracks.json"
+    raw_cracks = _read_json(cracks_path) or []
     raw_cracks = raw_cracks if isinstance(raw_cracks, list) else []
     # {facade_id}_crack_review.json (written by the viewer's review UI) is
     # entirely optional -- a facade nobody has reviewed yet just renders every
@@ -197,6 +235,8 @@ def load_facade_snapshot(output_dir: str | Path, facade_id: str) -> FacadeSnapsh
         analysis_path=analysis_path,
         used_colmap=used_colmap,
         crack_mask_path=crack_mask_path,
+        cracks_file=cracks_path.name,
+        report_meta=_load_report_meta(output_dir, facade_id, source_images if isinstance(source_images, list) else []),
     )
 
 
@@ -470,20 +510,27 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
         crop = crops.get(c.get("crack_id"))
         c["_context_uri"] = crop.context_uri if crop else None
         c["_zoom_uri"] = crop.zoom_uri if crop else None
+        c["_zoom_rect_px"] = crop.zoom_rect_px if crop else None
+        c["_context_rect_px"] = crop.context_rect_px if crop else None
         c["_source_preview"] = ", ".join(c.get("source_image_ids", [])[:2]) + (
             " \uc678" if len(c.get("source_image_ids", [])) > 2 else ""
         )
 
+    meta = snapshot.report_meta or {}
+    generated_at = datetime.now().astimezone()
+    archive_part = f"A{meta['archive_id']}-" if meta.get("archive_id") is not None else ""
+    report_no = f"CC-{generated_at:%Y%m%d}-{archive_part}{facade_id}"
     context = {
         "malgun_regular_uri": _font_data_uri(MALGUN_PATH),
         "malgun_bold_uri": _font_data_uri(MALGUN_BOLD_PATH),
         "report_kind": "facade",
-        "report_no": f"CC-{datetime.now():%Y%m%d}-{facade_id}",
+        "report_no": report_no,
         "title_label": facade_id,
         "cover_illustration_uri": _cover_illustration_uri(),
-        "issue_date": f"{datetime.now():%Y. %m. %d.}",
+        "issue_date": f"{generated_at:%Y. %m. %d.}",
         "footer_brand": FOOTER_BRAND,
-        "building_name_value": "작업중",
+        "building_name_value": _building_name(meta) or "미등록",
+        **_cover_values(meta),
         "quality_rows": _quality_rows(quality, snapshot.colmap, snapshot.used_colmap),
         "mosaic_uri": mosaic_uri,
         "used_colmap": snapshot.used_colmap,
@@ -508,8 +555,87 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
     # Sidecar for CheckCrackViewer's report panel (card click -> original photo + crack position).
     from src.common.atomic_io import atomic_write_json
 
-    atomic_write_json(snapshot.output_dir / f"{facade_id}_report_cards.json", {"version": 1, "cards": cards})
+    # version 2 (2026-10-08): also the report's own facts and the full No.N -> crack_id list (every crack in the
+    # report, card or not) with the exact mosaic crop rectangles -- read by CheckCrackViewer's write-back into
+    # MngData crackvision_reports / crackvision_report_cracks so SmartCrackWeb can rebuild the same numbering and
+    # crops. "cards" keeps its version-1 meaning (PDF card rectangles for the viewer's click-to-photo).
+    atomic_write_json(snapshot.output_dir / f"{facade_id}_report_cards.json", {
+        "version": 2,
+        "report": {
+            "report_no": report_no,
+            "facade_id": facade_id,
+            "issue_date": f"{generated_at:%Y-%m-%d}",
+            "generated_at": generated_at.isoformat(timespec="seconds"),
+            "pdf_file": out_path.name,
+            "page_count": _pdf_page_count(pdf_bytes),
+            "cracks_file": snapshot.cracks_file,
+            "mosaic_file": snapshot.analysis_path.name if snapshot.analysis_path else None,
+            "crack_count": len(cracks_sorted),
+            "raw_crack_count": snapshot.raw_crack_count,
+            "min_confidence": REPORT_MIN_CONFIDENCE,
+            "reviewed_by": snapshot.reviewed_by,
+            "reviewed_at": snapshot.reviewed_at,
+            "client": meta.get("customer_name"),
+            "address": meta.get("address"),
+            "building_name": _building_name(meta),
+            "contract_id": meta.get("contract_id"),
+            "archive_id": meta.get("archive_id"),
+            "equipment": meta.get("equipment"),
+            "camera": meta.get("camera"),
+        },
+        "cracks": [_report_crack_entry(c, cards) for c in cracks_sorted],
+        "cards": cards,
+    })
     return out_path
+
+
+def _building_name(meta: dict) -> str | None:
+    """"수목토 1100동" from the archive's company + building (동 is stored as a number, shown with "동")."""
+    company = (meta.get("company") or "").strip()
+    building = str(meta.get("building") or "").strip()
+    if building.isdigit():
+        building = f"{building}동"
+    name = " ".join(p for p in (company, building) if p)
+    return name or None
+
+
+def _cover_values(meta: dict) -> dict:
+    return {
+        "client_value": meta.get("customer_name"),
+        "address_value": meta.get("address"),
+        "equipment_value": meta.get("equipment"),
+        "camera_value": meta.get("camera"),
+    }
+
+
+def _pdf_page_count(pdf_bytes: bytes) -> int | None:
+    try:
+        import pymupdf
+
+        with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
+            return doc.page_count
+    except Exception:  # noqa: BLE001 -- optional fact, never fail the report over it
+        return None
+
+
+def _report_crack_entry(crack: dict, cards: list[dict]) -> dict:
+    """One row of the report's numbering: No.N, the crack, whether it has a detail card (and on which page), the
+    crop rectangles, and -- for a reviewer-drawn crack, which exists in no detection file -- its measured geometry
+    so the DB can store it like any other crack."""
+    card = next((c for c in cards if c.get("crack_id") == crack.get("crack_id")), None)
+    entry = {
+        "no": crack.get("_no"),
+        "crack_id": crack.get("crack_id"),
+        "source": crack.get("source", "ai"),
+        "page": card.get("page") if card else None,
+        "zoom_rect_px": crack.get("_zoom_rect_px"),
+        "context_rect_px": crack.get("_context_rect_px"),
+        "severity": crack.get("severity"),
+        "severity_note": crack.get("severity_note"),
+    }
+    if entry["source"] == "manual":
+        entry["crack"] = {k: v for k, v in crack.items() if not k.startswith("_")}
+    return entry
 
 
 def _facade_deliverables(snapshot: FacadeSnapshot) -> list[tuple[str, bool, str]]:
@@ -605,6 +731,7 @@ def generate_building_report(manifest_path: str | Path, reports_dir: str | Path)
         "issue_date": f"{datetime.now():%Y. %m. %d.}",
         "footer_brand": FOOTER_BRAND,
         "building_name_value": label,
+        **_cover_values((entries[0]["snapshot"].report_meta or {}) if entries else {}),
         "facade_count": len(entries),
         "side_count": len(by_side),
         "stitched_count": sum(1 for e in entries if e["snapshot"].analysis_path is not None),
