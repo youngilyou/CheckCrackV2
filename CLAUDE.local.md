@@ -2624,4 +2624,5 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
   **전체 절차(수목토 BACK 429장, 1600px·3회, runs/dense_speed_test)**: 3h13m(크랙·보고서 포함, 기존 6h33m+), 깊이 계산 2h01m(기존 5h29m),
   융합 점 9.36M(기존 24.9M), coverage 0.960(기존 0.954), 크랙 v1 396/v2 21(기존 394/23), Dense 중간 파일 23.7GB(기존 64.2GB), 결과 폴더 4.0GB.
   육안: 양쪽 모서리의 옆면 조각이 기존보다 적음, 벽 질감은 약간 부드러움(원본 사진 마감 적용, 같은 사진 질감). 비교 이미지 preview_reference_track\dense_speed_2026-10-08\.
-  기본값 변경(config colmap.dense_max_image_size/dense_num_iterations)은 사용자 결정 대기.
+  **사용자 확정(2026-10-08): 운영 기본값을 1600 px · 반복 3회로 변경**(config/pipeline.yaml colmap.dense_max_image_size=1600, dense_num_iterations=3).
+  **실제 드론 촬영 자료로 다시 검증 예정** -- 품질 문제가 보이면 기존 값(2640 / 5)으로 되돌리고 같은 방식(20장 실측 + 전체 절차 비교)으로 재측정.

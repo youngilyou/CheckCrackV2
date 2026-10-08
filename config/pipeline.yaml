@@ -62,9 +62,11 @@ colmap:
   # 돌려야 할 때만 false. 기존 실행 폴더 정리: tools/cleanup_dense_intermediates.py
   dense_cleanup_intermediate: true
   # 2026-10-08: Dense patch_match 속도/품질 설정 (전체 시간의 약 84%). 기본값 = 기존 동작.
-  # 20장 실측: 1600 px -> 44% 단축, 1600 px + 반복 3회 -> 65% 단축, 깊이 차이 중앙값 < 0.05%. 전체 절차 비교 후 결정.
-  dense_max_image_size: 2640
-  dense_num_iterations: 5
+  # 20장 실측: 1600 px -> 44% 단축, 1600 px + 반복 3회 -> 65% 단축, 깊이 차이 중앙값 < 0.05%.
+  # 2026-10-08 사용자 확정: 1600 px + 3회 채택 (수목토 BACK 전체 절차 6h33m -> 3h13m, 크랙 결과 동등, 모서리 개선, 질감 약간 부드러움).
+  # 실제 드론 촬영 자료로 다시 검증 예정 -- 문제 있으면 2640 / 5 (기존 값)로 되돌린다.
+  dense_max_image_size: 1600
+  dense_num_iterations: 3
   # 2026-09-26: 촬영 위치(GPS)가 한 줄로 늘어선 촬영(예: LEFT -- 드론이 벽을 따라 수직으로 오르내림)은 평평한 벽 +
   # 좁은 이동이라 COLMAP이 사진마다 초점거리를 따로 최적화하다 재구성이 휜다(LEFT 실측: 한 카메라의 초점거리가
   # 581~18642 px로 흩어짐, FRONT는 3730~3835 px). single_camera: auto(기본) = 그런 촬영일 때만 카메라 하나를
