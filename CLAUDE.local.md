@@ -2683,3 +2683,7 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
   표지 "촬영기준 10 m" -> "촬영거리 실측 …", 1장 표에 촬영일/사진 매수/계약번호 추가. 장비는 카메라 모델로 기종이 확실한 경우만 기종명(L2D-20c -> Mavic 3 계열).
 - 6장 제공 항목: "스티칭 품질 리포트" 행 삭제, 크랙 데이터/위치도 파일명을 보고서가 실제 쓴 2차(_v2) 파일로.
 - archive #1 BACK V001 보고서 재생성 + 서버 저장(crackvision_reports에 주소/건물명/장비 반영).
+- (같은 날) 신청서 면 = 건물 기준 상대 방향(SmartCrackWeb Labels.cs, 2026-10-08): WallFace East=정면/FRONT, West=후면/BACK, South=좌측면/LEFT,
+  North=우측면/RIGHT (나침반 아님, 이름만 DB 호환). 면 결정 순서 = 1) FacadeFaceMappings 예외 2) 표준 대응 3) 신청 면이 하나면 그 면.
+  보고서 건물명 뒤 "(후면)" 등(MySQL 없어도 표준으로), ContractInfoService 라벨 변경. GenerateJson: 콤보 "표준/정면/후면/좌측면/우측면",
+  지정 없음 확인 창 삭제(표준이 기본). FacadePreviewer 전송 창: 예외 없으면 "→ 신청서 면: 1000동 정면" 표준 표시.

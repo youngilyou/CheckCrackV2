@@ -4,15 +4,23 @@ namespace CheckCrackViewer.Services;
 
 /// <summary>Contract facts for the report cover, from SmartCrackWeb's MySQL (smartcrack; same DB the
 /// GenerateJsonOfScanArea tool reads): building name, address, client company, request number, and the 신청서 face
-/// this facade was mapped to (FacadeFaceMappings, when someone set it).</summary>
+/// this facade belongs to.</summary>
 public sealed record ContractInfo(string? BuildingName, string? Address, string? Client, string? RequestNo, string? FaceLabel);
 
 /// <summary>2026-10-09 (사용자 요청: 보고서 표지의 의뢰자/주소/건물명을 서버에서). Read-only. Uses the viewer's
 /// "DB 설정" (MySQL) connection; not configured or unreachable -> null, and the report keeps "미등록".</summary>
 public static class ContractInfoService
 {
-    // SmartCrackWeb WallFace enum: East=0, West=1, South=2, North=3
-    private static readonly string[] FaceLabels = { "동면", "서면", "남면", "북면" };
+    // SmartCrackWeb WallFace enum East=0, West=1, South=2, North=3 -- since 2026-10-08 building-relative faces, not compass
+    // directions (SmartCrackWeb Labels.cs): 정면/후면/좌측면/우측면.
+    private static readonly string[] FaceLabels = { "정면", "후면", "좌측면", "우측면" };
+
+    /// <summary>Same order as SmartCrackWeb CrackVisionSync: 1) FacadeFaceMappings exception, 2) the fixed standard
+    /// FRONT=정면, BACK=후면, LEFT=좌측면, RIGHT=우측면 (Labels.DirectionToFace), else null.</summary>
+    public static string? StandardFaceLabel(string? direction) => direction?.Trim().ToUpperInvariant() switch
+    {
+        "FRONT" => "정면", "BACK" => "후면", "LEFT" => "좌측면", "RIGHT" => "우측면", _ => null,
+    };
 
     public static async Task<ContractInfo?> GetAsync(DbConnectionSettings? settings, string contractNo, string? dongNo,
         string? direction, CancellationToken cancellationToken = default)
@@ -81,6 +89,6 @@ public static class ContractInfoService
                 // table not deployed yet -- the face is optional
             }
         }
-        return new ContractInfo(buildingName, address, client, requestNo, faceLabel);
+        return new ContractInfo(buildingName, address, client, requestNo, faceLabel ?? StandardFaceLabel(direction));
     }
 }

@@ -516,7 +516,8 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
             " \uc678" if len(c.get("source_image_ids", [])) > 2 else ""
         )
 
-    meta = snapshot.report_meta or {}
+    meta = dict(snapshot.report_meta or {})
+    meta.setdefault("direction", facade_id.split("_")[0])
     generated_at = datetime.now().astimezone()
     archive_part = f"A{meta['archive_id']}-" if meta.get("archive_id") is not None else ""
     report_no = f"CC-{generated_at:%Y%m%d}-{archive_part}{facade_id}"
@@ -616,9 +617,15 @@ def _building_name(meta: dict) -> str | None:
     if building.isdigit():
         building = f"{building}동"
     name = " ".join(p for p in (company, building) if p)
-    if name and meta.get("face_label"):
-        name += f" ({meta['face_label']})"  # 신청서 면, from SmartCrackWeb FacadeFaceMappings
+    face = meta.get("face_label") or STANDARD_FACE_LABELS.get(str(meta.get("direction") or "").upper())
+    if name and face:
+        name += f" ({face})"  # 신청서 면: FacadeFaceMappings 예외 지정 or the fixed FRONT/BACK/LEFT/RIGHT standard
     return name or None
+
+
+# 2026-10-09: SmartCrackWeb WallFace = building-relative faces (Labels.cs: East=정면, West=후면, South=좌측면,
+# North=우측면), fixed 1:1 to the drone directions (Labels.DirectionToFace). Not compass directions.
+STANDARD_FACE_LABELS = {"FRONT": "정면", "BACK": "후면", "LEFT": "좌측면", "RIGHT": "우측면"}
 
 
 def _cover_values(meta: dict) -> dict:
