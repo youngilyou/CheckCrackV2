@@ -62,6 +62,7 @@ public partial class App : Application
         if (main.DataContext is MainViewModel vm)
         {
             vm.LoggedInUsername = login.ViewModel.LoggedInUser?.Username ?? "";
+            vm.LoggedInDisplayName = login.ViewModel.LoggedInUser?.DisplayName ?? "";
             vm.LogoutRequested += () =>
             {
                 loggingOut = true;

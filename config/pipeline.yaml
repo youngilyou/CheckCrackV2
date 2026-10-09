@@ -196,3 +196,12 @@ multiview:
   continuation_max_gap_px: 60.0  # 겹치지 않는 두 원본 경계에서 갈라진 크랙의 끝점 사이 최대 허용 gap
   continuation_max_tangent_angle_deg: 25.0  # 두 끝점 접선 방향과 연결선 방향의 최대 허용 각도차
   continuation_tangent_window_px: 25.0  # 끝점 접선을 추정할 때 skeleton을 따라 안쪽으로 걷는 대략적 거리
+
+# 2026-10-09: 보고서 발행처 (표지 "발행처" + 마지막 장 결재란 왼쪽). 비워 두면 "미등록"으로 표시 -- 회사의 공식 정보를 입력하세요.
+report:
+  issuer:
+    company: ""        # 회사명
+    business_no: ""    # 사업자등록번호 (비우면 줄 자체를 표시 안 함)
+    address: ""        # 주소
+    phone: ""          # 대표 연락처
+    email: ""          # 이메일 (선택)

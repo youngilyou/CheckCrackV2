@@ -104,6 +104,8 @@ public partial class MainViewModel : ObservableObject
     /// on the login flow (no constructor param), it just displays whatever
     /// gets assigned here.</summary>
     [ObservableProperty] private string _loggedInUsername = "";
+    /// <summary>2026-10-09: 로그인 계정의 표시 이름 -- 보고서 "작성자(점검자)"(report_meta author_name).</summary>
+    [ObservableProperty] private string _loggedInDisplayName = "";
 
     /// <summary>Left hamburger menu selection -- "analysis" (기존 3단 화면),
     /// "training" (AI 학습, 준비 중), "settings" (설정, 준비 중).</summary>
@@ -384,13 +386,15 @@ public partial class MainViewModel : ObservableObject
     private async Task WriteReportMetaAsync(FacadeItemViewModel facade, string versionOutputDir)
     {
         var metaPath = Path.Combine(versionOutputDir, $"{facade.FacadeId}_report_meta.json");
-        if (facade.ArchiveId is not long archiveId)
-            return;
+        // 2026-10-09: always written -- the 작성자(점검자) is the logged-in user even for a folder with no archive.
+        var author = string.IsNullOrWhiteSpace(LoggedInDisplayName) ? LoggedInUsername : LoggedInDisplayName;
+        var archiveId = facade.ArchiveId;
         try
         {
-            var meta = await CrackVisionArchiveQueryService.GetReportMetaAsync(BuildCrackVisionSettings(), archiveId);
-            if (meta == null)
-                return;
+            var meta = archiveId is long id
+                ? await CrackVisionArchiveQueryService.GetReportMetaAsync(BuildCrackVisionSettings(), id) ?? new Dictionary<string, object?>()
+                : new Dictionary<string, object?>();
+            meta["author_name"] = string.IsNullOrWhiteSpace(author) ? null : author;
             // 2026-10-09: contract facts from SmartCrackWeb's MySQL ("DB 설정") -- building name, address, client,
             // and the 신청서 face this facade is mapped to. Not configured / unreachable -> cover keeps "미등록".
             if (meta.GetValueOrDefault("contract_id") is string contractNo && !string.IsNullOrWhiteSpace(contractNo))

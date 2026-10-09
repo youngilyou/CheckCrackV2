@@ -67,6 +67,12 @@
   .signoff td { border: 1px solid #b8c0cc; text-align: center; vertical-align: middle; }
   .signoff td.sign-name { height: 0.7cm; color: #202430; }
   .signoff td.sign-box { height: 3.2cm; color: #c4cad4; font-size: 9pt; }
+  /* 발행처 (2026-10-09): 결재란 왼쪽, 같은 높이. 값은 config/pipeline.yaml report.issuer */
+  .issuer { position: absolute; left: 0; bottom: 0; width: 8.2cm; font-size: 8.5pt; }
+  .issuer-title { font-weight: 700; color: var(--navy); border-bottom: 2px solid var(--navy); padding-bottom: 0.08cm; margin-bottom: 0.1cm; }
+  .issuer table { border-collapse: collapse; width: 100%; }
+  .issuer td { padding: 0.06cm 0.1cm; border-bottom: 1px solid #e3e7ee; vertical-align: top; }
+  .issuer td.k { color: #5b6472; width: 2.6cm; white-space: nowrap; }
   .page:last-child { page-break-after: auto; }
 
   /* ---------- Cover ---------- */
@@ -296,7 +302,7 @@
       <div class="cover-features">
         <div class="cover-feature">
           <span class="icon-badge">{{ icon("target") }}</span>
-          <div><div class="ft-title">드론 고해상도 연속 촬영</div><div class="ft-sub">10 m 기준 (5 m 필요 시 별도 촬영)</div></div>
+          <div><div class="ft-title">드론 고해상도 연속 촬영</div><div class="ft-sub">외벽 면별 연속 촬영</div></div>
         </div>
         <div class="cover-feature">
           <span class="icon-badge">{{ icon("ai") }}</span>
@@ -317,6 +323,7 @@
       <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("camera") }}</span>카메라 (Camera)</span></td><td>{{ camera_value or "미확인" }}</td></tr>
       <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("target") }}</span>촬영거리 (Distance)</span></td><td>{{ distance_value or "미확인" }}</td></tr>
       <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("clipboard") }}</span>보고서 용도 (Purpose)</span></td><td>건물 외벽 균열 점검</td></tr>
+      <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("building") }}</span>발행처 (Issued by)</span></td><td>{{ issuer.company or "미등록" }}</td></tr>
     </table>
 
     <div class="cover-footer">{{ footer_brand }}</div>
@@ -402,7 +409,7 @@
 
   <div class="sub-heading">SMARTCRACK 시스템 구성</div>
   <div class="system-grid">
-    <div class="cell"><div class="tag">촬영</div><div class="label">드론 고해상도 연속 촬영 (10 m)</div></div>
+    <div class="cell"><div class="tag">촬영</div><div class="label">드론 고해상도 연속 촬영</div></div>
     <div class="cell"><div class="tag">분석</div><div class="label">AI 균열 탐지 및 정량 분석</div></div>
     <div class="cell"><div class="tag">측정</div><div class="label">원본 좌표 기반 정밀 측정</div></div>
     <div class="cell"><div class="tag">검토</div><div class="label">작업자 검토 및 상태 관리</div></div>
@@ -433,7 +440,7 @@
     <div class="hero-photo"><img src="{{ mosaic_uri }}" alt="스티칭 결과"></div>
     <div class="caption">{{ "정밀 보정 적용됨" if used_colmap else "기본 스티칭 (CM 미적용)" }}</div>
   {% else %}
-    <div class="placeholder-box">작업중 (스티칭 미실행)</div>
+    <div class="placeholder-box">스티칭 미실행</div>
   {% endif %}
   {% if quality_rows %}
     <table class="metric-table">
@@ -447,7 +454,7 @@
     <div class="side-card">
       <div class="side-title">{{ g.side }} ({{ g.count }}개 Facade)</div>
       <div class="thumb">
-        {% if g.thumb_uri %}<img src="{{ g.thumb_uri }}">{% else %}<div class="no-thumb">작업중</div>{% endif %}
+        {% if g.thumb_uri %}<img src="{{ g.thumb_uri }}">{% else %}<div class="no-thumb">미실행</div>{% endif %}
       </div>
       <div class="count">촬영 이미지 수: {{ g.image_count }}</div>
     </div>
@@ -461,7 +468,7 @@
   <div class="section-heading"><span class="badge">03</span><span class="title">AI 균열 분석 요약{% if report_kind == "building" %} (전체 종합){% endif %}</span></div>
 
   {% if not metrics %}
-    <div class="placeholder-box">작업중 (크랙 검사 미실행)</div>
+    <div class="placeholder-box">크랙 검사 미실행</div>
   {% else %}
     <table class="metric-table">
       <tr><td class="k">총 균열 수</td><td>{{ metrics.count }}건</td></tr>
@@ -474,7 +481,7 @@
       <tr><td class="k">평균 면적</td><td>{% if metrics.avg_area_mm2 is not none %}{{ "%.1f"|format(metrics.avg_area_mm2) }} mm² ({{ "%.0f"|format(metrics.avg_area_px) }} px²){% else %}{{ "%.0f"|format(metrics.avg_area_px) }} px²{% endif %}</td></tr>
       {% endif %}
       <tr><td class="k">0.3mm 기준 심각도</td>
-        <td>{% if metrics.has_calibration %}정밀점검대상 {{ metrics.precision_count }}건 / 경미 {{ metrics.minor_count }}건{% if metrics.ungraded_count %} / 판정불가(해상도 부족) {{ metrics.ungraded_count }}건{% endif %}{% else %}작업중 (calibration 없어 등급 판정 불가){% endif %}</td></tr>
+        <td>{% if metrics.has_calibration %}정밀점검대상 {{ metrics.precision_count }}건 / 경미 {{ metrics.minor_count }}건{% if metrics.ungraded_count %} / 판정불가(해상도 부족) {{ metrics.ungraded_count }}건{% endif %}{% else %}판정 불가 (축척 보정 없음){% endif %}</td></tr>
     </table>
     <p class="caption" style="font-style: italic;">
       {% if metrics.has_calibration %}
@@ -595,7 +602,7 @@
   <div class="section-heading"><span class="badge">05</span><span class="title">AI 신뢰도 및 작업자 검토 결과{% if report_kind == "building" %} (전체 종합){% endif %}</span></div>
 
   {% if not metrics %}
-    <div class="placeholder-box">작업중 (크랙 검사 미실행)</div>
+    <div class="placeholder-box">크랙 검사 미실행</div>
   {% else %}
     <table class="metric-table">
       <tr><td class="k">관측됨 (OBSERVED)</td><td>{{ metrics.observed }}</td></tr>
@@ -611,7 +618,7 @@
             검토완료 ({{ reviewed_by }}{% if reviewed_at %}, {{ reviewed_at[:10] }}{% endif %}) —
             AI 탐지 {{ raw_crack_count }}건 중 {{ raw_crack_count - ai_kept }}건 오탐지 제외, {{ manual_added }}건 수동 추가
           {% else %}
-            작업중 (아직 검토되지 않음)
+            미검토
           {% endif %}
         </td>
       </tr>
@@ -620,9 +627,9 @@
         <td>
           {% if reviewed_facade_count > 0 %}
             {{ reviewed_facade_count }} / {{ total_facade_count_for_review }}개 Facade 검토 완료
-            {% if reviewed_facade_count < total_facade_count_for_review %}(나머지는 작업중){% endif %}
+            {% if reviewed_facade_count < total_facade_count_for_review %}(나머지는 미검토){% endif %}
           {% else %}
-            작업중 (아직 검토되지 않음)
+            미검토
           {% endif %}
         </td>
       </tr>
@@ -666,6 +673,17 @@
   {% endif %}
 
   <div class="disclaimer">※ 본 보고서는 구조 안전성 평가나 보수 판단을 포함하지 않으며, 사진 분석 결과만을 제공하는 서비스입니다.</div>
+
+  <div class="issuer">
+    <div class="issuer-title">발행처</div>
+    <table>
+      <tr><td class="k">회사명</td><td>{{ issuer.company or "미등록" }}</td></tr>
+      {% if issuer.business_no %}<tr><td class="k">사업자등록번호</td><td>{{ issuer.business_no }}</td></tr>{% endif %}
+      <tr><td class="k">주소</td><td>{{ issuer.address or "미등록" }}</td></tr>
+      <tr><td class="k">연락처</td><td>{{ issuer.phone or "미등록" }}{% if issuer.email %} · {{ issuer.email }}{% endif %}</td></tr>
+      <tr><td class="k">작성자(점검자)</td><td>{{ author_value or "미등록" }}</td></tr>
+    </table>
+  </div>
 
   <table class="signoff">
     <tr><th>작성자</th><th>승인</th></tr>

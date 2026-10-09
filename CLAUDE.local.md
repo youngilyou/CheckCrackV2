@@ -2703,3 +2703,8 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
   final_report_path/final_stamped_by/final_stamped_at 추가(.43 적용). ERP는 직인 본을 **별도 파일**로 저장(report_path 덮어쓰기 금지 -- 재생성 때마다
   CheckCrackV2가 덮어씀) + 'final' 기록 + crackvision_result_files(kind report_pdf_final, keep). CheckCrackV2가 보고서를 다시 만들면(generated_at 변경)
   'draft'로 되돌림(final_*은 마지막 승인본으로 유지), 같은 보고서 재전송은 상태 유지 -- 세 경우 DB에서 시험 확인 후 시험값 삭제.
+- (같은 날) 보고서 정리(사용자 결정): "작업중" 상태 문구 -> 미실행/미검토/판정 불가(축척 보정 없음), "10 m 기준" 문구 제거(실측 촬영거리만),
+  촬영일/사진 매수/촬영거리(중앙값·5~95%)/mm/px/작성자/발행처를 crackvision_reports 열로(.43 적용). 발행처 = config/pipeline.yaml report.issuer
+  (company/business_no/address/phone/email, **비어 있음 -> "미등록"**, 회사 공식 정보 입력 필요) -- 표지 "발행처" 행 + 마지막 장 결재란 왼쪽 블록.
+  작성자(점검자) = 뷰어 로그인 표시 이름(report_meta author_name, archive 없는 폴더도 기록), 없으면 검토자.
+  신청서 면: 1100동은 신청서에 4면 모두 있어 BACK -> 후면 표준 대응으로 자동 연결(예외 지정 불필요).

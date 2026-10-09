@@ -553,7 +553,8 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
         "issue_date": f"{generated_at:%Y. %m. %d.}",
         "footer_brand": FOOTER_BRAND,
         "building_name_value": _building_name(meta) or "미등록",
-        "author_value": snapshot.reviewed_by,
+        "author_value": meta.get("author_name") or snapshot.reviewed_by,
+        "issuer": _issuer(),
         **_cover_values(meta),
         "quality_rows": _quality_rows(quality, snapshot.colmap, snapshot.used_colmap),
         "mosaic_uri": mosaic_uri,
@@ -610,6 +611,10 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
             "photo_count": meta.get("photo_count"),
             "distance_median_m": meta.get("distance_median_m"),
             "mm_per_px_median": meta.get("mm_per_px_median"),
+            "distance_min_m": meta.get("distance_min_m"),
+            "distance_max_m": meta.get("distance_max_m"),
+            "author_name": meta.get("author_name") or snapshot.reviewed_by,
+            "issuer_company": _issuer().get("company"),
         },
         "cracks": [_report_crack_entry(c, cards) for c in cracks_sorted],
         "cards": cards,
@@ -652,6 +657,20 @@ def _building_name(meta: dict) -> str | None:
 # 2026-10-09: SmartCrackWeb WallFace = building-relative faces (Labels.cs: East=정면, West=후면, South=좌측면,
 # North=우측면), fixed 1:1 to the drone directions (Labels.DirectionToFace). Not compass directions.
 STANDARD_FACE_LABELS = {"FRONT": "정면", "BACK": "후면", "LEFT": "좌측면", "RIGHT": "우측면"}
+
+
+def _issuer() -> dict:
+    """발행처 (config/pipeline.yaml report.issuer: company, business_no, address, phone, email). Empty values print as
+    "미등록" -- the company's official details are entered by the operator, never invented here."""
+    try:
+        from src.common.config import load_config
+
+        data = load_config(Path(__file__).resolve().parents[2] / "config" / "pipeline.yaml").to_dict()
+        raw = ((data.get("report") or {}).get("issuer") or {}) if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001 -- the report must render without it
+        raw = {}
+    return {k: (str(raw.get(k)).strip() if raw.get(k) not in (None, "") else None)
+            for k in ("company", "business_no", "address", "phone", "email")}
 
 
 def _cover_values(meta: dict) -> dict:

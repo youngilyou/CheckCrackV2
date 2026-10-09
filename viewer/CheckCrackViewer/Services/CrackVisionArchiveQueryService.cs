@@ -91,6 +91,15 @@ internal sealed class ReportFactsJson
     [JsonPropertyName("contract_id")] public string? ContractId { get; set; }
     [JsonPropertyName("equipment")] public string? Equipment { get; set; }
     [JsonPropertyName("camera")] public string? Camera { get; set; }
+    // 2026-10-09: shooting facts + issuer/author (src/report/capture_facts.py, config report.issuer)
+    [JsonPropertyName("capture_date")] public string? CaptureDate { get; set; }
+    [JsonPropertyName("photo_count")] public int? PhotoCount { get; set; }
+    [JsonPropertyName("distance_median_m")] public double? DistanceMedianM { get; set; }
+    [JsonPropertyName("distance_min_m")] public double? DistanceMinM { get; set; }
+    [JsonPropertyName("distance_max_m")] public double? DistanceMaxM { get; set; }
+    [JsonPropertyName("mm_per_px_median")] public double? MmPerPxMedian { get; set; }
+    [JsonPropertyName("author_name")] public string? AuthorName { get; set; }
+    [JsonPropertyName("issuer_company")] public string? IssuerCompany { get; set; }
 }
 
 internal sealed class ReportCrackJson
@@ -628,8 +637,10 @@ public static class CrackVisionArchiveQueryService
             "INSERT INTO crackvision_reports (facade_row_id, report_no, issue_date, generated_at, report_path, page_count, " +
             " cracks_file, mosaic_file, crack_count, raw_crack_count, min_confidence, reviewed_by, reviewed_at, " +
             " client, address, building_name, contract_id, equipment, camera, " +
-            " stamp_page, page_width_pt, page_height_pt, stamp_author_rect_pt, stamp_approver_rect_pt, updated_at) " +
-            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb, now()) " +
+            " stamp_page, page_width_pt, page_height_pt, stamp_author_rect_pt, stamp_approver_rect_pt, " +
+            " capture_date, photo_count, distance_median_m, distance_min_m, distance_max_m, mm_per_px_median, author_name, issuer_company, updated_at) " +
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb," +
+            " $25,$26,$27,$28,$29,$30,$31,$32, now()) " +
             // 2026-10-09: 초안 -> 최종. This PDF has no seal (초안); the ERP stamps it and sets report_state 'final' with
             // its own final_report_path. A regenerated report (new generated_at) needs a new approval -> back to 'draft';
             // final_* stays as the last approved version. Re-sending the same report keeps the state.
@@ -644,6 +655,9 @@ public static class CrackVisionArchiveQueryService
             " equipment = EXCLUDED.equipment, camera = EXCLUDED.camera, stamp_page = EXCLUDED.stamp_page, " +
             " page_width_pt = EXCLUDED.page_width_pt, page_height_pt = EXCLUDED.page_height_pt, " +
             " stamp_author_rect_pt = EXCLUDED.stamp_author_rect_pt, stamp_approver_rect_pt = EXCLUDED.stamp_approver_rect_pt, " +
+            " capture_date = EXCLUDED.capture_date, photo_count = EXCLUDED.photo_count, distance_median_m = EXCLUDED.distance_median_m, " +
+            " distance_min_m = EXCLUDED.distance_min_m, distance_max_m = EXCLUDED.distance_max_m, " +
+            " mm_per_px_median = EXCLUDED.mm_per_px_median, author_name = EXCLUDED.author_name, issuer_company = EXCLUDED.issuer_company, " +
             " updated_at = now()", conn, tx))
         {
             cmd.Parameters.AddWithValue(facadeRowId);
@@ -670,6 +684,14 @@ public static class CrackVisionArchiveQueryService
             cmd.Parameters.AddWithValue((object?)stamp?.PageHeightPt ?? DBNull.Value);
             cmd.Parameters.AddWithValue(stamp?.Author != null ? JsonSerializer.Serialize(stamp.Author) : DBNull.Value);
             cmd.Parameters.AddWithValue(stamp?.Approver != null ? JsonSerializer.Serialize(stamp.Approver) : DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.CaptureDate ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.PhotoCount ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.DistanceMedianM ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.DistanceMinM ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.DistanceMaxM ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.MmPerPxMedian ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.AuthorName ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)report.IssuerCompany ?? DBNull.Value);
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
 
