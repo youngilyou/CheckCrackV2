@@ -2699,3 +2699,7 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
   PDF에 그 좌표로 시험 도장을 그려 칸과 정확히 일치 확인. MngData crackvision_reports.stamp_page/page_width_pt/page_height_pt/stamp_author_rect_pt/
   stamp_approver_rect_pt(.43 적용) + 서버 보고서 갱신.
 - 주의: 보고서를 다시 만들면(최종 보고서 재생성 등) 직인 없는 새 PDF로 바뀜 -> ERP가 다시 찍어야 함(updated_at/generated_at으로 감지 가능).
+- (같은 날, 사용자 확정) 초안 -> 최종: CheckCrackV2는 직인 없는 PDF(초안)만 저장, 최종 직인은 ERP. crackvision_reports에 report_state('draft'|'final'),
+  final_report_path/final_stamped_by/final_stamped_at 추가(.43 적용). ERP는 직인 본을 **별도 파일**로 저장(report_path 덮어쓰기 금지 -- 재생성 때마다
+  CheckCrackV2가 덮어씀) + 'final' 기록 + crackvision_result_files(kind report_pdf_final, keep). CheckCrackV2가 보고서를 다시 만들면(generated_at 변경)
+  'draft'로 되돌림(final_*은 마지막 승인본으로 유지), 같은 보고서 재전송은 상태 유지 -- 세 경우 DB에서 시험 확인 후 시험값 삭제.

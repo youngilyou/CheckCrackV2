@@ -630,7 +630,12 @@ public static class CrackVisionArchiveQueryService
             " client, address, building_name, contract_id, equipment, camera, " +
             " stamp_page, page_width_pt, page_height_pt, stamp_author_rect_pt, stamp_approver_rect_pt, updated_at) " +
             "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb, now()) " +
+            // 2026-10-09: 초안 -> 최종. This PDF has no seal (초안); the ERP stamps it and sets report_state 'final' with
+            // its own final_report_path. A regenerated report (new generated_at) needs a new approval -> back to 'draft';
+            // final_* stays as the last approved version. Re-sending the same report keeps the state.
             "ON CONFLICT (facade_row_id) DO UPDATE SET report_no = EXCLUDED.report_no, issue_date = EXCLUDED.issue_date, " +
+            " report_state = CASE WHEN crackvision_reports.generated_at IS DISTINCT FROM EXCLUDED.generated_at " +
+            "                     THEN 'draft' ELSE crackvision_reports.report_state END, " +
             " generated_at = EXCLUDED.generated_at, report_path = COALESCE(EXCLUDED.report_path, crackvision_reports.report_path), " +
             " page_count = EXCLUDED.page_count, cracks_file = EXCLUDED.cracks_file, mosaic_file = EXCLUDED.mosaic_file, " +
             " crack_count = EXCLUDED.crack_count, raw_crack_count = EXCLUDED.raw_crack_count, min_confidence = EXCLUDED.min_confidence, " +
