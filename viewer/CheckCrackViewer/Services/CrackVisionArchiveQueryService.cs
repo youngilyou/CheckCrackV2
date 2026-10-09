@@ -537,27 +537,34 @@ public static class CrackVisionArchiveQueryService
         }
     }
 
+    public enum FloorUpdateResult { Updated, NoFacadeRow, CanvasMismatch }
+
     /// <summary>Floor setting confirmed/changed in ImageViewerWindow -> DB right away (without re-uploading results).
-    /// Returns false when the facade has no rows in crackvision_facades yet (nothing written back so far).</summary>
-    public static async Task<bool> UpdateFloorsAsync(CrackVisionDbSettings settings, long archiveId, string facadeId,
-        FloorConfirmed? setting, CancellationToken cancellationToken = default)
+    /// The setting is in canvas pixels of the mosaic it was drawn on, so it is applied only when that mosaic has the
+    /// size of the one whose cracks are in the DB (mosaic_width_px/height_px) -- a different run version of the same
+    /// facade has a slightly different canvas (2026-10-09: archive #1 V002 5836x3297 vs V001 5835x3294).</summary>
+    public static async Task<FloorUpdateResult> UpdateFloorsAsync(CrackVisionDbSettings settings, long archiveId, string facadeId,
+        FloorConfirmed? setting, int canvasWidth, int canvasHeight, CancellationToken cancellationToken = default)
     {
         await using var conn = new NpgsqlConnection(BuildConnString(settings));
         await conn.OpenAsync(cancellationToken);
         long facadeRowId;
         await using (var cmd = new NpgsqlCommand(
-            "SELECT facade_row_id FROM crackvision_facades WHERE archive_id = $1 AND facade_id = $2", conn))
+            "SELECT facade_row_id, mosaic_width_px, mosaic_height_px FROM crackvision_facades WHERE archive_id = $1 AND facade_id = $2", conn))
         {
             cmd.Parameters.AddWithValue(archiveId);
             cmd.Parameters.AddWithValue(facadeId);
-            if (await cmd.ExecuteScalarAsync(cancellationToken) is not long id)
-                return false;
-            facadeRowId = id;
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+                return FloorUpdateResult.NoFacadeRow;
+            facadeRowId = reader.GetInt64(0);
+            if (!reader.IsDBNull(1) && !reader.IsDBNull(2) && (reader.GetInt32(1) != canvasWidth || reader.GetInt32(2) != canvasHeight))
+                return FloorUpdateResult.CanvasMismatch;
         }
         await using var tx = await conn.BeginTransactionAsync(cancellationToken);
         await ApplyFloorsAsync(conn, tx, facadeRowId, setting, cancellationToken);
         await tx.CommitAsync(cancellationToken);
-        return true;
+        return FloorUpdateResult.Updated;
     }
 
     private static ReportCardsJson? ReadReportCards(string outputDir, string facadeId)

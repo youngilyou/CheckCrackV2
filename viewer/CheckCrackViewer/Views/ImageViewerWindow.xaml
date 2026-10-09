@@ -9,6 +9,8 @@
               MouseWheel="Canvas_MouseWheel"
               MouseLeftButtonDown="Canvas_MouseLeftButtonDown"
               MouseLeftButtonUp="Canvas_MouseLeftButtonUp"
+              MouseRightButtonDown="Canvas_MouseRightButtonDown"
+              MouseRightButtonUp="Canvas_MouseRightButtonUp"
               MouseMove="Canvas_MouseMove">
             <Canvas x:Name="ImageCanvas" Background="Transparent">
                 <!-- No RenderTransform here on purpose: a ScaleTransform applied on
@@ -68,6 +70,8 @@
                 CornerRadius="0,0,0,10" Padding="14,10" Visibility="Collapsed">
             <StackPanel Orientation="Horizontal">
                 <TextBlock x:Name="RegionStatusText" Foreground="#9AA39C" FontSize="11" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                <ToggleButton x:Name="FloorPanelToggle" Content="층 설정" Padding="8,4" Margin="0,0,16,0" Visibility="Collapsed"
+                              Click="FloorPanelToggle_Click" ToolTip="층 설정 창 열기/닫기 (닫아도 층 선은 계속 표시)"/>
                 <ToggleButton x:Name="RegionDrawToggle" Content="정면 영역 그리기" Padding="8,4" Margin="0,0,8,0"
                               Click="RegionDrawToggle_Click"/>
                 <Button x:Name="RegionApplyButton" Content="적용 (재검출)" Padding="8,4" Margin="0,0,8,0"

@@ -267,7 +267,12 @@ public partial class ImageViewerWindow : Window
             if (file != null && file.CanvasWidth == _nativeWidth && file.CanvasHeight == _nativeHeight)
                 _floorFile = file;
         }
-        FloorToolPanel.Visibility = FloorToolAvailable ? Visibility.Visible : Visibility.Collapsed;
+        // 2026-10-09 (사용자 지적): 패널이 오른쪽 아래를 가려 정면 영역 그리기가 어려움 -> 상단 "층 설정" 버튼으로 열고 닫음.
+        // 처음엔 닫힌 상태(층 선은 계속 표시), 정면 영역 그리기를 켜면 자동으로 닫힘.
+        FloorPanelToggle.Visibility = FloorToolAvailable ? Visibility.Visible : Visibility.Collapsed;
+        FloorPanelToggle.IsChecked = false;
+        FloorToolPanel.Visibility = Visibility.Collapsed;
+        RegionTool_UpdateVisibility();
         if (!FloorToolAvailable)
             return;
         LoadFloorWorkingValues(preferConfirmed: true);
@@ -457,6 +462,19 @@ public partial class ImageViewerWindow : Window
         RedrawFloorLabels(Canvas.GetLeft(TheImage), Canvas.GetTop(TheImage));
     }
 
+    private void FloorPanelToggle_Click(object sender, RoutedEventArgs e) => SetFloorPanelOpen(FloorPanelToggle.IsChecked == true);
+
+    private void SetFloorPanelOpen(bool open)
+    {
+        FloorPanelToggle.IsChecked = open;
+        FloorToolPanel.Visibility = open && FloorToolAvailable ? Visibility.Visible : Visibility.Collapsed;
+        if (!open && FloorEditToggle.IsChecked == true)
+        {
+            FloorEditToggle.IsChecked = false;
+            FloorEditToggle_Click(FloorEditToggle, new RoutedEventArgs());
+        }
+    }
+
     private void FloorEditToggle_Click(object sender, RoutedEventArgs e)
     {
         HintText.Text = FloorEditToggle.IsChecked == true
@@ -530,7 +548,7 @@ public partial class ImageViewerWindow : Window
 
     /// <summary>When this result folder belongs to a MngData archive, writes the floor setting to the DB right away
     /// (crackvision_facades.floor_*, crackvision_cracks.floor_min/max). Returns a status suffix.</summary>
-    private static async Task<string> PushFloorsToServerAsync(FacadeItemViewModel facade, FloorConfirmed? confirmed)
+    private async Task<string> PushFloorsToServerAsync(FacadeItemViewModel facade, FloorConfirmed? confirmed)
     {
         var baseDir = System.IO.Path.GetDirectoryName(facade.OutputDir!.TrimEnd('\\', '/'));
         var archiveId = facade.ArchiveId ?? (baseDir != null ? ArchiveLinkStore.TryLoad(baseDir)?.ArchiveId : null);
@@ -541,8 +559,15 @@ public partial class ImageViewerWindow : Window
             var settings = CrackVisionDbSettingsStore.Load();
             if (string.IsNullOrWhiteSpace(settings.PostgresHost))
                 return " (DB 접속 정보가 없어 서버는 갱신하지 않았습니다.)";
-            var ok = await Task.Run(() => CrackVisionArchiveQueryService.UpdateFloorsAsync(settings, id, facade.FacadeId, confirmed));
-            return ok ? $" 서버(archive #{id}) 층 정보도 갱신했습니다." : $" (서버 archive #{id}에 이 면의 결과가 아직 없어 DB는 다음 결과 저장 때 반영됩니다.)";
+            int w = _nativeWidth, h = _nativeHeight;
+            var result = await Task.Run(() => CrackVisionArchiveQueryService.UpdateFloorsAsync(settings, id, facade.FacadeId, confirmed, w, h));
+            return result switch
+            {
+                CrackVisionArchiveQueryService.FloorUpdateResult.Updated => $" 서버(archive #{id}) 층 정보도 갱신했습니다.",
+                CrackVisionArchiveQueryService.FloorUpdateResult.CanvasMismatch =>
+                    $" 서버(archive #{id})의 균열은 다른 실행 버전의 모자이크 기준이라 DB는 갱신하지 않았습니다. 서버에 저장된 버전에서 층을 확정하세요.",
+                _ => $" (서버 archive #{id}에 이 면의 결과가 아직 없어 DB는 다음 결과 저장 때 반영됩니다.)",
+            };
         }
         catch (Exception ex)
         {
@@ -621,6 +646,28 @@ public partial class ImageViewerWindow : Window
         RedrawFloorLabels(left, top);
     }
 
+    /// <summary>Right-button drag pans in every mode (2026-10-09): while drawing the front region the left button adds
+    /// vertices, so without this a corner hidden under a toolbar/panel could not be brought into view.</summary>
+    private void Canvas_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _userHasZoomedOrPanned = true;
+        _isDragging = true;
+        _dragStart = e.GetPosition(Viewport);
+        _panStartLeft = Canvas.GetLeft(TheImage);
+        _panStartTop = Canvas.GetTop(TheImage);
+        Viewport.CaptureMouse();
+        e.Handled = true;
+    }
+
+    private void Canvas_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_isDragging)
+            return;
+        _isDragging = false;
+        Viewport.ReleaseMouseCapture();
+        e.Handled = true;
+    }
+
     private void Canvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         if (_draggingFloorLine >= 0)
@@ -655,16 +702,21 @@ public partial class ImageViewerWindow : Window
 
     private void RegionTool_UpdateVisibility()
     {
-        RegionToolPanel.Visibility = RegionToolAvailable ? Visibility.Visible : Visibility.Collapsed;
+        // the top-right bar also holds the "층 설정" button, so it shows when either tool is usable
+        RegionToolPanel.Visibility = RegionToolAvailable || FloorToolAvailable ? Visibility.Visible : Visibility.Collapsed;
+        var regionVisibility = RegionToolAvailable ? Visibility.Visible : Visibility.Collapsed;
+        RegionDrawToggle.Visibility = RegionApplyButton.Visibility = RegionClearButton.Visibility = regionVisibility;
         RegionStatusText.Text = "";
     }
 
     private void RegionDrawToggle_Click(object sender, RoutedEventArgs e)
     {
         _isDrawingRegion = RegionDrawToggle.IsChecked == true;
+        if (_isDrawingRegion)
+            SetFloorPanelOpen(false);
         HintText.Text = _isDrawingRegion
-            ? "클릭: 꼭짓점 추가 · 더블클릭: 다각형 완료 · Esc: 닫기"
-            : "휠: 확대/축소 · 드래그: 이동 · Esc: 닫기";
+            ? "클릭: 꼭짓점 추가 · 더블클릭: 다각형 완료 · 오른쪽 드래그: 이동 · Esc: 닫기"
+            : "휠: 확대/축소 · 드래그(왼쪽/오른쪽): 이동 · Esc: 닫기";
         if (!_isDrawingRegion && _currentPolygon.Count >= 3)
         {
             _completedPolygons.Add(_currentPolygon);
