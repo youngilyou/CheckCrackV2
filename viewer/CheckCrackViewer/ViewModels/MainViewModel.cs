@@ -391,6 +391,29 @@ public partial class MainViewModel : ObservableObject
             var meta = await CrackVisionArchiveQueryService.GetReportMetaAsync(BuildCrackVisionSettings(), archiveId);
             if (meta == null)
                 return;
+            // 2026-10-09: contract facts from SmartCrackWeb's MySQL ("DB 설정") -- building name, address, client,
+            // and the 신청서 face this facade is mapped to. Not configured / unreachable -> cover keeps "미등록".
+            if (meta.GetValueOrDefault("contract_id") is string contractNo && !string.IsNullOrWhiteSpace(contractNo))
+            {
+                try
+                {
+                    var direction = facade.FacadeId.Split('_')[0].ToUpperInvariant();
+                    var contract = await ContractInfoService.GetAsync(DbSettingsStore.Load(), contractNo,
+                        meta.GetValueOrDefault("building") as string, direction);
+                    if (contract != null)
+                    {
+                        meta["building_name"] = contract.BuildingName;
+                        meta["address"] = contract.Address;
+                        meta["client"] = contract.Client;
+                        meta["request_no"] = contract.RequestNo;
+                        meta["face_label"] = contract.FaceLabel;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    facade.AddIssue($"[WARN] 계약 정보(MySQL, {contractNo})를 가져오지 못했습니다 -- 주소/건물명은 archive 정보로 표시됩니다: {ex.Message}");
+                }
+            }
             await File.WriteAllTextAsync(metaPath, System.Text.Json.JsonSerializer.Serialize(meta,
                 new System.Text.Json.JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
         }

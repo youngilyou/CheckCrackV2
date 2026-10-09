@@ -2672,3 +2672,14 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
 - 사용자가 archive #1을 V002(현재 버전, 크랙 없음)에서 총 11층으로 확정 -> V002 기준선이 V001 균열 DB에 들어감(캔버스 5836x3297 vs 5835x3294, 선 4 px 차).
   수정: 층 DB 갱신은 그 모자이크 크기가 DB의 mosaic_width/height와 같을 때만(다르면 안내). V001에 같은 결정(V001 자동 제안 그대로 + 11층, admin)을 적용해
   DB 갱신 + V001 보고서 재생성/서버 저장(No.1 BACK_C000104 "10~11층", 층 있는 균열 9/23). 뷰어 현재 버전은 여전히 V002.
+
+## 2026-10-09 세션 기록 (3): 보고서 표지/촬영 기준의 "작업중" 칸을 실제 값으로 + 스티칭 품질 리포트 행 삭제 (사용자 요청)
+- 의뢰자/주소/건물명: 뷰어가 보고서 생성 직전 MngData archive(contract_id) -> SmartCrackWeb MySQL(smartcrack: Contracts->InspectionRequests->Buildings/Users)
+  조회(`Services/ContractInfoService.cs`, MySqlConnector 추가)해 `{면}_report_meta.json`에 기록. 신청서 면(FacadeFaceMappings)이 있으면 건물명 뒤에 "(남면)".
+  MySQL 접속은 뷰어 "DB 설정"(%APPDATA%\SmartCrackViewer\db_settings.json) -- 이 PC는 smartcrack 계정으로 저장해 둠, **다른 PC는 설정 화면에서 입력 필요**.
+  없거나 실패하면 archive 값/"미등록".
+- 장비/카메라/촬영일/사진 매수/촬영거리: `src/report/capture_facts.py` -- EXIF(첫/마지막 사진) + 재구성 카메라 위치와 벽 평면의 수직거리(depth_mapping 사이드카의
+  Sim3d/평면). archive #1 BACK: 실측 11.6 m(11.4~11.7), 원본 2.9 mm/px -- 크랙검사가 기록한 균열별 해상도(2.89~2.96)와 일치. FRONT V010: 9.4 m, 2.5 mm/px.
+  표지 "촬영기준 10 m" -> "촬영거리 실측 …", 1장 표에 촬영일/사진 매수/계약번호 추가. 장비는 카메라 모델로 기종이 확실한 경우만 기종명(L2D-20c -> Mavic 3 계열).
+- 6장 제공 항목: "스티칭 품질 리포트" 행 삭제, 크랙 데이터/위치도 파일명을 보고서가 실제 쓴 2차(_v2) 파일로.
+- archive #1 BACK V001 보고서 재생성 + 서버 저장(crackvision_reports에 주소/건물명/장비 반영).

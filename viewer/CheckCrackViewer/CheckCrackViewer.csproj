@@ -17,6 +17,7 @@
     <PackageReference Include="BCrypt.Net-Next" Version="4.2.0" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
+    <PackageReference Include="MySqlConnector" Version="2.6.2" />
     <PackageReference Include="Npgsql" Version="10.0.3" />
     <!-- PDF generation moved to Python (src/report/pdf_report.py, WeasyPrint).
          PDFsharp/PDFsharp-MigraDoc are no longer used. PDFtoImage stays: it only

@@ -144,30 +144,24 @@ class FacadeSnapshot:
 
 
 def _load_report_meta(output_dir: Path, facade_id: str, source_images: list[dict]) -> dict:
-    """Cover-page facts for this facade's report.
+    """Cover-page / section-01 facts for this facade's report.
 
-    `{facade}_report_meta.json` is written by CheckCrackViewer right before it runs this report, from the
-    MngData archive row (company/building/contract_id/customer_name/address, archive_id). It is optional: a
-    purely local run has none, and the cover then says "미등록" -- never invented values.
-    Equipment/camera come from the first readable source photo's EXIF/XMP Make/Model (DJI writes the maker,
-    e.g. "DJI", in Make and the camera model, e.g. "L2D-20c", in Model)."""
+    `{facade}_report_meta.json` is written by CheckCrackViewer right before it runs this report: the MngData archive
+    row (archive_id, company, building = 동, contract_id, customer_name) and, when the viewer's MySQL (smartcrack)
+    settings are filled in, the contract's building name / address / client (company) from SmartCrackWeb's DB.
+    It is optional: a purely local run has none, and those cover cells then say "미등록" -- never invented values.
+    Equipment, camera, capture date, photo count and the measured shooting distance come from the run's own data
+    (src/report/capture_facts.py)."""
+    from src.report.capture_facts import compute_capture_facts
+
     meta = _read_json(output_dir / f"{facade_id}_report_meta.json")
     meta = dict(meta) if isinstance(meta, dict) else {}
-    if "equipment" not in meta or "camera" not in meta:
-        from src.capture.dji_metadata import parse_dji_image
-        from src.common.paths import resolve_source_image
-
-        for entry in source_images[:20]:
-            path = resolve_source_image(entry.get("file_path", ""), output_dir) if isinstance(entry, dict) else None
-            if not path:
-                continue
-            try:
-                parsed = parse_dji_image(path)
-            except Exception:  # noqa: BLE001 -- a broken photo must not stop the report; try the next one
-                continue
-            meta.setdefault("equipment", parsed.drone_model)
-            meta.setdefault("camera", parsed.camera_model)
-            break
+    try:
+        facts = compute_capture_facts(output_dir, facade_id, source_images)
+    except Exception:  # noqa: BLE001 -- missing facts must never stop the report
+        facts = {}
+    for key, value in facts.items():
+        meta.setdefault(key, value)
     return meta
 
 
@@ -581,13 +575,17 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
             "min_confidence": REPORT_MIN_CONFIDENCE,
             "reviewed_by": snapshot.reviewed_by,
             "reviewed_at": snapshot.reviewed_at,
-            "client": meta.get("customer_name"),
+            "client": meta.get("client") or meta.get("customer_name"),
             "address": meta.get("address"),
             "building_name": _building_name(meta),
             "contract_id": meta.get("contract_id"),
             "archive_id": meta.get("archive_id"),
             "equipment": meta.get("equipment"),
             "camera": meta.get("camera"),
+            "capture_date": meta.get("capture_date"),
+            "photo_count": meta.get("photo_count"),
+            "distance_median_m": meta.get("distance_median_m"),
+            "mm_per_px_median": meta.get("mm_per_px_median"),
         },
         "cracks": [_report_crack_entry(c, cards) for c in cracks_sorted],
         "cards": cards,
@@ -611,21 +609,30 @@ def _crack_floors(crack: dict, setting: dict | None) -> tuple[int | None, int | 
 
 
 def _building_name(meta: dict) -> str | None:
-    """"수목토 1100동" from the archive's company + building (동 is stored as a number, shown with "동")."""
-    company = (meta.get("company") or "").strip()
+    """"수목토 1100동": the contract's building name (MySQL Buildings.Name) or else the archive's company, plus the
+    archive's 동 (stored as a number, shown with "동")."""
+    company = (meta.get("building_name") or meta.get("company") or "").strip()
     building = str(meta.get("building") or "").strip()
     if building.isdigit():
         building = f"{building}동"
     name = " ".join(p for p in (company, building) if p)
+    if name and meta.get("face_label"):
+        name += f" ({meta['face_label']})"  # 신청서 면, from SmartCrackWeb FacadeFaceMappings
     return name or None
 
 
 def _cover_values(meta: dict) -> dict:
+    from src.report.capture_facts import distance_text
+
     return {
-        "client_value": meta.get("customer_name"),
+        "client_value": meta.get("client") or meta.get("customer_name"),
         "address_value": meta.get("address"),
         "equipment_value": meta.get("equipment"),
         "camera_value": meta.get("camera"),
+        "distance_value": distance_text(meta),
+        "capture_date_value": meta.get("capture_date"),
+        "photo_count_value": meta.get("photo_count"),
+        "contract_value": meta.get("contract_id"),
     }
 
 
@@ -664,12 +671,14 @@ def _report_crack_entry(crack: dict, cards: list[dict]) -> dict:
 def _facade_deliverables(snapshot: FacadeSnapshot) -> list[tuple[str, bool, str]]:
     analysis_name = snapshot.analysis_path.name if snapshot.analysis_path else ""
     visual_path = _pick(snapshot.output_dir, snapshot.facade_id, "_visual_colmap_dense.tif", "_visual_colmap.tif", "_visual.tif")
+    mask_path = (_pick(snapshot.output_dir, snapshot.facade_id, "_crack_mask_v2.tif", "_crack_mask.tif")
+                 if snapshot.cracks_file.endswith("_v2.json") else snapshot.crack_mask_path)
     return [
         ("외벽 스티칭 결과 (분석용)", snapshot.analysis_path is not None, analysis_name),
         ("외벽 스티칭 결과 (열람용)", visual_path is not None, visual_path.name if visual_path else ""),
-        ("크랙 위치도", snapshot.crack_mask_path is not None, f"{snapshot.facade_id}_crack_mask.tif"),
-        ("크랙 데이터 (JSON)", bool(snapshot.cracks), f"{snapshot.facade_id}_cracks.json"),
-        ("스티칭 품질 리포트 (JSON)", snapshot.quality is not None, f"{snapshot.facade_id}_quality_report.json"),
+        # the files of the crack list the report actually used (2차 _v2 when present, see load_facade_snapshot)
+        ("크랙 위치도", mask_path is not None, mask_path.name if mask_path else ""),
+        ("크랙 데이터 (JSON)", bool(snapshot.cracks), snapshot.cracks_file or f"{snapshot.facade_id}_cracks.json"),
         ("정밀 보정 리포트 (JSON)", snapshot.colmap is not None, f"{snapshot.facade_id}_colmap_report.json"),
         ("본 PDF 보고서", True, f"{snapshot.facade_id}_report.pdf"),
     ]

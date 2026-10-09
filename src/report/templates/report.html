@@ -306,7 +306,7 @@
       <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("building") }}</span>건물명 (Building Name)</span></td><td>{{ building_name_value }}</td></tr>
       <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("camera") }}</span>사용장비 (Equipment)</span></td><td>{{ equipment_value or "미확인" }}</td></tr>
       <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("camera") }}</span>카메라 (Camera)</span></td><td>{{ camera_value or "미확인" }}</td></tr>
-      <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("target") }}</span>촬영기준 (Distance)</span></td><td>10 m 기준 (5 m 필요 시 별도 촬영)</td></tr>
+      <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("target") }}</span>촬영거리 (Distance)</span></td><td>{{ distance_value or "미확인" }}</td></tr>
       <tr><td class="klabel"><span class="klabel-inner"><span class="icon-badge-sm">{{ icon("clipboard") }}</span>보고서 용도 (Purpose)</span></td><td>건물 외벽 균열 점검</td></tr>
     </table>
 
@@ -403,7 +403,10 @@
 
   <div class="sub-heading">촬영 및 분석 기준</div>
   <table class="metric-table">
-    <tr><td class="k">촬영거리</td><td>10 m 기준 (5 m 필요 시 별도 촬영)</td></tr>
+    <tr><td class="k">촬영거리</td><td>{{ distance_value or "미확인" }}{% if distance_value %} <span class="caption">(카메라~벽면 수직거리, 3D 복원 기준)</span>{% endif %}</td></tr>
+    <tr><td class="k">촬영일</td><td>{{ capture_date_value or "미확인" }}</td></tr>
+    <tr><td class="k">사진 매수</td><td>{% if photo_count_value %}{{ photo_count_value }}장 (모자이크에 사용){% else %}미확인{% endif %}</td></tr>
+    {% if contract_value %}<tr><td class="k">계약번호</td><td>{{ contract_value }}</td></tr>{% endif %}
     <tr><td class="k">촬영장비</td><td>{{ equipment_value or "미확인" }}</td></tr>
     <tr><td class="k">카메라</td><td>{{ camera_value or "미확인" }}</td></tr>
     <tr><td class="k">촬영방법</td><td>연속 촬영 (면별)</td></tr>
