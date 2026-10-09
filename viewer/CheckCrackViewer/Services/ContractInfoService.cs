@@ -9,8 +9,39 @@ public sealed record ContractInfo(string? BuildingName, string? Address, string?
 
 /// <summary>2026-10-09 (사용자 요청: 보고서 표지의 의뢰자/주소/건물명을 서버에서). Read-only. Uses the viewer's
 /// "DB 설정" (MySQL) connection; not configured or unreachable -> null, and the report keeps "미등록".</summary>
+/// <summary>The company issuing the report (발행처) -- SmartOneFlow/SmartCrackWeb CompanySettings (one row).</summary>
+public sealed record IssuerInfo(string? Company, string? Representative, string? BusinessNo, string? Address, string? Phone);
+
 public static class ContractInfoService
 {
+    /// <summary>2026-10-09 (사용자: 발행처는 DB에 있음): CompanySettings, the single company row ERP admins maintain.</summary>
+    public static async Task<IssuerInfo?> GetIssuerAsync(DbConnectionSettings? settings, CancellationToken cancellationToken = default)
+    {
+        if (settings == null || string.IsNullOrWhiteSpace(settings.Host) || string.IsNullOrWhiteSpace(settings.Database))
+            return null;
+        await using var conn = new MySqlConnection(BuildConnectionString(settings));
+        await conn.OpenAsync(cancellationToken);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT Name, Representative, BusinessRegNo, Address, Phone FROM CompanySettings ORDER BY Id LIMIT 1";
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            return null;
+        string? Str(int i) => reader.IsDBNull(i) || string.IsNullOrWhiteSpace(reader.GetString(i)) ? null : reader.GetString(i).Trim();
+        return new IssuerInfo(Str(0), Str(1), Str(2), Str(3), Str(4));
+    }
+
+    private static string BuildConnectionString(DbConnectionSettings settings) => new MySqlConnectionStringBuilder
+    {
+        Server = settings.Host.Trim(),
+        Port = (uint)(settings.Port > 0 ? settings.Port : 3306),
+        Database = settings.Database.Trim(),
+        UserID = settings.User.Trim(),
+        Password = settings.Password,
+        SslMode = settings.UseSsl ? MySqlSslMode.Required : MySqlSslMode.None,
+        ConnectionTimeout = (uint)Math.Max(1, settings.TimeoutSeconds),
+        AllowPublicKeyRetrieval = true,
+    }.ConnectionString;
+
     // SmartCrackWeb WallFace enum East=0, West=1, South=2, North=3 -- since 2026-10-08 building-relative faces, not compass
     // directions (SmartCrackWeb Labels.cs): 정면/후면/좌측면/우측면.
     private static readonly string[] FaceLabels = { "정면", "후면", "좌측면", "우측면" };
@@ -28,18 +59,7 @@ public static class ContractInfoService
         if (settings == null || string.IsNullOrWhiteSpace(settings.Host) || string.IsNullOrWhiteSpace(settings.Database)
             || string.IsNullOrWhiteSpace(contractNo))
             return null;
-        var cs = new MySqlConnectionStringBuilder
-        {
-            Server = settings.Host.Trim(),
-            Port = (uint)(settings.Port > 0 ? settings.Port : 3306),
-            Database = settings.Database.Trim(),
-            UserID = settings.User.Trim(),
-            Password = settings.Password,
-            SslMode = settings.UseSsl ? MySqlSslMode.Required : MySqlSslMode.None,
-            ConnectionTimeout = (uint)Math.Max(1, settings.TimeoutSeconds),
-            AllowPublicKeyRetrieval = true,
-        };
-        await using var conn = new MySqlConnection(cs.ConnectionString);
+        await using var conn = new MySqlConnection(BuildConnectionString(settings));
         await conn.OpenAsync(cancellationToken);
 
         long requestId;

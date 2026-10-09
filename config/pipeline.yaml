@@ -197,7 +197,8 @@ multiview:
   continuation_max_tangent_angle_deg: 25.0  # 두 끝점 접선 방향과 연결선 방향의 최대 허용 각도차
   continuation_tangent_window_px: 25.0  # 끝점 접선을 추정할 때 skeleton을 따라 안쪽으로 걷는 대략적 거리
 
-# 2026-10-09: 보고서 발행처 (표지 "발행처" + 마지막 장 결재란 왼쪽). 비워 두면 "미등록"으로 표시 -- 회사의 공식 정보를 입력하세요.
+# 2026-10-09: 보고서 발행처 (표지 "발행처" + 마지막 장 결재란 왼쪽). 기본은 ERP의 MySQL CompanySettings(뷰어 "DB 설정" 필요)에서
+# 가져오고, 여기 값은 DB를 못 읽을 때의 대체값(항목별). 둘 다 없으면 "미등록".
 report:
   issuer:
     company: ""        # 회사명

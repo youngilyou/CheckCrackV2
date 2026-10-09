@@ -2708,3 +2708,5 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
   (company/business_no/address/phone/email, **비어 있음 -> "미등록"**, 회사 공식 정보 입력 필요) -- 표지 "발행처" 행 + 마지막 장 결재란 왼쪽 블록.
   작성자(점검자) = 뷰어 로그인 표시 이름(report_meta author_name, archive 없는 폴더도 기록), 없으면 검토자.
   신청서 면: 1100동은 신청서에 4면 모두 있어 BACK -> 후면 표준 대응으로 자동 연결(예외 지정 불필요).
+- (같은 날) 발행처는 ERP의 MySQL `CompanySettings`(Name/Representative/BusinessRegNo/Address/Phone, 1행)에서: 뷰어가 report_meta "issuer"로 기록
+  (ContractInfoService.GetIssuerAsync), config report.issuer는 항목별 대체값. 마지막 장 발행처에 대표자 행 추가. archive #1: (주)스마트크랙 / 유영일.

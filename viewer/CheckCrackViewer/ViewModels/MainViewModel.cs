@@ -395,6 +395,20 @@ public partial class MainViewModel : ObservableObject
                 ? await CrackVisionArchiveQueryService.GetReportMetaAsync(BuildCrackVisionSettings(), id) ?? new Dictionary<string, object?>()
                 : new Dictionary<string, object?>();
             meta["author_name"] = string.IsNullOrWhiteSpace(author) ? null : author;
+            // 2026-10-09: 발행처 from the ERP's CompanySettings (MySQL "DB 설정"); unreachable -> config report.issuer / "미등록".
+            try
+            {
+                if (await ContractInfoService.GetIssuerAsync(DbSettingsStore.Load()) is { } issuer)
+                    meta["issuer"] = new Dictionary<string, string?>
+                    {
+                        ["company"] = issuer.Company, ["representative"] = issuer.Representative,
+                        ["business_no"] = issuer.BusinessNo, ["address"] = issuer.Address, ["phone"] = issuer.Phone,
+                    };
+            }
+            catch (Exception ex)
+            {
+                facade.AddIssue($"[WARN] 발행처 정보(MySQL CompanySettings)를 가져오지 못했습니다: {ex.Message}");
+            }
             // 2026-10-09: contract facts from SmartCrackWeb's MySQL ("DB 설정") -- building name, address, client,
             // and the 신청서 face this facade is mapped to. Not configured / unreachable -> cover keeps "미등록".
             if (meta.GetValueOrDefault("contract_id") is string contractNo && !string.IsNullOrWhiteSpace(contractNo))

@@ -678,6 +678,7 @@
     <div class="issuer-title">발행처</div>
     <table>
       <tr><td class="k">회사명</td><td>{{ issuer.company or "미등록" }}</td></tr>
+      <tr><td class="k">대표자</td><td>{{ issuer.representative or "미등록" }}</td></tr>
       {% if issuer.business_no %}<tr><td class="k">사업자등록번호</td><td>{{ issuer.business_no }}</td></tr>{% endif %}
       <tr><td class="k">주소</td><td>{{ issuer.address or "미등록" }}</td></tr>
       <tr><td class="k">연락처</td><td>{{ issuer.phone or "미등록" }}{% if issuer.email %} · {{ issuer.email }}{% endif %}</td></tr>

@@ -554,7 +554,7 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
         "footer_brand": FOOTER_BRAND,
         "building_name_value": _building_name(meta) or "미등록",
         "author_value": meta.get("author_name") or snapshot.reviewed_by,
-        "issuer": _issuer(),
+        "issuer": _issuer(meta),
         **_cover_values(meta),
         "quality_rows": _quality_rows(quality, snapshot.colmap, snapshot.used_colmap),
         "mosaic_uri": mosaic_uri,
@@ -614,7 +614,7 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
             "distance_min_m": meta.get("distance_min_m"),
             "distance_max_m": meta.get("distance_max_m"),
             "author_name": meta.get("author_name") or snapshot.reviewed_by,
-            "issuer_company": _issuer().get("company"),
+            "issuer_company": _issuer(meta).get("company"),
         },
         "cracks": [_report_crack_entry(c, cards) for c in cracks_sorted],
         "cards": cards,
@@ -659,9 +659,11 @@ def _building_name(meta: dict) -> str | None:
 STANDARD_FACE_LABELS = {"FRONT": "정면", "BACK": "후면", "LEFT": "좌측면", "RIGHT": "우측면"}
 
 
-def _issuer() -> dict:
-    """발행처 (config/pipeline.yaml report.issuer: company, business_no, address, phone, email). Empty values print as
-    "미등록" -- the company's official details are entered by the operator, never invented here."""
+def _issuer(meta: dict | None = None) -> dict:
+    """발행처. First choice: the ERP's CompanySettings row (MySQL), which CheckCrackViewer puts into
+    `{facade}_report_meta.json` "issuer" (company, representative, business_no, address, phone). Fallback per field:
+    config/pipeline.yaml report.issuer. Empty values print as "미등록" -- never invented here."""
+    from_db = (meta or {}).get("issuer") if isinstance((meta or {}).get("issuer"), dict) else {}
     try:
         from src.common.config import load_config
 
@@ -669,8 +671,9 @@ def _issuer() -> dict:
         raw = ((data.get("report") or {}).get("issuer") or {}) if isinstance(data, dict) else {}
     except Exception:  # noqa: BLE001 -- the report must render without it
         raw = {}
-    return {k: (str(raw.get(k)).strip() if raw.get(k) not in (None, "") else None)
-            for k in ("company", "business_no", "address", "phone", "email")}
+    merged = {**{k: v for k, v in raw.items() if v not in (None, "")}, **{k: v for k, v in from_db.items() if v not in (None, "")}}
+    return {k: (str(merged.get(k)).strip() if merged.get(k) not in (None, "") else None)
+            for k in ("company", "representative", "business_no", "address", "phone", "email")}
 
 
 def _cover_values(meta: dict) -> dict:
@@ -816,6 +819,8 @@ def generate_building_report(manifest_path: str | Path, reports_dir: str | Path)
         "footer_brand": FOOTER_BRAND,
         "building_name_value": label,
         **_cover_values((entries[0]["snapshot"].report_meta or {}) if entries else {}),
+        "issuer": _issuer((entries[0]["snapshot"].report_meta or {}) if entries else {}),
+        "author_value": ((entries[0]["snapshot"].report_meta or {}).get("author_name") if entries else None),
         "facade_count": len(entries),
         "side_count": len(by_side),
         "stitched_count": sum(1 for e in entries if e["snapshot"].analysis_path is not None),
