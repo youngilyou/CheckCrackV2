@@ -59,6 +59,17 @@ internal sealed class ReportCardsJson
     [JsonPropertyName("version")] public int Version { get; set; }
     [JsonPropertyName("report")] public ReportFactsJson? Report { get; set; }
     [JsonPropertyName("cracks")] public List<ReportCrackJson> Cracks { get; set; } = new();
+    /// <summary>결재란 (2026-10-09): where the ERP stamps the seal -- last page, PDF points, origin top-left.</summary>
+    [JsonPropertyName("stamp")] public ReportStampJson? Stamp { get; set; }
+}
+
+internal sealed class ReportStampJson
+{
+    [JsonPropertyName("page")] public int Page { get; set; }
+    [JsonPropertyName("page_width_pt")] public double PageWidthPt { get; set; }
+    [JsonPropertyName("page_height_pt")] public double PageHeightPt { get; set; }
+    [JsonPropertyName("author")] public Dictionary<string, double>? Author { get; set; }
+    [JsonPropertyName("approver")] public Dictionary<string, double>? Approver { get; set; }
 }
 
 internal sealed class ReportFactsJson
@@ -488,7 +499,7 @@ public static class CrackVisionArchiveQueryService
         }
 
         if (reportCards?.Report is { } report)
-            await UpsertReportAsync(conn, tx, facadeRowId, report, reportCards.Cracks, reportPath, cancellationToken);
+            await UpsertReportAsync(conn, tx, facadeRowId, report, reportCards.Cracks, reportPath, cancellationToken, reportCards.Stamp);
         await ApplyFloorsAsync(conn, tx, facadeRowId, FloorSettingStore.LoadConfirmed(outputDir, facadeId), cancellationToken);
 
         await tx.CommitAsync(cancellationToken);
@@ -609,21 +620,26 @@ public static class CrackVisionArchiveQueryService
     /// crackvision_reports.sql in MngData. The crack rows were just re-inserted in the same transaction, which
     /// already removed the old numbering (FK cascade); numbering rows whose crack is missing are skipped.</summary>
     private static async Task UpsertReportAsync(NpgsqlConnection conn, NpgsqlTransaction tx, long facadeRowId,
-        ReportFactsJson report, List<ReportCrackJson> numbering, string? reportPath, CancellationToken cancellationToken)
+        ReportFactsJson report, List<ReportCrackJson> numbering, string? reportPath, CancellationToken cancellationToken,
+        ReportStampJson? stamp = null)
     {
         DateOnly? issueDate = DateOnly.TryParse(report.IssueDate, out var d) ? d : null;
         await using (var cmd = new NpgsqlCommand(
             "INSERT INTO crackvision_reports (facade_row_id, report_no, issue_date, generated_at, report_path, page_count, " +
             " cracks_file, mosaic_file, crack_count, raw_crack_count, min_confidence, reviewed_by, reviewed_at, " +
-            " client, address, building_name, contract_id, equipment, camera, updated_at) " +
-            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now()) " +
+            " client, address, building_name, contract_id, equipment, camera, " +
+            " stamp_page, page_width_pt, page_height_pt, stamp_author_rect_pt, stamp_approver_rect_pt, updated_at) " +
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb, now()) " +
             "ON CONFLICT (facade_row_id) DO UPDATE SET report_no = EXCLUDED.report_no, issue_date = EXCLUDED.issue_date, " +
             " generated_at = EXCLUDED.generated_at, report_path = COALESCE(EXCLUDED.report_path, crackvision_reports.report_path), " +
             " page_count = EXCLUDED.page_count, cracks_file = EXCLUDED.cracks_file, mosaic_file = EXCLUDED.mosaic_file, " +
             " crack_count = EXCLUDED.crack_count, raw_crack_count = EXCLUDED.raw_crack_count, min_confidence = EXCLUDED.min_confidence, " +
             " reviewed_by = EXCLUDED.reviewed_by, reviewed_at = EXCLUDED.reviewed_at, client = EXCLUDED.client, " +
             " address = EXCLUDED.address, building_name = EXCLUDED.building_name, contract_id = EXCLUDED.contract_id, " +
-            " equipment = EXCLUDED.equipment, camera = EXCLUDED.camera, updated_at = now()", conn, tx))
+            " equipment = EXCLUDED.equipment, camera = EXCLUDED.camera, stamp_page = EXCLUDED.stamp_page, " +
+            " page_width_pt = EXCLUDED.page_width_pt, page_height_pt = EXCLUDED.page_height_pt, " +
+            " stamp_author_rect_pt = EXCLUDED.stamp_author_rect_pt, stamp_approver_rect_pt = EXCLUDED.stamp_approver_rect_pt, " +
+            " updated_at = now()", conn, tx))
         {
             cmd.Parameters.AddWithValue(facadeRowId);
             cmd.Parameters.AddWithValue(report.ReportNo);
@@ -644,6 +660,11 @@ public static class CrackVisionArchiveQueryService
             cmd.Parameters.AddWithValue((object?)report.ContractId ?? DBNull.Value);
             cmd.Parameters.AddWithValue((object?)report.Equipment ?? DBNull.Value);
             cmd.Parameters.AddWithValue((object?)report.Camera ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)stamp?.Page ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)stamp?.PageWidthPt ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)stamp?.PageHeightPt ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(stamp?.Author != null ? JsonSerializer.Serialize(stamp.Author) : DBNull.Value);
+            cmd.Parameters.AddWithValue(stamp?.Approver != null ? JsonSerializer.Serialize(stamp.Approver) : DBNull.Value);
             await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
 

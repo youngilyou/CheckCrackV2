@@ -433,7 +433,15 @@ def _render(template_name: str, context: dict) -> bytes:
     return HTML(string=html, base_url=str(_TEMPLATE_DIR)).write_pdf()
 
 
-def _render_with_cards(template_name: str, context: dict) -> tuple[bytes, list[dict]]:
+def _walk_boxes(box):
+    """Pre-order walk of the laid-out box tree. Unlike WeasyPrint's descendants() it also enters absolutely positioned
+    boxes (AbsolutePlaceholder), where the 결재란 lives."""
+    yield box
+    for child in getattr(box, "children", None) or ():
+        yield from _walk_boxes(child)
+
+
+def _render_with_cards(template_name: str, context: dict) -> tuple[bytes, list[dict], dict | None]:
     """Same as `_render`, plus where each crack detail card landed in the PDF.
 
     2026-09-27 (사용자 요청): 결과 보기의 보고서(PDF) 화면에서 크랙 카드를 클릭하면 왼쪽에 그 크랙의 원본
@@ -447,12 +455,26 @@ def _render_with_cards(template_name: str, context: dict) -> tuple[bytes, list[d
 
     by_crack_id = {c["crack_id"]: c for c in context.get("cracks", []) if c.get("crack_id")}
     cards: list[dict] = []
+    stamp: dict | None = None
     for page_index, page in enumerate(document.pages):
         page_box = page._page_box
         page_w, page_h = float(page_box.margin_width()), float(page_box.margin_height())
         seen: set[str] = set()
-        for box in page_box.descendants():  # depth-first: the outermost box of a card comes first
+        for box in _walk_boxes(page_box):  # depth-first: the outermost box of a card comes first
             element = getattr(box, "element", None)
+            role = element.get("data-stamp") if element is not None else None
+            if role:
+                if stamp is not None and role in stamp:
+                    continue  # the cell's inner line/text boxes share its element -- keep the outermost (the cell)
+                # 2026-10-09: 결재란 칸 (ERP 직인 위치). CSS px -> PDF pt (x0.75), origin = top-left of the page.
+                x0, y0 = float(box.border_box_x()), float(box.border_box_y())
+                stamp = stamp or {"page": page_index, "page_count": len(document.pages),
+                                  "page_width_pt": round(page_w * 0.75, 2), "page_height_pt": round(page_h * 0.75, 2),
+                                  "origin": "top-left", "unit": "pt"}
+                stamp[role] = {"x0": round(x0 * 0.75, 2), "y0": round(y0 * 0.75, 2),
+                               "x1": round((x0 + float(box.border_width())) * 0.75, 2),
+                               "y1": round((y0 + float(box.border_height())) * 0.75, 2)}
+                continue
             crack_id = element.get("data-crack-id") if element is not None else None
             if not crack_id or crack_id in seen:
                 continue
@@ -473,7 +495,7 @@ def _render_with_cards(template_name: str, context: dict) -> tuple[bytes, list[d
                 "image_id": first.get("image_id") if first else None,
                 "bbox_px_in_source": first.get("bbox_px_in_source") if first else None,
             })
-    return pdf_bytes, cards
+    return pdf_bytes, cards, stamp
 
 
 def _atomic_write_pdf(pdf_bytes: bytes, out_path: Path) -> None:
@@ -531,6 +553,7 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
         "issue_date": f"{generated_at:%Y. %m. %d.}",
         "footer_brand": FOOTER_BRAND,
         "building_name_value": _building_name(meta) or "미등록",
+        "author_value": snapshot.reviewed_by,
         **_cover_values(meta),
         "quality_rows": _quality_rows(quality, snapshot.colmap, snapshot.used_colmap),
         "mosaic_uri": mosaic_uri,
@@ -550,7 +573,7 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
         "deliverables": _facade_deliverables(snapshot),
     }
 
-    pdf_bytes, cards = _render_with_cards("report.html", context)
+    pdf_bytes, cards, stamp = _render_with_cards("report.html", context)
     out_path = snapshot.output_dir / f"{facade_id}_report.pdf"
     _atomic_write_pdf(pdf_bytes, out_path)
     # Sidecar for CheckCrackViewer's report panel (card click -> original photo + crack position).
@@ -590,6 +613,9 @@ def generate_facade_report(output_dir: str | Path, facade_id: str, building_id: 
         },
         "cracks": [_report_crack_entry(c, cards) for c in cracks_sorted],
         "cards": cards,
+        # 결재란: ERP stamps the seal into "approver" (and optionally "author") -- page index 0-based, PDF points,
+        # origin top-left (PDF libraries with a bottom-left origin use y = page_height_pt - y).
+        "stamp": stamp,
     })
     return out_path
 

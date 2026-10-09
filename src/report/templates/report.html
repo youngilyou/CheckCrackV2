@@ -58,6 +58,15 @@
   }
 
   .page { page-break-after: always; }
+
+  /* 2026-10-09: 마지막 장 오른쪽 아래 "작성자 / 승인" 결재란. ERP가 승인 칸(data-stamp="approver")에 직인을 찍는다 --
+     좌표는 보고서 생성 때 {facade}_report_cards.json "stamp"와 MngData crackvision_reports에 기록된다(PDF 포인트).
+     페이지 기준 절대 위치라 본문 길이와 상관없이 항상 같은 자리. 크기를 바꾸면 ERP 쪽 직인 크기도 맞춰야 함. */
+  .signoff { position: absolute; right: 0; bottom: 0; border-collapse: collapse; font-size: 8.5pt; }
+  .signoff th { background: var(--navy); color: #fff; font-weight: 700; padding: 0.08cm 0.2cm; border: 1px solid var(--navy); width: 3.2cm; }
+  .signoff td { border: 1px solid #b8c0cc; text-align: center; vertical-align: middle; }
+  .signoff td.sign-name { height: 0.7cm; color: #202430; }
+  .signoff td.sign-box { height: 3.2cm; color: #c4cad4; font-size: 9pt; }
   .page:last-child { page-break-after: auto; }
 
   /* ---------- Cover ---------- */
@@ -657,6 +666,12 @@
   {% endif %}
 
   <div class="disclaimer">※ 본 보고서는 구조 안전성 평가나 보수 판단을 포함하지 않으며, 사진 분석 결과만을 제공하는 서비스입니다.</div>
+
+  <table class="signoff">
+    <tr><th>작성자</th><th>승인</th></tr>
+    <tr><td class="sign-name">{{ author_value or "" }}</td><td class="sign-name"></td></tr>
+    <tr><td class="sign-box" data-stamp="author">(인)</td><td class="sign-box" data-stamp="approver">(인)</td></tr>
+  </table>
 </section>
 
 </body>

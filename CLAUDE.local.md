@@ -2687,3 +2687,15 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
   North=우측면/RIGHT (나침반 아님, 이름만 DB 호환). 면 결정 순서 = 1) FacadeFaceMappings 예외 2) 표준 대응 3) 신청 면이 하나면 그 면.
   보고서 건물명 뒤 "(후면)" 등(MySQL 없어도 표준으로), ContractInfoService 라벨 변경. GenerateJson: 콤보 "표준/정면/후면/좌측면/우측면",
   지정 없음 확인 창 삭제(표준이 기본). FacadePreviewer 전송 창: 예외 없으면 "→ 신청서 면: 1000동 정면" 표준 표시.
+
+## 2026-10-09 세션 기록 (4): 보고서 결재란(작성자/승인) + ERP 직인 좌표 (사용자: 마지막 페이지 오른쪽 아래)
+- 방식: 정해진 위치(마지막 장 오른쪽 아래 "작성자/승인" 칸) + 그 칸의 정확한 좌표를 기록 -> ERP가 PDF 글자를 찾지 않고 좌표로 직인.
+- 템플릿: 06장 끝에 `.signoff` 표(작성자/승인, 이름 줄 + 3.2 cm 정사각 도장 칸, "(인)"), CSS 페이지 기준 절대 위치(right/bottom 0) -- 본문 길이와 무관.
+  작성자 이름 = 검토자(reviewed_by). 종합보고서에도 같은 칸이 나오지만 좌표 기록은 면 보고서만.
+- 좌표: `_render_with_cards`가 레이아웃 상자에서 data-stamp 칸을 찾아 `{면}_report_cards.json` "stamp"에 기록 -- page(0부터, 마지막 장), page_width/height_pt,
+  author/approver {x0,y0,x1,y1} PDF pt, 원점 왼쪽 위(왼쪽 아래 원점 라이브러리는 y' = page_height_pt - y). WeasyPrint descendants()는 절대 위치 상자에
+  안 들어가서 직접 트리 순회(_walk_boxes), 칸 안의 글자 상자가 덮어쓰지 않게 가장 바깥(칸)만.
+- 검증: archive #1 A4(595.28x841.89 pt) 8쪽 중 7번(마지막) 쪽, 작성자 [359.62,699.78,450.33,790.49], 승인 [450.33,699.78,541.04,790.49] --
+  PDF에 그 좌표로 시험 도장을 그려 칸과 정확히 일치 확인. MngData crackvision_reports.stamp_page/page_width_pt/page_height_pt/stamp_author_rect_pt/
+  stamp_approver_rect_pt(.43 적용) + 서버 보고서 갱신.
+- 주의: 보고서를 다시 만들면(최종 보고서 재생성 등) 직인 없는 새 PDF로 바뀜 -> ERP가 다시 찍어야 함(updated_at/generated_at으로 감지 가능).
