@@ -2710,3 +2710,20 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
   신청서 면: 1100동은 신청서에 4면 모두 있어 BACK -> 후면 표준 대응으로 자동 연결(예외 지정 불필요).
 - (같은 날) 발행처는 ERP의 MySQL `CompanySettings`(Name/Representative/BusinessRegNo/Address/Phone, 1행)에서: 뷰어가 report_meta "issuer"로 기록
   (ContractInfoService.GetIssuerAsync), config report.issuer는 항목별 대체값. 마지막 장 발행처에 대표자 행 추가. archive #1: (주)스마트크랙 / 유영일.
+
+## 2026-10-12 세션 기록: 측면(LEFT/RIGHT) 결함 2건 -- 원인 확정 + 측면 전용 수정 (사용자: 정면/후면 로직은 건드리지 말 것)
+- 사용자 지적(archive #2): LEFT 층/모자이크 틀어짐, RIGHT 검은 부분·이미지 누락·회색 얼룩. 1600 px·3회 탓인지 질문 -> **아님**(둘 다 Dense 이전/무관).
+- LEFT 원인(실측): GPS 정렬(align_reconstruction_to_locations, RANSAC 1회)이 수직 한 줄 촬영에서 무작위로 축척 1.8배 틀린 답(GPS 오차 중앙값 2.55 m,
+  카메라-벽 19 m vs 실제 10.8 m) -> 평면 모자이크부터 블록이 다른 크기로 쌓이고 층 간격 2.29 m. 같은 재구성을 다시 정렬하면 0.75 m.
+  기존 검사(3 m 이내 50%)는 고정 내부 파라미터라 초점 편차 검사가 무의미해져 통과시킴. 또 1단계 COLMAP 자체도 실행마다 다름(같은 48장: 0.72/0.75/1.57/1.63 m).
+- 수정(측면 = GPS가 한 줄인 촬영에만, FRONT/BACK은 코드 경로 그대로):
+  (1) `align_reconstruction_to_utm`: 한 줄 촬영이면 시드 고정 RANSAC 15회 중 GPS 오차 중앙값 최소 선택(재현 가능). 정면/후면은 원래 1회(10회 반복 실측: 결과 완전히 동일).
+  (2) `check_gps_alignment` 한 줄 촬영 기준에 중앙값 <= 1.5 m 추가.
+  (3) `_run_stage1_with_retries`: 한 줄 촬영이면 1단계 COLMAP 최대 3회, 중앙값 <= 1.0 m면 즉시 채택, 아니면 최소값. 진 시도 폴더 삭제.
+- RIGHT 원인: 검은 부분 = 벽 바깥 미촬영 영역(예전 결과도 동일). 회색 얼룩 = 민벽이라 Dense 점이 적어 생긴 구멍을 **흐릿한 평면 모자이크**로 메운 자리
+  (선명한 사진 재샘플 패치와 섞여 얼룩). 수정(민벽에만): Dense 렌더가 픽셀별 깊이를 유지 -> `_is_plain_wall`(벽에서 0.3 m 넘게 벗어난 점 < 5%) 이면
+  `depth_fill.fill_from_dense_points`가 깊이 지도로 못 채운 모든 관측 픽셀(구멍 포함, 구멍은 벽 평면 깊이 0)을 원본 사진에 직접 투영해 채움(가림은 깊이 지도로 확인).
+  실측 relief: FRONT 51%, BACK 78~83% / LEFT·RIGHT 0~0.2% -> 정면·후면은 이 경로 안 탐.
+- 검증: A2 BACK 마감을 새 코드로 재실행 -> 저장 결과와 픽셀 차이 0.0000%(plain_wall=False). LEFT 재실행(runs/side_fix2): 1차 1.63 m -> 2차 0.72 m 선택,
+  층 간격 2.54 m, 벽 26.5 m(이전 정상 26.6), Dense 민벽 채우기 433만 px. RIGHT: 1차 0.26 m, 회색 얼룩 사라짐(304만 px 사진 채우기).
+- 아직: A2 LEFT/RIGHT 서버 결과는 예전(V001) 그대로 -- 새 결과(runs/side_fix2)를 버전으로 등록 + 크랙검사 + 보고서 + 서버 저장은 사용자 결정 대기.

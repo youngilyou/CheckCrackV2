@@ -139,6 +139,59 @@ def _detect_off_wall_images(
     return excluded
 
 
+STAGE1_COLLINEAR_ATTEMPTS = 3
+STAGE1_COLLINEAR_GOOD_MEDIAN_M = 1.0
+
+
+def _run_stage1_with_retries(
+    facade_id, colmap_images_dir, colmap_filenames, output_dir: Path, cfg, logger, by_id, catalog, utm_epsg, segment,
+    matcher,
+):
+    """Stage-1 COLMAP mapping. 2026-10-12 (사용자 확정: 정면/후면 로직은 그대로, 측면만): a collinear-GPS capture
+    (LEFT/RIGHT, the drone climbs straight along a plain wall) gets up to STAGE1_COLLINEAR_ATTEMPTS independent
+    mappings and keeps the one that agrees best with GPS (median residual; done as soon as one is
+    <= STAGE1_COLLINEAR_GOOD_MEDIAN_M). Measured on the same 48 LEFT photos: three runs gave a median GPS residual of
+    0.72 m, 0.75 m and 1.57 m -- incremental mapping of a nearly degenerate path is a random draw. Every other capture
+    runs once, exactly as before. Losing attempts' folders are deleted."""
+    import shutil
+
+    from src.geometry.rectification import check_gps_alignment, estimate_utm_epsg, gps_configuration_is_degenerate
+
+    if not gps_configuration_is_degenerate(catalog):
+        return _run_colmap_mapping_only(
+            facade_id, colmap_images_dir, colmap_filenames,
+            output_dir / "colmap_stage1", cfg, logger, by_id, catalog, utm_epsg, segment, matcher=matcher,
+        )
+    epsg = utm_epsg if utm_epsg is not None else estimate_utm_epsg(catalog)
+    attempts = []
+    for attempt in range(1, STAGE1_COLLINEAR_ATTEMPTS + 1):
+        workspace = output_dir / ("colmap_stage1" if attempt == 1 else f"colmap_stage1_try{attempt}")
+        result = _run_colmap_mapping_only(
+            facade_id, colmap_images_dir, colmap_filenames,
+            workspace, cfg, logger, by_id, catalog, utm_epsg, segment, matcher=matcher,
+        )
+        median = float("inf")
+        if result[1] is not None and epsg is not None:
+            _, info = check_gps_alignment(result[1], by_id, epsg)
+            median = float(info.get("median_residual_m", float("inf")))
+        attempts.append((median, attempt, workspace, result))
+        log_event(
+            logger, "info", "측면(한 줄 촬영) 1단계 COLMAP 시도", stage="COLMAP_STAGE1_ATTEMPT", facade_id=facade_id,
+            attempt=attempt, median_residual_m=median if median != float("inf") else None,
+        )
+        if median <= STAGE1_COLLINEAR_GOOD_MEDIAN_M:
+            break
+    best = min(attempts, key=lambda a: (a[0], a[1]))
+    for _, attempt, workspace, _ in attempts:
+        if workspace != best[2]:
+            shutil.rmtree(workspace, ignore_errors=True)
+    log_event(
+        logger, "info", "측면 1단계 COLMAP 선택", stage="COLMAP_STAGE1_SELECTED", facade_id=facade_id,
+        attempt=best[1], attempts=len(attempts), median_residual_m=best[0] if best[0] != float("inf") else None,
+    )
+    return best[3]
+
+
 def _run_colmap_mapping_only(
     facade_id: str,
     colmap_images_dir: str,
@@ -881,10 +934,9 @@ def _run_facade_pipeline(
             colmap_filenames = [Path(m.file_path).name for m in catalog]
             try:
                 t_stage1 = time.time()
-                stage1_colmap_result, stage1_reconstruction, stage1_plane, stage1_sim3d = _run_colmap_mapping_only(
+                stage1_colmap_result, stage1_reconstruction, stage1_plane, stage1_sim3d = _run_stage1_with_retries(
                     facade_id, colmap_images_dir, colmap_filenames,
-                    output_dir / "colmap_stage1", cfg, logger, by_id, catalog, utm_epsg, segment,
-                    matcher=matcher,
+                    output_dir, cfg, logger, by_id, catalog, utm_epsg, segment, matcher,
                 )
                 log_event(
                     logger, "info", "1단계 COLMAP(필터용) 완료",

@@ -101,6 +101,29 @@ def _undistort_normalized(model: str, params: np.ndarray, xy: np.ndarray) -> np.
     return np.column_stack([xu, yu])
 
 
+def _distort_normalized(model: str, params: np.ndarray, xn: np.ndarray) -> np.ndarray:
+    """Undistorted normalized coordinates (N,2) -> raw distorted pixels (N,2); inverse of _undistort_normalized."""
+    if model in ("SIMPLE_RADIAL", "SIMPLE_RADIAL_FISHEYE"):
+        f, cx, cy, k1 = params[0], params[1], params[2], params[3]
+        fx = fy = f
+        k2 = 0.0
+    elif model == "RADIAL":
+        f, cx, cy, k1, k2 = params[0], params[1], params[2], params[3], params[4]
+        fx = fy = f
+    elif model == "PINHOLE":
+        fx, fy, cx, cy = params[0], params[1], params[2], params[3]
+        k1 = k2 = 0.0
+    elif model == "SIMPLE_PINHOLE":
+        f, cx, cy = params[0], params[1], params[2]
+        fx = fy = f
+        k1 = k2 = 0.0
+    else:
+        raise NotImplementedError(f"camera model {model} not supported by depth_mapping")
+    r2 = xn[:, 0] ** 2 + xn[:, 1] ** 2
+    factor = 1.0 + k1 * r2 + k2 * r2 * r2
+    return np.column_stack([fx * xn[:, 0] * factor + cx, fy * xn[:, 1] * factor + cy])
+
+
 class DepthCanvasMapper:
     """raw-photo pixel -> canvas pixel using each photo's own COLMAP depth map."""
 
@@ -300,6 +323,43 @@ class DepthCanvasMapper:
         out[idx] = canvas[near_wall]
         valid[idx] = True
         return out, valid
+
+    def camera_center_utm(self, image_id: str) -> np.ndarray | None:
+        geom = self._geom.get(image_id)
+        if geom is None:
+            return None
+        return self.s * (self.Rs @ (-geom.R.T @ geom.t)) + self.Ts
+
+    def project_utm_points(
+        self, image_id: str, points_utm: np.ndarray, occlusion_tolerance_m: float = 0.15,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """(N,3) UTM points -> (raw distorted pixel xy (N,2), depth z (N,), visible (N,) bool) in this photo.
+        `visible`: in front of the camera, and not behind this photo's own depth map surface where that depth
+        is known (z > depth + tolerance + 3 % = something nearer hides it). Points where the depth map has no
+        value count as visible -- exactly the textureless-wall case this exists for (2026-10-12)."""
+        pts = np.asarray(points_utm, dtype=np.float64).reshape(-1, 3)
+        n = len(pts)
+        geom = self._geom.get(image_id)
+        if geom is None or n == 0:
+            return np.full((n, 2), np.nan), np.full(n, np.nan), np.zeros(n, dtype=bool)
+        native = ((pts - self.Ts) @ self.Rs) / self.s  # Rs^T (p - Ts) / s, row-vector form
+        cam = native @ geom.R.T + geom.t
+        z = cam[:, 2]
+        front = z > 1e-6
+        with np.errstate(all="ignore"):
+            xn = cam[:, 0] / z
+            yn = cam[:, 1] / z
+        xy = _distort_normalized(geom.raw_model, geom.raw_params, np.column_stack([xn, yn]))
+        visible = front & np.isfinite(xy).all(axis=1)
+        depth = self._depth(image_id)
+        if depth is not None and visible.any():
+            dh, dw = depth.shape[:2]
+            ux = (geom.und_fx * xn + geom.und_cx) * (dw / geom.und_width)
+            uy = (geom.und_fy * yn + geom.und_cy) * (dh / geom.und_height)
+            known = self._sample_depth(depth, np.where(visible, ux, -1), np.where(visible, uy, -1), radius=1)
+            hidden = np.isfinite(known) & (z > known * 1.03 + occlusion_tolerance_m)
+            visible &= ~hidden
+        return xy, z, visible
 
     def map_points_on_plane(self, image_id: str, xy_raw: np.ndarray) -> np.ndarray:
         """Same geometry with NO depth: intersect each pixel's viewing ray with the facade plane.

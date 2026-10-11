@@ -476,13 +476,47 @@ def align_reconstruction_to_utm(
     if len(names) < min_common_images:
         return None
 
-    sim3d = pycolmap.align_reconstruction_to_locations(
-        reconstruction, names, np.array(locations), min_common_images, pycolmap.RANSACOptions()
-    )
-    if sim3d is None:
+    targets = np.array(locations)
+    # 2026-10-12 (사용자 확정: 정면/후면 로직은 건드리지 않는다): only a collinear-GPS capture (LEFT/RIGHT, the drone
+    # climbs straight along the wall) gets the multi-attempt alignment below; every other capture keeps the original
+    # single RANSAC call unchanged.
+    if not gps_configuration_is_degenerate([by_id[Path(nm).stem] for nm in names]):
+        sim3d = pycolmap.align_reconstruction_to_locations(
+            reconstruction, names, targets, min_common_images, pycolmap.RANSACOptions()
+        )
+        if sim3d is None:
+            return None
+        reconstruction.transform(sim3d)
+        return sim3d
+
+    # Collinear capture: best of several seeded RANSAC runs. One run is a random draw, and with in-motion EXIF GPS up
+    # to ~20 m off it can land on a wrong scale that still has enough RANSAC inliers -- measured on archive #2 LEFT:
+    # the pipeline's alignment had a median GPS residual of 2.55 m and a ~1.8x scale error (cameras 19 m from the
+    # wall instead of 10.8 m, mosaic stacked from mismatched blocks, floor pitch 2.29 m instead of 2.52 m), while
+    # re-aligning the SAME reconstruction gave 0.75 m. Fixed seeds also make these runs repeatable.
+    image_by_name = {img.name: img for img in reconstruction.images.values()}
+    centers = np.array([np.asarray(image_by_name[n].projection_center(), dtype=np.float64) for n in names])
+    best, best_median = None, float("inf")
+    for seed in range(ALIGN_RANSAC_ATTEMPTS):
+        options = pycolmap.RANSACOptions()
+        options.random_seed = seed
+        candidate = pycolmap.align_reconstruction_to_locations(
+            reconstruction, names, targets, min_common_images, options
+        )
+        if candidate is None:
+            continue
+        rot = np.asarray(candidate.rotation.matrix(), dtype=np.float64)
+        moved = float(candidate.scale) * centers @ rot.T + np.asarray(candidate.translation, dtype=np.float64)
+        median = float(np.median(np.linalg.norm(moved - targets, axis=1)))
+        if median < best_median:
+            best, best_median = candidate, median
+    if best is None:
         return None
-    reconstruction.transform(sim3d)
-    return sim3d
+    reconstruction.transform(best)
+    return best
+
+
+ALIGN_RANSAC_ATTEMPTS = 15
 
 
 MAX_GPS_ALIGN_MEAN_RESIDUAL_M = 2.0
@@ -500,6 +534,9 @@ GPS_DEGENERATE_MIN_FIRST_STD_M = 3.0
 # MAX_GPS_ALIGN_MAX_RESIDUAL_M instead, plus consistent intrinsics.
 GPS_ROBUST_MIN_INLIER_FRACTION = 0.5
 MAX_FOCAL_RELATIVE_SPREAD = 0.10
+# 2026-10-12: with fixed shared intrinsics (the collinear-capture reconstruction) the focal spread is always 0, so it no
+# longer catches a wrong alignment; the median residual does (good LEFT alignments 0.72-0.75 m, the bad one 2.55 m).
+GPS_ROBUST_MAX_MEDIAN_RESIDUAL_M = 1.5
 
 
 def gps_configuration_is_degenerate(images: list[ImageMetadata]) -> bool:
@@ -562,7 +599,10 @@ def check_gps_alignment(
         return (
             residuals[0] <= MAX_GPS_ALIGN_MEAN_RESIDUAL_M and residuals[1] <= MAX_GPS_ALIGN_MAX_RESIDUAL_M
         ), info
-    return (frac >= GPS_ROBUST_MIN_INLIER_FRACTION and spread <= MAX_FOCAL_RELATIVE_SPREAD), info
+    return (
+        frac >= GPS_ROBUST_MIN_INLIER_FRACTION and spread <= MAX_FOCAL_RELATIVE_SPREAD
+        and info["median_residual_m"] <= GPS_ROBUST_MAX_MEDIAN_RESIDUAL_M
+    ), info
 
 
 def _gps_residuals_per_image(

@@ -275,6 +275,103 @@ MIN_WALL_TEXTURE_BRIGHTNESS = 55.0  # below this the ORIGINAL (pre-fix) pixel is
                                      # not paintable wall -- see finish_hybrid_mosaic's docstring
 
 
+def _sample_bilinear(img: np.ndarray, xy: np.ndarray) -> np.ndarray:
+    """Bilinear colour at (N,2) float pixel positions. cv2.remap maps are limited to 32767 columns, so the points are
+    laid out in rows of ROW_LEN (padded)."""
+    import cv2
+
+    row_len = 16384
+    n = len(xy)
+    rows = max(1, -(-n // row_len))
+    pad = rows * row_len - n
+    mx = np.pad(xy[:, 0].astype(np.float32), (0, pad)).reshape(rows, row_len)
+    my = np.pad(xy[:, 1].astype(np.float32), (0, pad)).reshape(rows, row_len)
+    out = cv2.remap(img, mx, my, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    return out.reshape(-1, 3)[:n]
+
+
+def fill_from_dense_points(
+    mapper: DepthCanvasMapper,
+    target_mask: np.ndarray,
+    depth_canvas: np.ndarray,
+    normal: np.ndarray,
+    image_dir: str | Path,
+    logger=None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
+    """2026-10-12: photo colour for dense-rendered pixels the depth-map resampling could not reach.
+
+    `fill_holes_from_depth` goes photo -> canvas through each photo's depth map, so it can only colour pixels some
+    depth map has a value for. On a plain textureless wall (archive #2 RIGHT: white panels) the depth maps are mostly
+    empty, and those pixels kept the fused point cloud's own flat grey colour -- visible blotches the flat mosaic does
+    not have. Here the direction is reversed: every such canvas pixel already HAS its real 3D position (the dense
+    render's winning point: plane point + depth x normal), which is projected straight into the photos; the photo whose
+    camera is nearest and that sees the point (not hidden behind its own depth surface where known) gives the colour,
+    sampled from the full-resolution original photo. Same safety property as fill_holes_from_depth -- every pixel comes
+    from a real measured 3D point; the flat mosaic is never used, so no ghosting.
+
+    Returns (colors BGR (H,W,3), filled (H,W) bool, owner (H,W) int32 index into names or -1, names)."""
+    import cv2
+
+    from src.common.imageio import imread_unicode
+
+    canvas_h, canvas_w = target_mask.shape
+    image_dir = Path(image_dir)
+    names = sorted(mapper._geom.keys())
+    colors = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
+    owner = np.full((canvas_h, canvas_w), -1, dtype=np.int32)
+    ys, xs = np.nonzero(target_mask & np.isfinite(depth_canvas))
+    if len(ys) == 0:
+        return colors, np.zeros((canvas_h, canvas_w), dtype=bool), owner, names
+    u = (xs + 0.5) / mapper.px_per_m
+    v = (ys + 0.5) / mapper.px_per_m
+    d = depth_canvas[ys, xs].astype(np.float64)
+    pts = mapper.origin + np.outer(u, mapper.e_u) + np.outer(v, mapper.e_v) + np.outer(d, np.asarray(normal, float))
+    best = np.full(len(ys), np.inf)
+    best_col = np.zeros((len(ys), 3), dtype=np.uint8)
+    best_owner = np.full(len(ys), -1, dtype=np.int32)
+
+    for n, iid in enumerate(names):
+        geom = mapper._geom[iid]
+        raw_w, raw_h = 2.0 * geom.raw_params[1], 2.0 * geom.raw_params[2]  # principal point ~ image centre
+        corners = np.array([[0, 0], [raw_w, 0], [raw_w, raw_h], [0, raw_h]], dtype=np.float64)
+        foot = mapper.map_points_on_plane(iid, corners)
+        if not np.isfinite(foot).all():
+            continue
+        margin = 2.0 * mapper.px_per_m  # depth can shift a point up to ~WALL_BAND off the plane footprint
+        sel = np.flatnonzero((xs >= foot[:, 0].min() - margin) & (xs <= foot[:, 0].max() + margin)
+                             & (ys >= foot[:, 1].min() - margin) & (ys <= foot[:, 1].max() + margin))
+        if len(sel) == 0:
+            continue
+        center = mapper.camera_center_utm(iid)
+        dist = np.linalg.norm(pts[sel] - center, axis=1)
+        closer = dist < best[sel]
+        sel, dist = sel[closer], dist[closer]
+        if len(sel) == 0:
+            continue
+        xy, _, visible = mapper.project_utm_points(iid, pts[sel])
+        inside = visible & (xy[:, 0] >= 0) & (xy[:, 0] <= raw_w - 1) & (xy[:, 1] >= 0) & (xy[:, 1] <= raw_h - 1)
+        if not inside.any():
+            continue
+        paths = list(image_dir.glob(f"{iid}.*"))
+        img = imread_unicode(str(paths[0]), cv2.IMREAD_COLOR) if paths else None
+        if img is None:
+            continue
+        sel, dist, xy = sel[inside], dist[inside], xy[inside]
+        sampled = _sample_bilinear(img, xy)
+        best[sel] = dist
+        best_col[sel] = sampled
+        best_owner[sel] = n
+        if logger is not None and n % 50 == 0:
+            logger.info("DENSE_POINT_FILL_PROGRESS %d/%d", n, len(names))
+
+    got = np.isfinite(best)
+    colors[ys[got], xs[got]] = best_col[got]
+    owner[ys[got], xs[got]] = best_owner[got]
+    filled = np.zeros((canvas_h, canvas_w), dtype=bool)
+    filled[ys[got], xs[got]] = True
+    return colors, filled, owner, names
+
+
 def finish_hybrid_mosaic(hybrid, flat_result, mapper, image_dir, logger=None):
     """Wall-texture fix applied to an already-built dense/flat hybrid `MosaicResult` (BACK facade,
     2026-09-27~28 session; three approaches tried, this is the one that survived):
@@ -331,6 +428,44 @@ def finish_hybrid_mosaic(hybrid, flat_result, mapper, image_dir, logger=None):
 
     new_visual = visual.copy()
     new_visual[texture_gate] = col[texture_gate]
+
+    # 2026-10-12: dense pixels no depth map reached (textureless wall) -> project their own 3D point into the photos.
+    # Only set by build_hybrid_mosaic for a plain wall (no windows/balconies); FRONT/BACK-type facades skip this block.
+    relief = getattr(hybrid, "wall_relief", None)
+    if logger is not None and relief is not None:
+        logger.info("WALL_RELIEF plain_wall=%s relief_fraction_0_3m=%s", relief.get("plain_wall"), relief.get("relief_fraction_0_3m"))
+    dense_depth = getattr(hybrid, "dense_depth_canvas", None)
+    dense_normal = getattr(hybrid, "dense_normal", None)
+    point_gate = np.zeros_like(texture_gate)
+    if dense_depth is not None and dense_normal is not None:
+        # Plain wall only (build_hybrid_mosaic sets dense_depth just then): every observed pixel the depth-map
+        # resampling did not reach -- dense pixels with no depth map AND the dense holes build_hybrid_mosaic filled
+        # from the blended flat mosaic. Archive #2 RIGHT: those holes were the visible soft grey blocks between sharp
+        # photo-resampled patches. On a plain wall (relief 0 %) the wall plane IS the measured surface, so a hole
+        # pixel takes depth 0 (on the plane) and is coloured from the best photo like every other pixel -- one
+        # consistent photo texture over the whole wall.
+        observed = (hybrid.observed_mask > 0) if hybrid.observed_mask.ndim == 2 else np.any(hybrid.observed_mask > 0, axis=-1)
+        remaining = observed & ~texture_gate & (gray_orig > MIN_WALL_TEXTURE_BRIGHTNESS)
+        plain_depth = np.where(np.isfinite(dense_depth), dense_depth, 0.0).astype(np.float32)
+        if remaining.any():
+            col2, filled2, owner2, names2 = fill_from_dense_points(
+                mapper, remaining, plain_depth, dense_normal, image_dir, logger=logger,
+            )
+            point_gate = filled2
+            new_visual[point_gate] = col2[point_gate]
+            # merge into the owner bookkeeping below as if it came from the depth-map fill
+            names_index = {name: i for i, name in enumerate(names_new)}
+            for i, name in enumerate(names2):
+                if name not in names_index:
+                    names_index[name] = len(names_new)
+                    names_new = list(names_new) + [name]
+            remap = np.array([names_index[nm] for nm in names2], dtype=np.int32) if names2 else np.zeros(0, np.int32)
+            owner_new = owner_new.copy()
+            owner_new[point_gate] = remap[owner2[point_gate]]
+            texture_gate = texture_gate | point_gate
+            if logger is not None:
+                logger.info("DENSE_POINT_FILL %d px (depth-map fill reached %d px)",
+                            int(point_gate.sum()), int(filled.sum()))
 
     owner_map = hybrid.seam_owner_map.copy() if hybrid.seam_owner_map is not None else None
     combined_index = list(hybrid.seam_owner_index or [])

@@ -272,9 +272,12 @@ def _render_dense_canvas(
     positions_utm: np.ndarray, colors: np.ndarray, plane, canvas_w: int, canvas_h: int,
     camera_centers_utm: np.ndarray | None = None,
     edge_margin_m: float | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Z-buffer orthographic render of the near-wall dense point band onto the
-    plane's own u/v pixel grid. Returns (canvas BGR uint8, has_data bool mask).
+    plane's own u/v pixel grid. Returns (canvas BGR uint8, has_data bool mask, depth (H,W) float32 = the
+    winning point's signed distance from the plane along `normal`, NaN where no point, and that `normal`).
+    The depth lets a later step put every rendered pixel back at its real 3D position (2026-10-12,
+    depth_fill.fill_from_dense_points).
     See module docstring for why the near-wall band filter, splat radius and
     small-hole inpaint are each here (all confirmed real fixes/necessities,
     2026-09-23 gsplat3d session).
@@ -344,6 +347,8 @@ def _render_dense_canvas(
     canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
     order = np.argsort(d_all)  # ascending: nearest-camera (largest d, toward the outward normal) written last, wins
     canvas[py_all[order], px_all[order]] = colors_all[order][:, ::-1]  # RGB -> BGR
+    depth = np.full((canvas_h, canvas_w), np.nan, dtype=np.float32)
+    depth[py_all[order], px_all[order]] = d_all[order]  # same write order -> the same winning point as the colour
 
     gray = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
     hole_mask = (gray == 0).astype(np.uint8)
@@ -357,7 +362,7 @@ def _render_dense_canvas(
     has_data = np.zeros((canvas_h, canvas_w), dtype=bool)
     has_data[py_all, px_all] = True
     has_data |= small_hole_mask > 0  # inpainted pixels count as "has data" for the hole-fill decision below
-    return canvas, has_data
+    return canvas, has_data, depth, normal
 
 
 def _assign_dense_owners(
@@ -438,7 +443,7 @@ def build_hybrid_mosaic(
     rotation = sim3d.rotation.matrix()
     positions = float(sim3d.scale) * (positions_raw @ rotation.T) + np.asarray(sim3d.translation)
     camera_centers = np.array([img.projection_center() for img in reconstruction.images.values()])
-    dense_canvas, dense_has_data = _render_dense_canvas(
+    dense_canvas, dense_has_data, dense_depth, dense_normal = _render_dense_canvas(
         positions, colors, plane, canvas_w, canvas_h, camera_centers_utm=camera_centers,
         edge_margin_m=edge_margin_m,
     )
@@ -491,9 +496,16 @@ def build_hybrid_mosaic(
     import copy
 
     quality = copy.copy(flat_result.quality)  # never mutate the flat mosaic's own already-persisted quality report
+    # 2026-10-12 (사용자 확정): the dense-point photo fill (depth_fill.fill_from_dense_points) is for PLAIN walls only --
+    # side walls without windows/balconies. Facades with windows/balconies (FRONT/BACK) keep the existing finish
+    # unchanged. Measured: share of near-wall dense points more than 0.3 m off the wall's median depth -- FRONT 51 %,
+    # BACK 78 % vs plain LEFT/RIGHT 0 % (correctly aligned runs).
+    plain_wall, relief_fraction = _is_plain_wall(dense_depth)
+    _depth_for_finish = (dense_depth, dense_normal) if plain_wall else (None, None)
+    quality_relief = {"plain_wall": plain_wall, "relief_fraction_0_3m": relief_fraction}
     quality.coverage_ratio = float(np.count_nonzero(observed_mask)) / float(observed_mask.size)
 
-    return MosaicResult(
+    result = MosaicResult(
         analysis_image=hybrid_analysis,
         visual_image=hybrid_visual,
         observed_mask=observed_mask,
@@ -502,6 +514,25 @@ def build_hybrid_mosaic(
         seam_owner_map=owner_map,
         seam_owner_index=combined_index,
     )
+    # 2026-10-12: per-pixel 3D depth of the dense render, for depth_fill.finish_hybrid_mosaic (attribute only on the
+    # hybrid result; never persisted).
+    result.dense_depth_canvas, result.dense_normal = _depth_for_finish
+    result.wall_relief = quality_relief
+    return result
+
+
+PLAIN_WALL_RELIEF_M = 0.3
+PLAIN_WALL_MAX_RELIEF_FRACTION = 0.05
+
+
+def _is_plain_wall(depth_canvas: np.ndarray) -> tuple[bool, float | None]:
+    """(plain, fraction) -- a wall is plain (no windows/balconies) when less than 5 % of the rendered dense pixels lie
+    more than 0.3 m from the wall's median depth."""
+    d = depth_canvas[np.isfinite(depth_canvas)]
+    if d.size < 1000:
+        return False, None
+    fraction = float(np.mean(np.abs(d - np.median(d)) > PLAIN_WALL_RELIEF_M))
+    return fraction < PLAIN_WALL_MAX_RELIEF_FRACTION, round(fraction, 4)
 
 
 def dense_intermediate_paths(dense_dir: str | Path) -> list[Path]:
