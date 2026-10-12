@@ -492,7 +492,23 @@ public static class CrackVisionArchiveQueryService
                 await cmd.ExecuteNonQueryAsync(cancellationToken);
             }
 
-            foreach (var src in c.SourceObservations)
+            // 2026-10-12: a crack merged from several pieces can list the SAME photo more than once (archive #2 FRONT:
+            // 49 of 799 cracks) -- the table keys (facade, crack, photo), so one duplicate rolled back the whole
+            // write-back ("duplicate key ... crackvision_crack_sources_pkey"). One row per photo: union of the
+            // pieces' boxes, sum of their pixels.
+            var perPhoto = c.SourceObservations
+                .Where(o => !string.IsNullOrEmpty(o.ImageId))
+                .GroupBy(o => o.ImageId)
+                .Select(g => new CrackSourceObservationJson
+                {
+                    ImageId = g.Key,
+                    OwnedPixelCount = g.Sum(o => o.OwnedPixelCount),
+                    BboxPxInSource = g.Select(o => o.BboxPxInSource).Where(b => b is { Length: 4 }).DefaultIfEmpty(g.First().BboxPxInSource)
+                        .Aggregate((acc, b) => acc is { Length: 4 } && b is { Length: 4 }
+                            ? new[] { Math.Min(acc[0], b[0]), Math.Min(acc[1], b[1]), Math.Max(acc[2], b[2]), Math.Max(acc[3], b[3]) }
+                            : acc),
+                });
+            foreach (var src in perPhoto)
             {
                 await using var cmd = new NpgsqlCommand(
                     "INSERT INTO crackvision_crack_sources " +

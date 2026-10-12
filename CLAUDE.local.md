@@ -2727,3 +2727,6 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
 - 검증: A2 BACK 마감을 새 코드로 재실행 -> 저장 결과와 픽셀 차이 0.0000%(plain_wall=False). LEFT 재실행(runs/side_fix2): 1차 1.63 m -> 2차 0.72 m 선택,
   층 간격 2.54 m, 벽 26.5 m(이전 정상 26.6), Dense 민벽 채우기 433만 px. RIGHT: 1차 0.26 m, 회색 얼룩 사라짐(304만 px 사진 채우기).
 - 아직: A2 LEFT/RIGHT 서버 결과는 예전(V001) 그대로 -- 새 결과(runs/side_fix2)를 버전으로 등록 + 크랙검사 + 보고서 + 서버 저장은 사용자 결정 대기.
+- (같은 날) 뷰어 경고 "duplicate key ... crackvision_crack_sources_pkey": 2차 병합으로 합쳐진 균열이 같은 사진을 두 번 가짐(A2 FRONT 799건 중 49건,
+  RIGHT 1건, BACK 1차 45건) -> 한 건 때문에 그 면 DB 저장 전체가 롤백(파일 업로드는 됨). 저장 시 사진별로 합침(bbox 합집합, 픽셀 수 합).
+  A2 FRONT(799건)/RIGHT(61건) DB 다시 저장 완료. A2 LEFT/RIGHT 서버 결과는 아직 수정 전 V001(새 결과는 runs/side_fix2, 크랙검사/보고서 전).
