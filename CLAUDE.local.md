@@ -2730,3 +2730,6 @@ FRONT/BACK 같은 좌우로 넓게 훑는 비행에는 맞지만, LEFT/RIGHT처�
 - (같은 날) 뷰어 경고 "duplicate key ... crackvision_crack_sources_pkey": 2차 병합으로 합쳐진 균열이 같은 사진을 두 번 가짐(A2 FRONT 799건 중 49건,
   RIGHT 1건, BACK 1차 45건) -> 한 건 때문에 그 면 DB 저장 전체가 롤백(파일 업로드는 됨). 저장 시 사진별로 합침(bbox 합집합, 픽셀 수 합).
   A2 FRONT(799건)/RIGHT(61건) DB 다시 저장 완료. A2 LEFT/RIGHT 서버 결과는 아직 수정 전 V001(새 결과는 runs/side_fix2, 크랙검사/보고서 전).
+- (같은 날, 사용자: 다시 진행) A2 LEFT/RIGHT를 수정 코드 결과(runs/side_fix2, stitch_folder로 만든 것)를 V002로 등록(현재 버전) -> detect_cracks_folder ->
+  보고서 표지 정보 -> 보고서 -> 서버 저장(뷰어와 같은 단계, V001 보존). DB: LEFT 균열 9(보고서 0) 촬영거리 10.8 m 2.86 mm/px, RIGHT 균열 60(보고서 1) 7.4 m.
+  계약 종료 정리(DenseRetentionService.Measure)가 colmap_stage1_try* 폴더도 셈.

@@ -100,10 +100,12 @@ public static class DenseRetentionService
             return (dirs, 0);
         foreach (var versionDir in Directory.EnumerateDirectories(baseOutputDir))
         {
-            foreach (var name in DenseFolderNames)
+            // 2026-10-12: a side wall's stage-1 reconstruction can live in colmap_stage1_try2/_try3 (the attempt that
+            // matched GPS best, src/pipeline/runner.py::_run_stage1_with_retries).
+            foreach (var d in Directory.EnumerateDirectories(versionDir))
             {
-                var d = Path.Combine(versionDir, name);
-                if (!Directory.Exists(d))
+                var name = Path.GetFileName(d);
+                if (!DenseFolderNames.Contains(name) && !name.StartsWith("colmap_stage1_try", StringComparison.OrdinalIgnoreCase))
                     continue;
                 dirs.Add(d);
                 bytes += FolderSize(d);
